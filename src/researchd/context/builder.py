@@ -46,7 +46,9 @@ class ContextBuilder:
         self, *, run_id: str, work_order_id: str | None = None,
         artifact_ids: Sequence[str] = (), observation_ids: Sequence[str] = (),
         verification_id: str | None = None,
+        allowed_classifications: frozenset[DataClassification] | None = None,
     ) -> CloudContextBundle:
+        allowed = allowed_classifications or self.cloud_allowed
         with self.sessions() as session:
             run = session.get(ResearchRunRecord, run_id)
             order = session.get(WorkOrderRecord, work_order_id) if work_order_id is not None else None
@@ -61,7 +63,7 @@ class ContextBuilder:
                     classification = DataClassification(artifact.classification)
                 except ValueError as error:
                     raise EgressDenied("unknown artifact classification") from error
-                if classification in self.cloud_allowed:
+                if classification in allowed:
                     selected[artifact.artifact_id] = artifact
                 elif classification is DataClassification.PROJECT_PRIVATE:
                     derivatives = self._cloud_safe_derivatives(session, artifact.artifact_id)
@@ -81,11 +83,11 @@ class ContextBuilder:
                     if not isinstance(refs, list) or any(not isinstance(ref, str) for ref in refs):
                         raise EgressDenied("verification observation references are malformed")
                     required_observation_ids.update(refs)
-            observation_records = [self._cloud_observation(session, run_id, work_order_id, identifier) for identifier in sorted(required_observation_ids)]
+            observation_records = [self._cloud_observation(session, run_id, work_order_id, identifier, allowed) for identifier in sorted(required_observation_ids)]
             verification_item = None
             if verification_record is not None:
                 self._assert_verification_scope(session, verification_record, run_id, work_order_id)
-                classification = self._allowed_classification(verification_record.classification, "verification")
+                classification = self._allowed_classification(verification_record.classification, "verification", allowed)
                 verification_item = CloudVerificationItem(
                     verification_id=verification_record.verification_id, overall=verification_record.overall,
                     criteria=tuple(self.redactor.redact_json(verification_record.criteria_json)),
@@ -109,7 +111,7 @@ class ContextBuilder:
             verification_id=selection.verification_id,
         )
 
-    def _cloud_observation(self, session: Session, run_id: str, work_order_id: str | None, observation_id: str) -> CloudObservationItem:
+    def _cloud_observation(self, session: Session, run_id: str, work_order_id: str | None, observation_id: str, allowed: frozenset[DataClassification]) -> CloudObservationItem:
         observation = session.get(ObservationRecord, observation_id)
         if observation is None:
             raise ContextRecordMissing(f"observation not found: {observation_id}")
@@ -117,14 +119,14 @@ class ContextBuilder:
         order = session.get(WorkOrderRecord, attempt.work_order_id) if attempt is not None else None
         if attempt is None or order is None or order.run_id != run_id or (work_order_id is not None and order.work_order_id != work_order_id):
             raise EgressDenied("observation is outside the requested authoritative scope")
-        classification = self._allowed_classification(observation.classification, "observation")
+        classification = self._allowed_classification(observation.classification, "observation", allowed)
         if not observation.source_artifact_ids or observation.source_step_ids or observation.source_job_ids:
             raise EgressDenied("cloud-safe observation must derive only from explicit cloud-safe artifacts")
         for artifact_id in observation.source_artifact_ids:
             source = session.get(ArtifactRecord, artifact_id)
             if source is None:
                 raise EgressDenied("observation source artifact is missing")
-            self._allowed_classification(source.classification, "observation source")
+            self._allowed_classification(source.classification, "observation source", allowed)
         return CloudObservationItem(
             observation_id=observation.observation_id, name=self.redactor.redact(observation.name),
             value=self.redactor.redact_json(observation.value_json),
@@ -141,12 +143,12 @@ class ContextBuilder:
         if order is None or order.run_id != run_id or (work_order_id is not None and order.work_order_id != work_order_id):
             raise EgressDenied("verification is outside the requested authoritative scope")
 
-    def _allowed_classification(self, value: str, object_type: str) -> DataClassification:
+    def _allowed_classification(self, value: str, object_type: str, allowed: frozenset[DataClassification] | None = None) -> DataClassification:
         try:
             classification = DataClassification(value)
         except ValueError as error:
             raise EgressDenied(f"unknown {object_type} classification") from error
-        if classification not in self.cloud_allowed:
+        if classification not in (allowed or self.cloud_allowed):
             raise EgressDenied(f"{object_type} classification is not eligible for cloud")
         return classification
 

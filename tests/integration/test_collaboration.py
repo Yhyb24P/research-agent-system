@@ -17,7 +17,7 @@ from researchd.context.agent_context import AgentContextBuilder, AgentContextSel
 from researchd.agents.cloud_lead import CloudLeadAdapter
 from researchd.executor.worker import LocalExecutorWorker
 from researchd.collaboration.contracts import AgentInvocationRequest, AgentInvocationResult, Delegation
-from researchd.domain.enums import AgentAdapterKind, AgentTrustZone, DelegationPurpose, InvocationStatus, ResearchRunState
+from researchd.domain.enums import AgentAdapterKind, AgentTrustZone, DataClassification, DelegationPurpose, InvocationStatus, ResearchRunState
 from researchd.domain.ids import DelegationId, InvocationId
 from researchd.storage.models import AgentRecord, AgentRuntimeRecord, WorkspaceRecord, ResearchRunRecord
 from researchd.storage.models import DelegationRecord, AgentInvocationRecord
@@ -158,11 +158,14 @@ def test_selector_is_deterministic_and_requires_healthy_runtime(database: tuple[
 
 
 def test_agent_context_rejects_untrusted_target_before_egress(database: tuple[Path, sessionmaker[Session]]) -> None:
+    from researchd.artifacts.provenance import ArtifactService
     from researchd.artifacts.store import ContentAddressedArtifactStore
     from researchd.context.redaction import DeterministicRedactor
     from researchd.context.builder import ContextBuilder
-    _, sessions = database
-    builder = AgentContextBuilder(ContextBuilder(sessions, ContentAddressedArtifactStore(Path("/tmp/acp-context")), DeterministicRedactor()))
-    selection = AgentContextSelection(target_agent_id="agent_ext", target_runtime_id="runtime_ext", target_trust_zone=AgentTrustZone.EXTERNAL_UNTRUSTED, purpose=DelegationPurpose.EXECUTE, run_id="run_test")
-    with pytest.raises(PermissionError, match="no approved context policy"):
+    path, sessions = database
+    store = ContentAddressedArtifactStore(path.parent / "acp-context")
+    artifact = ArtifactService(store, sessions).register(b"local secret", mime_type="text/plain", artifact_type="fixture", classification=DataClassification.LOCAL_ONLY, producer_type="test", producer_id="test")
+    builder = AgentContextBuilder(ContextBuilder(sessions, store, DeterministicRedactor()))
+    selection = AgentContextSelection(target_agent_id="agent_ext", target_runtime_id="runtime_ext", target_trust_zone=AgentTrustZone.EXTERNAL_UNTRUSTED, purpose=DelegationPurpose.EXECUTE, run_id="run_test", artifact_ids=(artifact.artifact_id,))
+    with pytest.raises(PermissionError, match="not eligible"):
         builder.build(selection)
