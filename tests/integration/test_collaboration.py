@@ -15,6 +15,9 @@ from researchd.collaboration.gateway import CollaborationGateway
 from researchd.collaboration.messages import CollaborationMessageService
 from researchd.collaboration.heterogeneous import A2ARemoteAgentAdapter, HttpAgentAdapter, HttpAgentClient, LocalProcessAgentAdapter, ProcessAgentRunner
 from researchd.collaboration.runtime import AgentAdapterCatalog
+from researchd.api.control import LocalControlAPI
+from researchd.api.web import ControlResourceRouter, serve_local_control
+from researchd.api.tui import render_tui
 from researchd.adapters.a2a.adapter import A2AAdapter
 from researchd.collaboration.selector import AgentSelector
 from researchd.context.agent_context import AgentContextBuilder, AgentContextSelection
@@ -277,3 +280,21 @@ def test_http_and_process_adapters_reject_unsafe_or_oversized_inputs() -> None:
     request = AgentInvocationRequest(invocation_id=InvocationId("inv_large"), delegation_id=DelegationId("del_execute"), run_id="run_test", agent_id=AgentId("agent_executor"), runtime_id=AgentRuntimeId("runtime_http"), purpose=DelegationPurpose.EXECUTE, input_sha256="d" * 64, payload={"blob": "x" * 100})
     result = asyncio.run(HttpAgentAdapter(cast(HttpAgentClient, None), max_payload_bytes=16).invoke(request))
     assert result.reason_code == "HTTP_PAYLOAD_TOO_LARGE"
+
+
+def test_web_and_tui_clients_share_local_control_resources(tmp_path: Path) -> None:
+    from test_orchestrator import make_orchestrator, _proposal, _review
+    sessions, orchestrator, _, _ = make_orchestrator(tmp_path, cloud_responses=[_proposal(), _review()])
+    run_id = orchestrator.create_run(workspace_id="ws_e2e", objective="ui")
+    api = LocalControlAPI(sessions, orchestrator)
+    router = ControlResourceRouter(api)
+    assert router.get("/api/runs/" + run_id)[0] == 200
+    assert router.get("/api/events/" + run_id)[0] == 200
+    assert "Agents" in render_tui(api, run_id=run_id)
+    server = serve_local_control(api, port=0)
+    try:
+        assert server.server_address[0] in {"127.0.0.1", "localhost"}
+    finally:
+        server.server_close()
+    with pytest.raises(ValueError, match="loopback"):
+        serve_local_control(api, host="0.0.0.0", port=0)
