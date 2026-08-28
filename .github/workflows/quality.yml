@@ -17,6 +17,14 @@ jobs:
         with:
           python-version: "3.12"
       - uses: astral-sh/setup-uv@v5
+      - name: Install and verify Bubblewrap sandbox
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap libcap2-bin
+          test -x /usr/bin/bwrap
+          bwrap --version
+          test "$(stat -c '%A' /usr/bin/bwrap | cut -c4)" != "s"
+          test -z "$(getcap /usr/bin/bwrap)"
       - name: Install from committed lock
         run: uv sync --frozen
       - name: Generate lock-derived SBOM
