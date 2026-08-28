@@ -1,39 +1,96 @@
 # Research Agent System
 
-[中文版 / Chinese](README.zh-CN.md)
+[简体中文](README.zh-CN.md)
 
-This repository implements the trusted local control plane described by the
-Cloud Research Lead + Local Research Executor handoff pack.
+Research Agent System is a trusted control plane for long-running research
+work. It turns model proposals into durable, policy-controlled, auditable
+execution—without allowing a model to mutate workflow state, run arbitrary
+host commands, or self-certify its results.
 
-The implementation has completed TASK00–TASK08 and the reviewed qualification
-hardening checkpoints. It is a modular-monolith V1 control plane with SQLite WAL persistence, immutable
-content-addressed artifacts, deterministic policy and verification, isolated
-local execution, outbound-only structured Cloud Lead calls, bounded
-orchestration, optional A2A/MCP boundary adapters, operational metrics, and
-backup/restore utilities.
+## What this project is
 
-The trusted controller remains authoritative: models propose, local workers
-execute, verifiers prove, policy controls, and humans authorize. The project
-does not expose a public A2A/MCP endpoint, silently fall back from local to
-cloud models, or claim exactly-once scheduler semantics.
-
-Current status: **V1 control plane complete; deployment qualification pending**.
-RCs and qualification evidence are maintained outside the source repository;
-the deployment decision remains target-environment dependent.
-The control plane and agent process do not need GPU resources to run. The
-current deployment uses `aweswitch qw` to launch the Qwen agent against the
-remote workstation inference node; GPU and model weights belong to that remote
-node, not this host. The repository also contains an optional loopback-only
-`VLLMLocalModel` path for a same-host vLLM service. Remote inference transport
-and provider policy must be qualified separately and are not silently treated
-as local GPU execution.
-
-Run the full regression suite with:
+The system is a Python 3.12 modular monolith built around a trusted
+controller:
 
 ```text
-.venv/bin/pytest
-.venv/bin/mypy
+user / CLI
+   │
+   ▼
+trusted controller ── SQLite WAL + audit trail
+   ├── bounded orchestrator
+   ├── policy, budget, and human approval
+   ├── local executor ── Bubblewrap sandbox
+   ├── independent verifier ── content-addressed artifacts
+   └── model/provider adapters
 ```
 
-Qualification reports and operational evidence are intentionally not committed
-to this GitHub repository.
+Models propose plans, work orders, and reviews. The controller owns state
+transitions, capabilities, egress classification, approvals, verification, and
+acceptance. A2A/MCP adapters and model providers are replaceable boundaries;
+they are not the source of truth for research state.
+
+## Current deployment topology
+
+The active setup uses `aweswitch qw` to launch a Qwen agent backed by a remote
+workstation inference node:
+
+```text
+this host: controller + agent client ──> remote Qwen workstation: inference + GPU
+```
+
+This host does not load model weights and does not need a GPU. The repository
+also includes an optional loopback-only `VLLMLocalModel` adapter for a vLLM
+service running on the same host. A remote inference endpoint must use a
+separately reviewed transport and provider policy; it is not silently treated
+as local GPU execution.
+
+## Implemented capabilities
+
+- Durable ResearchRun/WorkOrder/Attempt/Job state with explicit transitions.
+- Crash-aware Job submission, operation-id idempotency, cancellation, and
+  restart reconciliation.
+- Bubblewrap execution with no network, cleared environment, capability
+  brokering, worktree isolation, and bounded resource limits.
+- Content-addressed artifacts, provenance, independent verification, and
+  append-only audit events.
+- Deterministic policy, human approval, cloud budgets, cost accounting, and
+  classified bounded retries for provider timeouts, 429s, and 5xx responses.
+- Optional durable GPU admission leases with fail-closed backend behavior.
+- SQLite online backup, CAS reference consistency, checksums, and restore
+  health checks.
+- Operational metrics for workflow records, SQLite/WAL/CAS growth, and backup
+  freshness.
+
+## Quick start
+
+```bash
+uv sync --frozen
+uv run pytest -q
+uv run mypy src tests
+uv run alembic upgrade head
+```
+
+Example DTOs and JSON schemas are in [`examples/`](examples/) and
+[`schemas/`](schemas/). The executable qualification helpers are in
+[`scripts/`](scripts/); generated manifests and runtime/evidence files are
+intentionally kept outside the source baseline.
+
+## Release status
+
+The repository publishes immutable `v1.0.0-rc.*` candidates; use the latest
+Git tag for the exact release. The V1 control plane and its
+reviewed software safeguards are implemented. This repository does not claim
+production Go: target-environment provider governance, off-host backup/restore,
+and long-running operational soak evidence must be collected before a final
+deployment decision.
+
+GPU qualification is only applicable when local GPU-backed Jobs or same-host
+vLLM execution is selected. It is not required for the current remote-Qwen
+control-plane topology.
+
+## Scope boundaries
+
+The project does not promise universal distributed exactly-once execution, a
+public A2A/MCP server, automatic cloud fallback for local failures, or hardware
+GPU isolation from logical admission alone. Unsafe or unqualified boundaries
+fail closed and require an explicit deployment decision.
