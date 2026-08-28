@@ -290,6 +290,9 @@ def test_web_and_tui_clients_share_local_control_resources(tmp_path: Path) -> No
     router = ControlResourceRouter(api)
     assert router.get("/api/runs/" + run_id)[0] == 200
     assert router.get("/api/events/" + run_id)[0] == 200
+    assert router.get("/api/timeline/" + run_id)[0] == 200
+    assert router.get("/api/approvals?run=" + run_id)[0] == 200
+    assert router.get("/api/artifacts?run=" + run_id)[0] == 200
     assert "Agents" in render_tui(api, run_id=run_id)
     server = serve_local_control(api, port=0)
     try:

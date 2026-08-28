@@ -12,5 +12,8 @@ def render_tui(api: LocalControlAPI, *, run_id: str | None = None) -> str:
     if run_id is not None:
         status = api.run_status(run_id)
         lines.append(f"{run_id}  state={status['state']}  active_attempts={len(status['active_attempt_ids'])}")
+        lines.extend(["", "Timeline", "========"])
+        for item in api.timeline(run_id):
+            lines.append(f"{item['timestamp']}  {item['kind']}  {item['entity_id']}")
     lines.extend(["", "Approvals / Artifacts / System", "==============================", "Use the local control API for structured details."])
     return "\n".join(lines) + "\n"

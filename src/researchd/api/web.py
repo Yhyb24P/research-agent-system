@@ -3,7 +3,7 @@ import asyncio
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from researchd.api.control import LocalControlAPI
 
@@ -15,13 +15,20 @@ class ControlResourceRouter:
 
     def get(self, path: str) -> tuple[int, dict[str, Any] | list[dict[str, Any]]]:
         parts = [unquote(item) for item in urlparse(path).path.split("/") if item]
+        query = parse_qs(urlparse(path).query)
         try:
             if parts == ["api", "agents"]:
                 return 200, self.api.agents()
             if len(parts) == 3 and parts[:2] == ["api", "agents"]:
                 return 200, self.api.agent(parts[2])
             if parts == ["api", "delegations"]:
-                return 200, self.api.delegations()
+                return 200, self.api.delegations(query.get("run", [None])[0])
+            if parts == ["api", "approvals"]:
+                return 200, self.api.approvals(query.get("run", [None])[0])
+            if parts == ["api", "artifacts"] and query.get("run", [None])[0]:
+                return 200, self.api.artifacts(query["run"][0])
+            if len(parts) == 3 and parts[:2] == ["api", "timeline"]:
+                return 200, self.api.timeline(parts[2])
             if len(parts) == 3 and parts[:2] == ["api", "delegations"]:
                 return 200, self.api.delegation(parts[2])
             if len(parts) == 3 and parts[:2] == ["api", "runs"] and parts[2]:

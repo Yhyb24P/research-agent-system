@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from researchd.orchestrator.engine import ResearchOrchestrator, RunSnapshot
-from researchd.storage.models import AgentRecord, AgentRuntimeRecord, AuditEventRecord, DelegationRecord, AgentInvocationRecord, ResearchRunRecord, WorkOrderRecord
+from researchd.storage.models import AgentRecord, AgentRuntimeRecord, ArtifactRecord, ApprovalRequestRecord, AuditEventRecord, DelegationRecord, AgentInvocationRecord, AttemptRecord, ResearchRunRecord, WorkOrderRecord
 
 
 class LocalControlAPI:
@@ -94,6 +94,28 @@ class LocalControlAPI:
 
     def _delegation_payload(self, row: DelegationRecord) -> dict[str, Any]:
         return {"delegation_id": row.delegation_id, "run_id": row.run_id, "work_order_id": row.work_order_id, "purpose": row.purpose, "state": row.state, "assigned_agent_id": row.assigned_agent_id, "assigned_runtime_id": row.assigned_runtime_id, "agent_profile_version": row.agent_profile_version, "assignment_sha256": row.assignment_sha256, "created_at": row.created_at.isoformat()}
+
+    def approvals(self, run_id: str | None = None) -> list[dict[str, Any]]:
+        with self.sessions() as session:
+            query = select(ApprovalRequestRecord).order_by(ApprovalRequestRecord.created_at, ApprovalRequestRecord.approval_id)
+            if run_id is not None:
+                query = query.where(ApprovalRequestRecord.run_id == run_id)
+            return [{"approval_id": row.approval_id, "run_id": row.run_id, "work_order_id": row.work_order_id, "status": row.status, "requester_actor_type": row.requester_actor_type, "requester_actor_id": row.requester_actor_id, "operation_type": row.operation_type, "created_at": row.created_at.isoformat()} for row in session.scalars(query).all()]
+
+    def artifacts(self, run_id: str) -> list[dict[str, Any]]:
+        with self.sessions() as session:
+            rows = session.execute(select(ArtifactRecord).join(AttemptRecord, AttemptRecord.attempt_id == ArtifactRecord.attempt_id).join(WorkOrderRecord, WorkOrderRecord.work_order_id == AttemptRecord.work_order_id).where(WorkOrderRecord.run_id == run_id).order_by(ArtifactRecord.created_at, ArtifactRecord.artifact_id)).scalars().all()
+            return [{"artifact_id": row.artifact_id, "sha256": row.sha256, "artifact_type": row.artifact_type, "classification": row.classification, "mime_type": row.mime_type, "attempt_id": row.attempt_id, "created_at": row.created_at.isoformat()} for row in rows]
+
+    def timeline(self, run_id: str) -> list[dict[str, Any]]:
+        items: list[dict[str, Any]] = [{**event, "kind": "event"} for event in self.events(run_id)]
+        for delegation in self.delegations(run_id):
+            items.append({"kind": "delegation", "entity_id": delegation["delegation_id"], "timestamp": delegation["created_at"], **delegation})
+        for approval in self.approvals(run_id):
+            items.append({"kind": "approval", "entity_id": approval["approval_id"], "timestamp": approval["created_at"], **approval})
+        for artifact in self.artifacts(run_id):
+            items.append({"kind": "artifact", "entity_id": artifact["artifact_id"], "timestamp": artifact["created_at"], **artifact})
+        return sorted(items, key=lambda item: (item["timestamp"], item["kind"], item["entity_id"]))
 
     async def cancel_run(self, run_id: str) -> dict[str, Any]:
         await self.orchestrator.cancel(run_id)
