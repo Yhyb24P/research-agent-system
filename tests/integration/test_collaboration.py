@@ -13,6 +13,8 @@ from researchd.collaboration.invocation import InvocationService
 from researchd.collaboration.adapters import CloudLeadAgentAdapter, LocalExecutorAgentAdapter
 from researchd.collaboration.gateway import CollaborationGateway
 from researchd.collaboration.messages import CollaborationMessageService
+from researchd.collaboration.heterogeneous import A2ARemoteAgentAdapter, HttpAgentAdapter, HttpAgentClient, LocalProcessAgentAdapter, ProcessAgentRunner
+from researchd.adapters.a2a.adapter import A2AAdapter
 from researchd.collaboration.selector import AgentSelector
 from researchd.context.agent_context import AgentContextBuilder, AgentContextSelection
 from researchd.observability import collect_metrics
@@ -224,3 +226,14 @@ def test_human_directive_is_append_only_and_has_no_control_effect(database: tupl
     with sessions() as session:
         stored = session.get(CollaborationMessageRecord, "msg_directive")
         assert stored is not None and stored.purpose == "DIRECTIVE"
+
+
+def test_heterogeneous_adapters_keep_invocation_scope() -> None:
+    runtime = AgentRuntime(runtime_id=AgentRuntimeId("runtime_http"), agent_id=AgentId("agent_executor"), adapter_kind=AgentAdapterKind.HTTP, runtime_name="HTTP", endpoint_ref="http://127.0.0.1")
+    request = AgentInvocationRequest(invocation_id=InvocationId("inv_heterogeneous"), delegation_id=DelegationId("del_execute"), run_id="run_test", agent_id=AgentId("agent_executor"), runtime_id=AgentRuntimeId("runtime_http"), purpose=DelegationPurpose.EXECUTE, input_sha256="c" * 64)
+    http_result = asyncio.run(HttpAgentAdapter(cast(HttpAgentClient, None)).invoke(request))
+    process_result = asyncio.run(LocalProcessAgentAdapter(cast(ProcessAgentRunner, None), ("agent",)).invoke(request))
+    a2a_result = asyncio.run(A2ARemoteAgentAdapter(cast(A2AAdapter, None)).invoke(request))
+    assert http_result.reason_code == "HTTP_PAYLOAD_REQUIRED"
+    assert process_result.reason_code == "PROCESS_PAYLOAD_REQUIRED"
+    assert a2a_result.reason_code == "A2A_SCOPE_REQUIRED"
