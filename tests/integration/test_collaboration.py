@@ -183,3 +183,20 @@ def test_cross_trust_redelegation_rebuilds_target_specific_bundle(database: tupl
     assert cloud.rebuilt_from_previous_bundle
     assert cloud.bundle_sha256 != local.bundle_sha256
     assert cloud.policy.allowed_classifications == frozenset({DataClassification.PUBLIC, DataClassification.CLOUD_SAFE})
+
+
+def test_cloud_context_exposes_derived_artifact_provenance(database: tuple[Path, sessionmaker[Session]]) -> None:
+    from researchd.artifacts.provenance import ArtifactService
+    from researchd.artifacts.store import ContentAddressedArtifactStore
+    from researchd.context.redaction import DeterministicRedactor
+    from researchd.context.builder import ContextBuilder
+    path, sessions = database
+    store = ContentAddressedArtifactStore(path.parent / "acp-context-provenance")
+    artifacts = ArtifactService(store, sessions)
+    source = artifacts.register(b"private source", mime_type="text/plain", artifact_type="source", classification=DataClassification.PROJECT_PRIVATE, producer_type="test", producer_id="source")
+    derived = artifacts.derive((source.artifact_id,), b"safe summary", mime_type="text/plain", artifact_type="summary", classification=DataClassification.CLOUD_SAFE, producer="redactor", producer_version="v1", parameters={"kind": "summary"})
+    bundle = AgentContextBuilder(ContextBuilder(sessions, store, DeterministicRedactor())).build(AgentContextSelection(target_agent_id="agent_cloud", target_runtime_id="runtime_cloud", target_trust_zone=AgentTrustZone.EXTERNAL_CLOUD, purpose=DelegationPurpose.REVIEW, run_id="run_test", artifact_ids=(source.artifact_id,)))
+    provenance = next(item for item in bundle.artifact_provenance if item.artifact_id == derived.artifact_id)
+    assert provenance.classification is DataClassification.CLOUD_SAFE
+    assert provenance.source_artifact_ids == (source.artifact_id,)
+    assert provenance.transformation_sha256

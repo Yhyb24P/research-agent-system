@@ -4,6 +4,8 @@ from researchd.context.builder import CloudContextSelection, ContextBuilder
 from researchd.context.cloud_bundle import CloudContextBundle
 from researchd.domain.base import DomainModel
 from researchd.domain.enums import AgentTrustZone, DataClassification, DelegationPurpose
+from researchd.storage.models import ArtifactDerivationRecord, ArtifactRecord
+from sqlalchemy import select
 
 
 class AgentContextSelection(DomainModel):
@@ -36,6 +38,18 @@ class AgentContextBundle(DomainModel):
     bundle_sha256: str
     policy: AgentContextPolicy
     rebuilt_from_previous_bundle: bool = False
+    artifact_provenance: tuple["ArtifactProvenance", ...] = ()
+
+
+class ArtifactProvenance(DomainModel):
+    artifact_id: str
+    sha256: str
+    classification: DataClassification
+    source_artifact_ids: tuple[str, ...] = ()
+    transformation_sha256: tuple[str, ...] = ()
+
+
+AgentContextBundle.model_rebuild()
 
 
 class AgentContextBuilder:
@@ -62,4 +76,12 @@ class AgentContextBuilder:
             allowed_classifications=policy.allowed_classifications,
         )
         canonical = json.dumps({"target_agent_id": selection.target_agent_id, "target_runtime_id": selection.target_runtime_id, "target_trust_zone": selection.target_trust_zone.value, "purpose": selection.purpose.value, "context": context.model_dump(mode="json")}, sort_keys=True, separators=(",", ":")).encode()
-        return AgentContextBundle(target_agent_id=selection.target_agent_id, target_runtime_id=selection.target_runtime_id, target_trust_zone=selection.target_trust_zone, purpose=selection.purpose, run_id=selection.run_id, work_order_id=selection.work_order_id, selected_context=context, bundle_sha256=hashlib.sha256(canonical).hexdigest(), policy=policy, rebuilt_from_previous_bundle=selection.previous_bundle_sha256 is not None)
+        with self.cloud_builder.sessions() as session:
+            provenance: list[ArtifactProvenance] = []
+            for item in context.selected_artifacts:
+                artifact = session.get(ArtifactRecord, item.artifact_id)
+                if artifact is None:
+                    continue
+                derivations = session.scalars(select(ArtifactDerivationRecord).where(ArtifactDerivationRecord.derived_artifact_id == item.artifact_id).order_by(ArtifactDerivationRecord.source_artifact_id)).all()
+                provenance.append(ArtifactProvenance(artifact_id=artifact.artifact_id, sha256=artifact.sha256, classification=DataClassification(artifact.classification), source_artifact_ids=tuple(record.source_artifact_id for record in derivations), transformation_sha256=tuple(record.transformation_sha256 for record in derivations)))
+        return AgentContextBundle(target_agent_id=selection.target_agent_id, target_runtime_id=selection.target_runtime_id, target_trust_zone=selection.target_trust_zone, purpose=selection.purpose, run_id=selection.run_id, work_order_id=selection.work_order_id, selected_context=context, bundle_sha256=hashlib.sha256(canonical).hexdigest(), policy=policy, rebuilt_from_previous_bundle=selection.previous_bundle_sha256 is not None, artifact_provenance=tuple(provenance))
