@@ -20,6 +20,7 @@ from researchd.executor.contracts import (
     CapabilityRequest,
     CommandLimits,
     GrantedWorkOrder,
+    JobHandle,
     JobResources,
     JobSpec,
     LocalAgentRequest,
@@ -316,6 +317,43 @@ def test_gpu_job_without_admission_controller_fails_closed(tmp_path: Path) -> No
     with sessions() as session:
         record = JobRepository(session).get_by_operation_id(spec.operation_id)
         assert record is not None and record.state == JobState.FAILED.value
+
+
+def test_lost_job_holds_gpu_lease_until_explicit_resolution(tmp_path: Path) -> None:
+    sessions = seed_database(tmp_path / "gpu-lost.db")
+    now = datetime.now(UTC)
+    with sessions.begin() as session:
+        session.add(JobRecord(
+            job_id="job_gpu_lost", attempt_id="att_exec", operation_id="op-gpu-lost",
+            state=JobState.SUBMITTED.value, backend="gpu", native_handle="native-lost",
+            version=1, created_at=now, updated_at=now,
+        ))
+    admission = GpuAdmissionController(sessions, ("gpu0",))
+    admission.acquire("job_gpu_lost", 1)
+
+    class MissingBackend:
+        def submit(self, spec: JobSpec) -> JobHandle:
+            del spec
+            raise AssertionError("submit is not used during reconciliation")
+
+        def find_by_operation(self, operation_id: str) -> JobHandle | None:
+            del operation_id
+            return None
+
+        def get(self, native_handle: str) -> JobHandle | None:
+            del native_handle
+            return None
+
+        def cancel(self, native_handle: str) -> JobHandle:
+            del native_handle
+            raise AssertionError("cancel is not used")
+
+    manager = JobManager(sessions, MissingBackend(), admission)
+    records = manager.reconcile()
+    assert records[0].state == JobState.LOST.value
+    assert [item.device_id for item in admission.active("job_gpu_lost")] == ["gpu0"]
+    manager.release_lost("job_gpu_lost")
+    assert admission.active("job_gpu_lost") == ()
 
 
 def test_job_crash_window_reconciles_side_effect_without_native_handle(tmp_path: Path) -> None:

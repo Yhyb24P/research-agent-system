@@ -207,7 +207,10 @@ class JobManager:
                 record.state = JobState.LOST.value if handle is None else handle.state
                 if handle is not None:
                     record.native_handle = handle.native_handle
-                release = record.state in {JobState.SUCCEEDED.value, JobState.FAILED.value, JobState.CANCELLED.value, JobState.LOST.value}
+                # LOST is deliberately not released: the native scheduler may
+                # still be running the job and its GPU lease must be held until
+                # an operator reconciles that uncertainty.
+                release = record.state in {JobState.SUCCEEDED.value, JobState.FAILED.value, JobState.CANCELLED.value}
                 record.version += 1
                 record.updated_at = datetime.now(UTC)
                 self._append_event(session, record.attempt_id, job_id, "JOB_STATUS_CHANGED", {"state": record.state})
@@ -227,7 +230,7 @@ class JobManager:
             handle_value = record.native_handle
             self._append_event(session, record.attempt_id, job_id, "JOB_CANCEL_REQUESTED", {})
         handle = self.backend.cancel(handle_value)
-        if self.gpu_admission is not None and handle.state in {JobState.CANCELLED.value, JobState.FAILED.value, JobState.LOST.value}:
+        if self.gpu_admission is not None and handle.state in {JobState.CANCELLED.value, JobState.FAILED.value}:
             self.gpu_admission.release(job_id)
         with self.sessions.begin() as session:
             record = session.get(JobRecord, job_id)
@@ -236,6 +239,22 @@ class JobManager:
             record.version += 1
             record.updated_at = datetime.now(UTC)
             self._append_event(session, record.attempt_id, job_id, "JOB_STATUS_CHANGED", {"state": record.state})
+            return record
+
+    def release_lost(self, job_id: str) -> JobRecord:
+        """Explicitly release a LOST job's resources after operator review."""
+        with self.sessions.begin() as session:
+            record = session.get(JobRecord, job_id)
+            if record is None:
+                raise LookupError(job_id)
+            if record.state != JobState.LOST.value:
+                raise ValueError("only LOST jobs require explicit resource resolution")
+            self._append_event(session, record.attempt_id, job_id, "JOB_LOST_RESOLUTION_REQUESTED", {"action": "release_resources"})
+        if self.gpu_admission is not None:
+            self.gpu_admission.release(job_id)
+        with self.sessions() as session:
+            record = session.get(JobRecord, job_id)
+            assert record is not None
             return record
 
     def _mark_failed(self, job_id: str, reason: str) -> None:

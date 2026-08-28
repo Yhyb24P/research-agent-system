@@ -20,7 +20,9 @@ can claim GPU isolation.
 - `GpuAdmissionController` supports acquire, active inspection, release, and
   restart observation from a newly constructed controller.
 - `JobManager` rejects GPU submission without an admission controller and
-  releases leases after backend submission failure or terminal reconciliation.
+  releases leases after backend submission failure or known terminal
+  reconciliation. `LOST` retains its lease until an operator calls the explicit
+  lost-job resolution path.
 - Regression tests cover exclusive allocation, persistence, release, and
   fail-closed submission. The local durable backend still rejects GPU jobs by
   design because it has no hardware enforcement.
@@ -34,6 +36,11 @@ The following cannot be proven by the current CPU/WSL test environment:
 - OOM cleanup, cancellation, lease release, and controller-crash recovery;
 - scheduler-side correlation and reconciliation across the C1–C6 crash windows;
 - driver/CUDA/container-toolkit compatibility and GPU monitoring semantics.
+
+`LOST` is intentionally a hold state: automatic release would allow a second
+job to reuse a device while the first native job might still be running. An
+operator must inspect the scheduler and explicitly resolve the lost job before
+its lease is released.
 
 Until these are demonstrated on the selected scheduler/container deployment,
 the release status remains `Deployment Qualification Pending`.
