@@ -13,6 +13,7 @@ from researchd.collaboration.invocation import InvocationService
 from researchd.collaboration.adapters import CloudLeadAgentAdapter, LocalExecutorAgentAdapter
 from researchd.collaboration.gateway import CollaborationGateway
 from researchd.collaboration.selector import AgentSelector
+from researchd.context.agent_context import AgentContextBuilder, AgentContextSelection
 from researchd.agents.cloud_lead import CloudLeadAdapter
 from researchd.executor.worker import LocalExecutorWorker
 from researchd.collaboration.contracts import AgentInvocationRequest, AgentInvocationResult, Delegation
@@ -154,3 +155,14 @@ def test_selector_is_deterministic_and_requires_healthy_runtime(database: tuple[
     registry.heartbeat("runtime_b")
     selected = AgentSelector(sessions).select(required_roles=("executor",), required_skills=("code.modify",))
     assert selected is not None and selected.agent_id == "agent_b"
+
+
+def test_agent_context_rejects_untrusted_target_before_egress(database: tuple[Path, sessionmaker[Session]]) -> None:
+    from researchd.artifacts.store import ContentAddressedArtifactStore
+    from researchd.context.redaction import DeterministicRedactor
+    from researchd.context.builder import ContextBuilder
+    _, sessions = database
+    builder = AgentContextBuilder(ContextBuilder(sessions, ContentAddressedArtifactStore(Path("/tmp/acp-context")), DeterministicRedactor()))
+    selection = AgentContextSelection(target_agent_id="agent_ext", target_runtime_id="runtime_ext", target_trust_zone=AgentTrustZone.EXTERNAL_UNTRUSTED, purpose=DelegationPurpose.EXECUTE, run_id="run_test")
+    with pytest.raises(PermissionError, match="no approved context policy"):
+        builder.build(selection)
