@@ -130,8 +130,8 @@ def test_invocation_input_uses_purpose_discriminator() -> None:
         typed_input=PlanInvocationInput(context=CloudContextSelection(run_id="run_test")),
     )
     assert request.typed_input is not None and request.typed_input.kind == "PLAN"
-    with pytest.raises(ValueError):
-        AgentInvocationRequest.model_validate({**request.model_dump(mode="json"), "typed_input": {"kind": "EXECUTE", "context": {"run_id": "run_test"}}})
+    with pytest.raises(ValueError, match="kind must match purpose"):
+        AgentInvocationRequest.model_validate({**request.model_dump(mode="json"), "purpose": "REVIEW"})
 
 
 def test_assignment_freezes_profile_and_invocation_is_structured(database: tuple[Path, sessionmaker[Session]]) -> None:

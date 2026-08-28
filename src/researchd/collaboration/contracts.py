@@ -1,5 +1,5 @@
 from typing import Annotated, Literal
-from pydantic import Field, PositiveInt
+from pydantic import Field, PositiveInt, model_validator
 
 from researchd.domain.base import DomainModel
 from researchd.domain.enums import AgentAdapterKind, AgentTrustZone, DelegationPurpose, DelegationState, InvocationStatus
@@ -100,6 +100,12 @@ class AgentInvocationRequest(DomainModel):
     # Deprecated compatibility escape hatch for pre-ACP adapters. New gateway
     # calls must use typed_input so purpose and payload cannot drift apart.
     payload: object | None = None
+
+    @model_validator(mode="after")
+    def typed_input_matches_purpose(self) -> "AgentInvocationRequest":
+        if self.typed_input is not None and self.typed_input.kind != self.purpose.value:
+            raise ValueError("typed invocation input kind must match purpose")
+        return self
 
 
 class AgentInvocationResult(DomainModel):
