@@ -18,12 +18,13 @@ cloud models, or claim exactly-once scheduler semantics.
 Current status: **V1 control plane complete; deployment qualification pending**.
 RCs, DQ00–DQ06 evidence requirements, and the current Go/No-Go decision are in
 `docs/DQ00_RELEASE_BASELINE.md` through `docs/DQ06_PRODUCTION_GO_NO_GO.md`.
-The control plane and agent process do not need GPU resources to run. A local
-model may instead be loaded by a vLLM inference node and called from the agent
-over the loopback-only `VLLMLocalModel`; in that topology GPU belongs to the
-inference node, while GPU admission is an explicit contract for GPU-backed
-job execution. Remote inference endpoints require a separately reviewed
-transport adapter and are not silently enabled.
+The control plane and agent process do not need GPU resources to run. The
+current deployment uses `aweswitch qw` to launch the Qwen agent against the
+remote workstation inference node; GPU and model weights belong to that remote
+node, not this host. The repository also contains an optional loopback-only
+`VLLMLocalModel` path for a same-host vLLM service. Remote inference transport
+and provider policy must be qualified separately and are not silently treated
+as local GPU execution.
 
 Run the full regression suite with:
 

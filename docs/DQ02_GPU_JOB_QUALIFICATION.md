@@ -10,12 +10,12 @@ scheduler enforcement.
 
 ### Deployment topology
 
-The local model is loaded by a vLLM inference node, while the agent invokes
-that node from the local control-plane host. The control-plane process does not
-need to load model weights or own a GPU. The current adapter accepts only a
-loopback endpoint, so the inference node must run on the same host or be
-exposed through a loopback-only local forwarder. A remote inference node needs
-an explicitly reviewed transport/security adapter and is not silently enabled.
+The selected deployment loads the Qwen model in a remote workstation inference
+node via `aweswitch qw`; this control-plane host runs the agent/client and does
+not load model weights or own a GPU. The repository's `VLLMLocalModel` is a
+separate optional adapter that accepts only a loopback endpoint for a same-host
+vLLM service. The remote aweswitch transport is therefore not evidence of
+local GPU visibility or scheduler-enforced GPU job isolation.
 
 The V1 controller now treats GPU requests as an explicit resource contract:
 

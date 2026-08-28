@@ -10,7 +10,7 @@ target-environment manifest, and qualification date.
 |---|---|---|
 | DQ00 release/supply chain | immutable RC tag, retained release manifest, lock/SBOM and image digests | **PARTIAL** — RC is tagged; target evidence and SBOM/image records remain |
 | DQ01 host/sandbox/filesystem | strict preflight plus target-host boundary, quota, cancellation and race evidence | **PARTIAL** — WSL2 evidence exists; deployment qualification remains pending |
-| DQ02 GPU/backend | vLLM-to-agent path plus scheduler-enforced device isolation and crash recovery when GPU deployment is selected | **SOFTWARE PATH IMPLEMENTED; hardware/scheduler evidence pending** |
+| DQ02 GPU/backend | only if local GPU-backed jobs or a local vLLM backend are selected; remote `aweswitch qw` inference uses the workstation's GPU | **NOT APPLICABLE to the selected remote-inference control-plane path** |
 | DQ03 cloud | staging canaries, provider retry/cost/retention records, model-drift review | **PARTIAL** — deterministic tests pass; real provider evidence remains |
 | DQ04 backup/DR | encrypted off-host snapshot, clean-host restore, RPO/RTO measurement and health report | **PARTIAL** — consistency tests pass; operational certificate remains |
 | DQ05 operations/soak | mixed workload, fault/restart/reconcile evidence, thresholds and retained probe output | **PENDING** — probe is available; target run has not occurred |
@@ -32,16 +32,17 @@ target-environment manifest, and qualification date.
 
 The current repository state is **CONDITIONAL GO for development/staging
 evaluation only; NOT production GO**. CPU/cloud deployments do not require GPU
-resources; if a vLLM inference node loads the local model, GPU is required on
-that node rather than by the control plane. The selected vLLM/GPU path is
-software-integrated but still needs target hardware/runtime evidence. Production release remains blocked on
-target-environment DQ01, DQ03, DQ04, DQ05, and applicable DQ02 evidence.
+resources; the selected `aweswitch qw` path runs Qwen inference on the remote
+workstation. A future same-host vLLM/GPU path would require separate hardware
+evidence. Production release remains blocked on target-environment DQ01, DQ03,
+DQ04, and DQ05 evidence, plus DQ02 only if local GPU-backed execution is
+enabled.
 
 The current deployment host is WSL2; `nvidia-smi` reports GPU access blocked by
-the operating system and vLLM is not installed. Therefore DQ02 cannot be
-marked hardware-qualified even though this is the deployment host. Restore OS
-GPU exposure, install a locked vLLM version, then run device visibility,
-isolation, OOM, cancellation, and restart-recovery tests.
+the operating system and vLLM is not installed. This does not block the
+selected `aweswitch qw` remote-inference topology because GPU execution occurs
+on the Qwen workstation. It would block a future same-host vLLM or local
+GPU-backed Job deployment, which would require a separate DQ02 run.
 
 The decision owner must attach the tagged RC, `release-manifest.json`,
 `dq05-storage-evidence.json`, provider canary report, and clean-host restore
