@@ -31,3 +31,9 @@ jobs:
         run: uv run alembic upgrade head
       - name: Diff hygiene
         run: git diff --check
+      - name: Release hygiene
+        run: |
+          if git ls-files | grep -Eq '(^|/)([^/]+\.db(-wal|-shm)?|[^/]+-evidence(-check)?\.json)$'; then
+            echo "runtime database or external qualification evidence is tracked"
+            exit 1
+          fi
