@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from researchd.orchestrator.engine import ResearchOrchestrator, RunSnapshot
-from researchd.storage.models import AuditEventRecord, ResearchRunRecord, WorkOrderRecord
+from researchd.storage.models import AgentRecord, AgentRuntimeRecord, AuditEventRecord, DelegationRecord, AgentInvocationRecord, ResearchRunRecord, WorkOrderRecord
 
 
 class LocalControlAPI:
@@ -58,6 +58,42 @@ class LocalControlAPI:
                 "timestamp": event.timestamp.isoformat(), "correlation_id": event.correlation_id,
                 "metadata": event.metadata_json,
             } for event in records]
+
+    def agents(self) -> list[dict[str, Any]]:
+        with self.sessions() as session:
+            rows = session.scalars(select(AgentRecord).order_by(AgentRecord.agent_id)).all()
+            return [self._agent_payload(session, row) for row in rows]
+
+    def agent(self, agent_id: str) -> dict[str, Any]:
+        with self.sessions() as session:
+            row = session.get(AgentRecord, agent_id)
+            if row is None:
+                raise LookupError(agent_id)
+            return self._agent_payload(session, row)
+
+    def _agent_payload(self, session: Session, row: AgentRecord) -> dict[str, Any]:
+        runtimes = session.scalars(select(AgentRuntimeRecord).where(AgentRuntimeRecord.agent_id == row.agent_id).order_by(AgentRuntimeRecord.runtime_id)).all()
+        return {"agent_id": row.agent_id, "display_name": row.display_name, "roles": row.roles_json, "skills": row.skills_json, "trust_zone": row.trust_zone, "enabled": row.enabled, "profile_version": row.profile_version, "runtimes": [{"runtime_id": item.runtime_id, "adapter_kind": item.adapter_kind, "runtime_name": item.runtime_name, "enabled": item.enabled, "lease_expires_at": item.lease_expires_at.isoformat() if item.lease_expires_at else None} for item in runtimes]}
+
+    def delegations(self, run_id: str | None = None) -> list[dict[str, Any]]:
+        with self.sessions() as session:
+            query = select(DelegationRecord).order_by(DelegationRecord.created_at, DelegationRecord.delegation_id)
+            if run_id is not None:
+                query = query.where(DelegationRecord.run_id == run_id)
+            return [self._delegation_payload(item) for item in session.scalars(query).all()]
+
+    def delegation(self, delegation_id: str) -> dict[str, Any]:
+        with self.sessions() as session:
+            row = session.get(DelegationRecord, delegation_id)
+            if row is None:
+                raise LookupError(delegation_id)
+            payload = self._delegation_payload(row)
+            invocations = session.scalars(select(AgentInvocationRecord).where(AgentInvocationRecord.delegation_id == delegation_id).order_by(AgentInvocationRecord.created_at)).all()
+            payload["invocations"] = [{"invocation_id": item.invocation_id, "status": item.status, "agent_id": item.agent_id, "runtime_id": item.runtime_id, "purpose": item.purpose} for item in invocations]
+            return payload
+
+    def _delegation_payload(self, row: DelegationRecord) -> dict[str, Any]:
+        return {"delegation_id": row.delegation_id, "run_id": row.run_id, "work_order_id": row.work_order_id, "purpose": row.purpose, "state": row.state, "assigned_agent_id": row.assigned_agent_id, "assigned_runtime_id": row.assigned_runtime_id, "agent_profile_version": row.agent_profile_version, "assignment_sha256": row.assignment_sha256, "created_at": row.created_at.isoformat()}
 
     async def cancel_run(self, run_id: str) -> dict[str, Any]:
         await self.orchestrator.cancel(run_id)
