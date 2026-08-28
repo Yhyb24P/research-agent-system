@@ -53,6 +53,10 @@ def validate(
         evidence_commit = evidence.get("release_commit")
         checks.append({"name": "storage_evidence_commit_matches", "passed": evidence_commit == commit})
         checks.append({"name": "storage_evidence_passed", "passed": evidence.get("passed") is True})
+        samples = evidence.get("samples")
+        latest = samples[-1] if isinstance(samples, list) and samples and isinstance(samples[-1], dict) else None
+        checks.append({"name": "storage_evidence_samples_present", "passed": latest is not None})
+        checks.append({"name": "storage_evidence_shape", "passed": latest is not None and all(key in latest for key in ("database_size_bytes", "wal_size_bytes", "cas_size_bytes", "backup_manifest_present"))})
     if preflight_evidence is not None:
         evidence = _load(preflight_evidence)
         checks.append({"name": "preflight_evidence_commit_matches", "passed": evidence.get("release_commit") == commit})
@@ -63,6 +67,10 @@ def validate(
             evidence = _load(path)
             checks.append({"name": f"{name}_evidence_commit_matches", "passed": evidence.get("release_commit") == commit})
             checks.append({"name": f"{name}_evidence_passed", "passed": evidence.get("passed") is True})
+            if name == "dr":
+                health = evidence.get("restore_health")
+                checks.append({"name": "dr_timings_present", "passed": all(isinstance(evidence.get(key), (int, float)) and evidence[key] >= 0 for key in ("backup_seconds", "restore_seconds"))})
+                checks.append({"name": "dr_health_present", "passed": isinstance(health, dict) and health.get("healthy") is True and bool(health.get("schema_revision"))})
             if name == "cloud":
                 metadata = evidence.get("metadata")
                 checks.append({"name": "cloud_metadata_complete", "passed": isinstance(metadata, dict) and all(metadata.get(field) for field in _CLOUD_METADATA)})
