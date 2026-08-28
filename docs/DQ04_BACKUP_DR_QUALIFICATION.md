@@ -39,3 +39,19 @@ Define RPO/RTO, encrypt and transport snapshots off-host, perform a clean-host
 restore using only the tagged RC and backup, then run controller health checks
 and verify WorkOrder, Attempt, Artifact, Verification, Approval, and Audit
 records. These are deployment operations, not conclusions from unit tests.
+
+The repository includes a timing/evidence probe for the clean-host exercise:
+
+```bash
+.venv/bin/python scripts/dq04_dr_probe.py \
+  --database /var/lib/researchd/orchestrator.db \
+  --artifacts /var/lib/researchd/artifacts \
+  --snapshot /var/lib/researchd/backups/dq04-rc20 \
+  --restore-root /var/tmp/researchd-dq04-restore \
+  --last-committed-at 2026-08-29T00:00:00Z \
+  --output dq04-dr-evidence.json
+```
+
+It measures snapshot and restore+health-check duration and records RPO when a
+trusted last-commit timestamp is supplied. Encryption, off-host transfer,
+clean-host provenance, and the pass thresholds remain deployment obligations.
