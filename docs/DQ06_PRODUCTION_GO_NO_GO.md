@@ -32,8 +32,9 @@ target-environment manifest, and qualification date.
 
 The current repository state is **CONDITIONAL GO for development/staging
 evaluation only; NOT production GO**. CPU/cloud deployments do not require GPU
-resources; the selected vLLM/GPU path is software-integrated but still needs
-target hardware/scheduler evidence. Production release remains blocked on
+resources; if a vLLM inference node loads the local model, GPU is required on
+that node rather than by the control plane. The selected vLLM/GPU path is
+software-integrated but still needs target hardware/runtime evidence. Production release remains blocked on
 target-environment DQ01, DQ03, DQ04, DQ05, and applicable DQ02 evidence.
 
 The current deployment host is WSL2; `nvidia-smi` reports GPU access blocked by

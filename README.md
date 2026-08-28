@@ -18,10 +18,12 @@ cloud models, or claim exactly-once scheduler semantics.
 Current status: **V1 control plane complete; deployment qualification pending**.
 RCs, DQ00–DQ06 evidence requirements, and the current Go/No-Go decision are in
 `docs/DQ00_RELEASE_BASELINE.md` through `docs/DQ06_PRODUCTION_GO_NO_GO.md`.
-The CPU/local and cloud paths do not require GPU resources. The selected local
-GPU path can start a vLLM OpenAI-compatible inference service and connect the
-agent through the loopback-only `VLLMLocalModel`; GPU admission is an explicit
-contract activated when a scheduler with hardware enforcement is selected.
+The control plane and agent process do not need GPU resources to run. A local
+model may instead be loaded by a vLLM inference node and called from the agent
+over the loopback-only `VLLMLocalModel`; in that topology GPU belongs to the
+inference node, while GPU admission is an explicit contract for GPU-backed
+job execution. Remote inference endpoints require a separately reviewed
+transport adapter and are not silently enabled.
 
 Run the full regression suite with:
 

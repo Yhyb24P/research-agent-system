@@ -8,6 +8,15 @@ through the loopback-only `VLLMLocalModel` with no cloud fallback; DQ02 is
 activated for the selected GPU deployment to qualify hardware visibility and
 scheduler enforcement.
 
+### Deployment topology
+
+The local model is loaded by a vLLM inference node, while the agent invokes
+that node from the local control-plane host. The control-plane process does not
+need to load model weights or own a GPU. The current adapter accepts only a
+loopback endpoint, so the inference node must run on the same host or be
+exposed through a loopback-only local forwarder. A remote inference node needs
+an explicitly reviewed transport/security adapter and is not silently enabled.
+
 The V1 controller now treats GPU requests as an explicit resource contract:
 
 - a GPU job requires a `GpuAdmissionController`;
