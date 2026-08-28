@@ -251,3 +251,13 @@ def test_adapter_catalog_resolves_enabled_healthy_runtime(database: tuple[Path, 
     runtime, adapter = catalog.resolve("runtime_http")
     assert runtime.adapter_kind is AgentAdapterKind.HTTP and isinstance(adapter, HttpAgentAdapter)
     assert asyncio.run(catalog.health("runtime_http")).healthy
+
+
+def test_http_and_process_adapters_reject_unsafe_or_oversized_inputs() -> None:
+    runtime = AgentRuntime(runtime_id=AgentRuntimeId("runtime_http"), agent_id=AgentId("agent_executor"), adapter_kind=AgentAdapterKind.HTTP, runtime_name="HTTP", endpoint_ref="http://user:pass@example")
+    assert not asyncio.run(HttpAgentAdapter(cast(HttpAgentClient, None)).health(runtime)).healthy
+    with pytest.raises(ValueError, match="NUL-free"):
+        LocalProcessAgentAdapter(cast(ProcessAgentRunner, None), ("agent\x00",))
+    request = AgentInvocationRequest(invocation_id=InvocationId("inv_large"), delegation_id=DelegationId("del_execute"), run_id="run_test", agent_id=AgentId("agent_executor"), runtime_id=AgentRuntimeId("runtime_http"), purpose=DelegationPurpose.EXECUTE, input_sha256="d" * 64, payload={"blob": "x" * 100})
+    result = asyncio.run(HttpAgentAdapter(cast(HttpAgentClient, None), max_payload_bytes=16).invoke(request))
+    assert result.reason_code == "HTTP_PAYLOAD_TOO_LARGE"
