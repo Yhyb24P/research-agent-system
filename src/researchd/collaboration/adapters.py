@@ -1,6 +1,10 @@
 from researchd.agents.cloud_lead import CloudLeadAdapter
 from researchd.context.builder import CloudContextSelection
 from researchd.executor.contracts import ExecutorResult, GrantedWorkOrder
+from researchd.storage.models import AttemptRecord, WorkOrderRecord
+from researchd.agents.schemas import PlanProposal
+from researchd.domain.review import ReviewDecision
+from researchd.agents.cloud_lead import CloudLeadResult
 from researchd.executor.worker import LocalExecutorWorker
 from pydantic import BaseModel
 from researchd.collaboration.contracts import AgentHealth, AgentInvocationRequest, AgentInvocationResult, AgentRuntime
@@ -30,6 +34,12 @@ class CloudLeadAgentAdapter:
     async def cancel(self, invocation_id: str) -> None:
         del invocation_id
 
+    async def plan(self, selection: CloudContextSelection) -> CloudLeadResult[PlanProposal]:
+        return await self.delegate.propose_plan(selection)
+
+    async def review(self, selection: CloudContextSelection) -> CloudLeadResult[ReviewDecision]:
+        return await self.delegate.review(selection)
+
 
 class LocalExecutorAgentAdapter:
     """Canonical adapter preserving the capability-brokered local executor."""
@@ -48,3 +58,7 @@ class LocalExecutorAgentAdapter:
 
     async def cancel(self, invocation_id: str) -> None:
         del invocation_id
+
+    async def execute(self, work_order: WorkOrderRecord, attempt: AttemptRecord) -> ExecutorResult:
+        del attempt
+        return await self.delegate.execute(work_order)  # type: ignore[arg-type]

@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from researchd.agents.cloud_lead import CloudLeadAdapter, CloudLeadResult
+from researchd.collaboration.gateway import CollaborationGateway
 from researchd.agents.schemas import PlanProposal, WorkOrderProposal
 from researchd.context.builder import CloudContextSelection
 from researchd.domain.enums import (
@@ -66,7 +67,7 @@ class ResearchOrchestrator:
     def __init__(
         self, sessions: sessionmaker[Session], cloud: CloudLeadAdapter,
         policy: RecordingPolicyEngine | PolicyEvaluator, executor: ExecutionDriver,
-        verifier: VerificationDriver, *, approvals: ApprovalService | None = None,
+        verifier: VerificationDriver, *, collaboration: CollaborationGateway | None = None, approvals: ApprovalService | None = None,
         jobs: JobManager | None = None,
         workspace_capabilities: frozenset[Capability] = frozenset(),
         user_capabilities: frozenset[Capability] = frozenset(),
@@ -77,6 +78,7 @@ class ResearchOrchestrator:
         self.cloud = cloud
         self.policy = policy
         self.executor = executor
+        self.collaboration = collaboration
         self.verifier = verifier
         self.approvals = approvals
         self.jobs = jobs
@@ -149,7 +151,7 @@ class ResearchOrchestrator:
         if not self._consume_cloud_call(run_id, run):
             return False
         try:
-            result = await self.cloud.propose_plan(CloudContextSelection(run_id=run_id))
+            result = await (self.collaboration.plan(CloudContextSelection(run_id=run_id)) if self.collaboration else self.cloud.propose_plan(CloudContextSelection(run_id=run_id)))
         except (CloudProviderUnavailable, TimeoutError) as error:
             self._transition_run(run_id, ResearchRunState.WAITING_EXTERNAL, "CLOUD_PLAN_WAITING", {"error": type(error).__name__})
             return False
@@ -370,7 +372,7 @@ class ResearchOrchestrator:
             raise OrchestrationError("EXECUTING WorkOrder has no Attempt")
         result = self._stored_execution_result(attempt.attempt_id)
         if result is None:
-            result = await self.executor.execute(order, attempt)
+            result = await (self.collaboration.execute(order, attempt) if self.collaboration else self.executor.execute(order, attempt))
             self._store_execution_result(attempt.attempt_id, result)
         if result.status != "execution_complete":
             self.transitions.transition_attempt(attempt.attempt_id, attempt.version, AttemptState.FAILED,
@@ -419,10 +421,13 @@ class ResearchOrchestrator:
         if not self._consume_cloud_call(run_id, self._run(run_id)):
             return False
         try:
-            result = await self.cloud.review(CloudContextSelection(
+            result = await (self.collaboration.review(CloudContextSelection(
                 run_id=run_id, work_order_id=order.work_order_id,
                 verification_id=self._latest_verification_id(order.work_order_id),
-            ))
+            )) if self.collaboration else self.cloud.review(CloudContextSelection(
+                run_id=run_id, work_order_id=order.work_order_id,
+                verification_id=self._latest_verification_id(order.work_order_id),
+            )))
         except (CloudProviderUnavailable, TimeoutError) as error:
             self._transition_run(run_id, ResearchRunState.WAITING_EXTERNAL, "CLOUD_REVIEW_WAITING", {"error": type(error).__name__})
             return False
@@ -525,7 +530,7 @@ class ResearchOrchestrator:
             current.updated_at = utc_now()
         for attempt in self._active_attempts(run_id):
             # Cancellation is best-effort at the backend, but the state is never silently resumed.
-            await self.executor.cancel(attempt.attempt_id)
+            await (self.collaboration.cancel(attempt.attempt_id) if self.collaboration else self.executor.cancel(attempt.attempt_id))
             current_attempt = self._attempt(attempt.attempt_id)
             self.transitions.transition_attempt(current_attempt.attempt_id, current_attempt.version, AttemptState.CANCELLED,
                 event_type="ATTEMPT_CANCELLED", actor_type="controller", actor_id="orchestrator", correlation_id=current_attempt.attempt_id)
