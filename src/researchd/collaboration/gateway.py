@@ -33,7 +33,7 @@ class CollaborationGateway:
     def tracking_enabled(self) -> bool:
         return self.delegations is not None and self.invocations is not None and ((self.agent_id is not None and self.runtime_id is not None) or self.selector is not None)
 
-    def _start(self, run_id: str, purpose: DelegationPurpose, *, work_order_id: str | None = None, required_roles: tuple[str, ...] = (), required_skills: tuple[str, ...] = (), existing_delegation_id: str | None = None) -> tuple[DelegationId, InvocationId] | None:
+    def _start(self, run_id: str, purpose: DelegationPurpose, *, work_order_id: str | None = None, attempt_id: str | None = None, required_roles: tuple[str, ...] = (), required_skills: tuple[str, ...] = (), existing_delegation_id: str | None = None) -> tuple[DelegationId, InvocationId] | None:
         if not self.tracking_enabled:
             return None
         delegation_id = DelegationId(existing_delegation_id) if existing_delegation_id else DelegationId(f"del_{uuid4().hex}")
@@ -56,7 +56,7 @@ class CollaborationGateway:
         if existing_delegation_id is None:
             self.delegations.create(Delegation(delegation_id=delegation_id, run_id=run_id, work_order_id=work_order_id, purpose=purpose, idempotency_key=f"{delegation_id}-orchestration"))
             self.delegations.assign(str(delegation_id), agent_id=str(agent_id), runtime_id=str(runtime_id))
-        self.invocations.start(AgentInvocationRequest(invocation_id=invocation_id, delegation_id=delegation_id, run_id=run_id, work_order_id=work_order_id, agent_id=agent_id, runtime_id=runtime_id, purpose=purpose, input_sha256=hashlib.sha256(f"{run_id}:{purpose.value}:{work_order_id}".encode()).hexdigest()))
+        self.invocations.start(AgentInvocationRequest(invocation_id=invocation_id, delegation_id=delegation_id, run_id=run_id, work_order_id=work_order_id, attempt_id=attempt_id, agent_id=agent_id, runtime_id=runtime_id, purpose=purpose, input_sha256=hashlib.sha256(f"{run_id}:{purpose.value}:{work_order_id}:{attempt_id}".encode()).hexdigest()))
         return delegation_id, invocation_id
 
     def prepare_execution(self, work_order: WorkOrderRecord) -> str | None:
@@ -98,7 +98,7 @@ class CollaborationGateway:
         return result
 
     async def execute(self, work_order: WorkOrderRecord, attempt: AttemptRecord) -> ExecutorResult:
-        tracking = self._start(work_order.run_id, DelegationPurpose.EXECUTE, work_order_id=work_order.work_order_id, required_roles=("executor",), existing_delegation_id=attempt.delegation_id)
+        tracking = self._start(work_order.run_id, DelegationPurpose.EXECUTE, work_order_id=work_order.work_order_id, attempt_id=attempt.attempt_id, required_roles=("executor",), existing_delegation_id=attempt.delegation_id)
         try:
             result = await self.executor.execute(work_order, attempt)
         except Exception as error:
@@ -109,6 +109,11 @@ class CollaborationGateway:
 
     async def cancel(self, attempt_id: str) -> None:
         await self.executor.cancel(attempt_id)
+        if self.invocations is not None:
+            with self.invocations.sessions() as session:
+                invocation_ids = session.scalars(select(AgentInvocationRecord.invocation_id).where(AgentInvocationRecord.attempt_id == attempt_id, AgentInvocationRecord.status == InvocationStatus.RUNNING.value)).all()
+            for invocation_id in invocation_ids:
+                self._finish(InvocationId(invocation_id), success=False, reason="CANCELLED")
 
     def assigned_agent_for(self, work_order_id: str) -> str | None:
         if self.delegations is None:
