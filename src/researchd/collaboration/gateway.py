@@ -121,3 +121,12 @@ class CollaborationGateway:
         with self.delegations.sessions() as session:
             row = session.scalar(select(DelegationRecord.assigned_agent_id).where(DelegationRecord.work_order_id == work_order_id).order_by(DelegationRecord.created_at.desc()).limit(1))
             return row
+
+    def reconcile_attempt(self, attempt_id: str, result: ExecutorResult) -> None:
+        """Close a durable execution Invocation during controller recovery."""
+        if self.invocations is None:
+            return
+        with self.invocations.sessions() as session:
+            invocation_ids = session.scalars(select(AgentInvocationRecord.invocation_id).where(AgentInvocationRecord.attempt_id == attempt_id, AgentInvocationRecord.status == InvocationStatus.RUNNING.value)).all()
+        for invocation_id in invocation_ids:
+            self._finish(InvocationId(invocation_id), success=result.status == "execution_complete", output_type="ExecutorResult", output=result.model_dump(mode="json"), reason=None if result.status == "execution_complete" else result.status)

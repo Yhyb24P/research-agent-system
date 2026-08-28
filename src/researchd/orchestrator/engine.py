@@ -570,7 +570,10 @@ class ResearchOrchestrator:
         if self.jobs is not None:
             self.jobs.reconcile()
         for attempt in self._active_attempts(run_id):
-            if self._stored_execution_result(attempt.attempt_id) is not None:
+            stored = self._stored_execution_result(attempt.attempt_id)
+            if stored is not None:
+                if self.collaboration is not None:
+                    self.collaboration.reconcile_attempt(attempt.attempt_id, stored)
                 with self.sessions.begin() as session:
                     session.add(AuditEventRecord(
                         event_id=f"evt_{uuid4().hex}", event_type="RECOVERY_EXECUTION_RECONCILED", run_id=run_id,
