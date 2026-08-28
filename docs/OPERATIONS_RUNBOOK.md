@@ -38,7 +38,7 @@ manifest = backup_snapshot(db_path, artifact_store_root, backup_dir)
 restore_snapshot(backup_dir, restored_db, restored_artifacts)
 ```
 
-The operation checkpoints SQLite WAL, uses SQLite's online backup API, copies content-addressed artifact bytes, and writes SHA256 checksums for the database and every artifact file. Restore refuses incomplete/tampered snapshots and refuses to overwrite existing destinations. Keep snapshots encrypted and access-controlled outside this process.
+The operation checkpoints SQLite WAL, uses SQLite's online backup API, queries the snapshot for referenced artifact hashes, copies only those content-addressed bytes, and writes SHA256 checksums for the database and every artifact file. Restore also checks database/artifact reference equality, refuses incomplete/tampered snapshots, and refuses to overwrite existing destinations. Keep snapshots encrypted and access-controlled outside this process.
 
 ## Incident handling
 

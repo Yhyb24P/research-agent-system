@@ -52,8 +52,12 @@ def test_sqlite_and_artifact_backup_restore_validates_checksums(tmp_path: Path) 
     sessions, orchestrator, _, _ = make_orchestrator(tmp_path, cloud_responses=[_proposal(), _review()])
     run_id = orchestrator.create_run(workspace_id="ws_e2e", objective="backup")
     asyncio.run(orchestrator.run(run_id, max_steps=30))
+    orphan = tmp_path / "artifacts" / "sha256" / "ff" / ("f" * 64)
+    orphan.parent.mkdir(parents=True)
+    orphan.write_bytes(b"unreferenced CAS residue")
     backup_dir = tmp_path / "backup"
     manifest = backup_snapshot(tmp_path / "orchestrator.db", tmp_path / "artifacts", backup_dir)
+    assert "sha256/ff/" + "f" * 64 not in manifest.artifact_files
     restored_db = tmp_path / "restored.db"
     restored_artifacts = tmp_path / "restored-artifacts"
     assert restore_snapshot(backup_dir, restored_db, restored_artifacts) == manifest

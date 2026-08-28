@@ -42,7 +42,14 @@ def backup_snapshot(database: Path, artifact_root: Path, destination: Path) -> B
     finally:
         target.close()
         source.close()
-    shutil.copytree(artifact_root, destination_artifacts, dirs_exist_ok=True)
+    referenced = _referenced_artifact_digests(database_copy)
+    for digest in referenced:
+        source_artifact = artifact_root / "sha256" / digest[:2] / digest
+        if not source_artifact.is_file() or source_artifact.is_symlink():
+            raise BackupError(f"referenced artifact is missing or unsafe: {digest}")
+        destination_artifact = destination_artifacts / "sha256" / digest[:2] / digest
+        destination_artifact.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source_artifact, destination_artifact)
     files = {
         str(path.relative_to(destination_artifacts)): _sha256(path)
         for path in sorted(destination_artifacts.rglob("*")) if path.is_file()
@@ -69,6 +76,8 @@ def restore_snapshot(snapshot: Path, database_destination: Path, artifact_destin
     actual_files = {str(path.relative_to(artifacts_source)): _sha256(path) for path in sorted(artifacts_source.rglob("*")) if path.is_file()}
     if actual_files != manifest.artifact_files:
         raise BackupError("snapshot artifact checksum mismatch")
+    if _referenced_artifact_files(database_source) != set(manifest.artifact_files):
+        raise BackupError("snapshot database/artifact reference mismatch")
     database_destination = database_destination.resolve()
     artifact_destination = artifact_destination.resolve()
     if database_destination.exists() or artifact_destination.exists():
@@ -86,3 +95,24 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _referenced_artifact_digests(database: Path) -> set[str]:
+    try:
+        with sqlite3.connect(str(database)) as connection:
+            rows = connection.execute("SELECT artifact_id FROM artifacts").fetchall()
+    except sqlite3.Error as error:
+        raise BackupError("snapshot artifact table is unreadable") from error
+    digests: set[str] = set()
+    for (artifact_id,) in rows:
+        if not isinstance(artifact_id, str) or not artifact_id.startswith("artifact://sha256/"):
+            raise BackupError("database contains an invalid artifact ID")
+        digest = artifact_id.removeprefix("artifact://sha256/")
+        if len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
+            raise BackupError("database contains an invalid artifact hash")
+        digests.add(digest)
+    return digests
+
+
+def _referenced_artifact_files(database: Path) -> set[str]:
+    return {f"sha256/{digest[:2]}/{digest}" for digest in _referenced_artifact_digests(database)}
