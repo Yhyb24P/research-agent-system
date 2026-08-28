@@ -68,6 +68,20 @@ def test_migration_upgrade_from_empty_db_and_wal(tmp_path: Path) -> None:
         assert connection.scalar(text("PRAGMA foreign_keys")) == 1
 
 
+def test_migration_upgrade_from_0008_gpu_admission_to_head(tmp_path: Path) -> None:
+    path = tmp_path / "legacy-0008.db"
+    config = Config(str(ROOT / "alembic.ini"))
+    config.set_main_option("sqlalchemy.url", f"sqlite:///{path}")
+    command.upgrade(config, "0008")
+    legacy_engine = create_sqlite_engine(path)
+    assert "agents" not in inspect(legacy_engine).get_table_names()
+    legacy_engine.dispose()
+    command.upgrade(config, "head")
+    assert_migration_matches_models(path)
+    upgraded = inspect(create_sqlite_engine(path)).get_table_names()
+    assert {"agents", "agent_runtimes", "delegations", "agent_invocations", "collaboration_messages"} <= set(upgraded)
+
+
 def test_expected_version_concurrency_exactly_one_wins(database: tuple[Path, sessionmaker[Session]]) -> None:
     _, sessions = database
     service = TransactionalTransitionService(sessions)
