@@ -11,7 +11,7 @@ import pytest
 import httpx
 from sqlalchemy import select
 
-from researchd.backup import BackupError, backup_snapshot, restore_snapshot
+from researchd.backup import BackupError, backup_snapshot, check_restored_snapshot, restore_snapshot
 from researchd.artifacts.provenance import ArtifactService
 from researchd.artifacts.store import ContentAddressedArtifactStore
 from researchd.context.builder import ContextBuilder
@@ -68,6 +68,8 @@ def test_sqlite_and_artifact_backup_restore_validates_checksums(tmp_path: Path) 
     restored_db = tmp_path / "restored.db"
     restored_artifacts = tmp_path / "restored-artifacts"
     assert restore_snapshot(backup_dir, restored_db, restored_artifacts) == manifest
+    health = check_restored_snapshot(restored_db, restored_artifacts)
+    assert health.healthy and health.schema_revision == "0008" and health.artifacts_verified == 1
     with pytest.raises(BackupError, match="already exist"):
         restore_snapshot(backup_dir, restored_db, tmp_path / "other-artifacts")
     assert restored_db.is_file() and restored_artifacts.is_dir()

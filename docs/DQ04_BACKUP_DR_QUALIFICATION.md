@@ -14,6 +14,10 @@ Restore verifies all of the following before copying to a destination:
 - equality between database artifact references and manifest paths;
 - destination paths do not already exist.
 
+After copying, `check_restored_snapshot()` provides a read-only health check:
+SQLite integrity and foreign-key checks, required table counts, schema revision,
+and content-addressed artifact re-hashing.
+
 This proves database/CAS referential consistency for the snapshot. It does not
 yet provide encryption, off-host retention, key management, RPO/RTO guarantees,
 or a clean-environment production restore certificate.

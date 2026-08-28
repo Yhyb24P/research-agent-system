@@ -32,6 +32,17 @@ class BackupManifest:
         }
 
 
+@dataclass(frozen=True)
+class RestoreHealthReport:
+    schema_revision: str
+    table_counts: dict[str, int]
+    artifacts_verified: int
+
+    @property
+    def healthy(self) -> bool:
+        return True
+
+
 def backup_snapshot(database: Path, artifact_root: Path, destination: Path) -> BackupManifest:
     database = database.resolve(strict=True)
     artifact_root = artifact_root.resolve(strict=True)
@@ -106,6 +117,32 @@ def restore_snapshot(snapshot: Path, database_destination: Path, artifact_destin
     shutil.copy2(database_source, database_destination)
     shutil.copytree(artifacts_source, artifact_destination)
     return manifest
+
+
+def check_restored_snapshot(database: Path, artifact_root: Path) -> RestoreHealthReport:
+    """Run read-only integrity and reference checks on a restored state."""
+    database = database.resolve(strict=True)
+    artifact_root = artifact_root.resolve(strict=True)
+    try:
+        with sqlite3.connect(str(database)) as connection:
+            integrity = connection.execute("PRAGMA integrity_check").fetchone()
+            if integrity != ("ok",):
+                raise BackupError("restored database integrity check failed")
+            foreign_keys = connection.execute("PRAGMA foreign_key_check").fetchall()
+            if foreign_keys:
+                raise BackupError("restored database foreign-key check failed")
+            tables = ("research_runs", "work_orders", "attempts", "artifacts", "verification_results", "audit_events")
+            counts = {table: int(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]) for table in tables}
+    except (OSError, sqlite3.Error, TypeError, IndexError) as error:
+        if isinstance(error, BackupError):
+            raise
+        raise BackupError("restored database health check failed") from error
+    digests = _referenced_artifact_digests(database)
+    for digest in digests:
+        path = artifact_root / "sha256" / digest[:2] / digest
+        if not path.is_file() or path.is_symlink() or _sha256(path) != digest:
+            raise BackupError(f"restored artifact verification failed: {digest}")
+    return RestoreHealthReport(_schema_revision(database), counts, len(digests))
 
 
 def _sha256(path: Path) -> str:
