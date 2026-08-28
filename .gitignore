@@ -4,6 +4,8 @@
 __pycache__/
 *.py[cod]
 release-manifest.json
+*-evidence.json
+*-evidence-check.json
 # Runtime state and SQLite sidecars must never enter the release baseline.
 *.db
 *.db-wal
