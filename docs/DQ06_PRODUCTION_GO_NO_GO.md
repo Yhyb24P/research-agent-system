@@ -38,3 +38,16 @@ DQ03, DQ04, and DQ05 evidence, not on GPU capacity.
 The decision owner must attach the tagged RC, `release-manifest.json`,
 `dq05-storage-evidence.json`, provider canary report, and clean-host restore
 report before changing this status.
+
+Before review, the retained JSON can be checked for provenance and explicit
+pass status with:
+
+```bash
+.venv/bin/python scripts/dq06_evidence_check.py \
+  --manifest release-manifest.json \
+  --storage-evidence dq05-storage-evidence.json \
+  --output dq06-evidence-check.json
+```
+
+The checker does not manufacture missing deployment evidence: absent optional
+reports remain outside its scope and must still be attached to the decision.
