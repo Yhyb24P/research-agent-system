@@ -330,8 +330,9 @@ class ResearchOrchestrator:
             event_type="WORK_ORDER_DISPATCHED", actor_type="controller", actor_id="orchestrator", correlation_id=order.work_order_id)
         now = utc_now()
         attempt_id = f"att_{uuid4().hex}"
+        delegation_id = self.collaboration.prepare_execution(order) if self.collaboration is not None else None
         with self.sessions.begin() as session:
-            session.add(AttemptRecord(attempt_id=attempt_id, work_order_id=order.work_order_id, state=AttemptState.CREATED.value,
+            session.add(AttemptRecord(attempt_id=attempt_id, work_order_id=order.work_order_id, delegation_id=delegation_id, state=AttemptState.CREATED.value,
                 terminal_at=None, version=1, created_at=now, updated_at=now))
             session.add(AuditEventRecord(event_id=f"evt_{uuid4().hex}", event_type="ATTEMPT_CREATED", run_id=order.run_id,
                 entity_type="attempt", entity_id=attempt_id, actor_type="controller", actor_id="orchestrator",
@@ -360,8 +361,9 @@ class ResearchOrchestrator:
             event_type="ATTEMPT_RETRY_REQUESTED", actor_type="controller", actor_id="orchestrator", correlation_id=order.work_order_id)
         now = utc_now()
         attempt_id = f"att_{uuid4().hex}"
+        delegation_id = self.collaboration.prepare_execution(order) if self.collaboration is not None else None
         with self.sessions.begin() as session:
-            session.add(AttemptRecord(attempt_id=attempt_id, work_order_id=order.work_order_id,
+            session.add(AttemptRecord(attempt_id=attempt_id, work_order_id=order.work_order_id, delegation_id=delegation_id,
                 state=AttemptState.CREATED.value, terminal_at=None, version=1, created_at=now, updated_at=now))
             session.add(AuditEventRecord(event_id=f"evt_{uuid4().hex}", event_type="ATTEMPT_CREATED",
                 run_id=order.run_id, entity_type="attempt", entity_id=attempt_id, actor_type="controller",

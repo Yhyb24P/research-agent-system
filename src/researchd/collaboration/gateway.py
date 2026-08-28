@@ -14,7 +14,7 @@ from researchd.context.builder import CloudContextSelection
 from researchd.collaboration.adapters import CloudLeadAgentAdapter, LocalExecutorAgentAdapter
 from researchd.executor.contracts import ExecutorResult
 from researchd.storage.models import AttemptRecord, WorkOrderRecord
-from researchd.storage.models import DelegationRecord
+from researchd.storage.models import DelegationRecord, AgentInvocationRecord
 from sqlalchemy import select
 
 
@@ -33,12 +33,19 @@ class CollaborationGateway:
     def tracking_enabled(self) -> bool:
         return self.delegations is not None and self.invocations is not None and ((self.agent_id is not None and self.runtime_id is not None) or self.selector is not None)
 
-    def _start(self, run_id: str, purpose: DelegationPurpose, *, work_order_id: str | None = None, required_roles: tuple[str, ...] = (), required_skills: tuple[str, ...] = ()) -> tuple[DelegationId, InvocationId] | None:
+    def _start(self, run_id: str, purpose: DelegationPurpose, *, work_order_id: str | None = None, required_roles: tuple[str, ...] = (), required_skills: tuple[str, ...] = (), existing_delegation_id: str | None = None) -> tuple[DelegationId, InvocationId] | None:
         if not self.tracking_enabled:
             return None
-        delegation_id, invocation_id = DelegationId(f"del_{uuid4().hex}"), InvocationId(f"inv_{uuid4().hex}")
+        delegation_id = DelegationId(existing_delegation_id) if existing_delegation_id else DelegationId(f"del_{uuid4().hex}")
+        invocation_id = InvocationId(f"inv_{uuid4().hex}")
         assert self.delegations is not None and self.invocations is not None
-        if self.selector is not None and (self.agent_id is None or self.runtime_id is None):
+        if existing_delegation_id is not None:
+            with self.delegations.sessions() as session:
+                assigned = session.get(DelegationRecord, existing_delegation_id)
+            if assigned is None or assigned.assigned_agent_id is None or assigned.assigned_runtime_id is None:
+                raise ValueError("delegation is not assigned")
+            agent_id, runtime_id = AgentId(assigned.assigned_agent_id), AgentRuntimeId(assigned.assigned_runtime_id)
+        elif self.selector is not None and (self.agent_id is None or self.runtime_id is None):
             selected = self.selector.select(required_roles=required_roles, required_skills=required_skills)
             if selected is None:
                 raise ValueError("no eligible Agent runtime for delegation")
@@ -46,10 +53,24 @@ class CollaborationGateway:
         else:
             assert self.agent_id is not None and self.runtime_id is not None
             agent_id, runtime_id = self.agent_id, self.runtime_id
-        self.delegations.create(Delegation(delegation_id=delegation_id, run_id=run_id, work_order_id=work_order_id, purpose=purpose, idempotency_key=f"{delegation_id}-orchestration"))
-        self.delegations.assign(str(delegation_id), agent_id=str(agent_id), runtime_id=str(runtime_id))
+        if existing_delegation_id is None:
+            self.delegations.create(Delegation(delegation_id=delegation_id, run_id=run_id, work_order_id=work_order_id, purpose=purpose, idempotency_key=f"{delegation_id}-orchestration"))
+            self.delegations.assign(str(delegation_id), agent_id=str(agent_id), runtime_id=str(runtime_id))
         self.invocations.start(AgentInvocationRequest(invocation_id=invocation_id, delegation_id=delegation_id, run_id=run_id, work_order_id=work_order_id, agent_id=agent_id, runtime_id=runtime_id, purpose=purpose, input_sha256=hashlib.sha256(f"{run_id}:{purpose.value}:{work_order_id}".encode()).hexdigest()))
         return delegation_id, invocation_id
+
+    def prepare_execution(self, work_order: WorkOrderRecord) -> str | None:
+        tracking = self._start(work_order.run_id, DelegationPurpose.EXECUTE, work_order_id=work_order.work_order_id, required_roles=("executor",))
+        if tracking is None:
+            return None
+        assert self.invocations is not None
+        # Preparation must not leave a synthetic Invocation running; remove the
+        # provisional record and let execute() create the real invocation.
+        with self.invocations.sessions.begin() as session:
+            row = session.get(AgentInvocationRecord, str(tracking[1]))
+            if row is not None:
+                session.delete(row)
+        return str(tracking[0])
 
     def _finish(self, invocation_id: InvocationId | None, *, success: bool, output_type: str | None = None, output: dict[str, object] | None = None, reason: str | None = None) -> None:
         if invocation_id is not None:
@@ -77,7 +98,7 @@ class CollaborationGateway:
         return result
 
     async def execute(self, work_order: WorkOrderRecord, attempt: AttemptRecord) -> ExecutorResult:
-        tracking = self._start(work_order.run_id, DelegationPurpose.EXECUTE, work_order_id=work_order.work_order_id, required_roles=("executor",))
+        tracking = self._start(work_order.run_id, DelegationPurpose.EXECUTE, work_order_id=work_order.work_order_id, required_roles=("executor",), existing_delegation_id=attempt.delegation_id)
         try:
             result = await self.executor.execute(work_order, attempt)
         except Exception as error:
