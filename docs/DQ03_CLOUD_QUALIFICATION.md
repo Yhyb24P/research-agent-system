@@ -41,3 +41,16 @@ classifies transient provider failures, applies capped exponential backoff (or
 the provider's bounded `Retry-After`), records accounting, and fails closed on
 unavailable providers. A production retry/backoff policy remains a deployment
 decision until a real provider's 429/5xx behavior and cost limits are measured.
+
+Before attaching a staging report to DQ06, validate its required metadata and
+ensure no credential material was serialized:
+
+```bash
+.venv/bin/python scripts/dq03_cloud_evidence_check.py \
+  --input dq03-cloud-evidence.json \
+  --output dq03-cloud-evidence-check.json
+```
+
+The report must include `provider`, `model`, `tested_at_utc`, a credential
+reference (not its value), retention policy, a non-empty scenario list, and an
+explicit `passed: true` result.
