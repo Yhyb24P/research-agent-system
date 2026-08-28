@@ -1,6 +1,7 @@
 import asyncio
 import os
 import subprocess
+import threading
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -191,6 +192,61 @@ def test_capability_broker_blocks_traversal_symlink_and_reuses_step_result(tmp_p
     assert outside.read_text() == "host secret"
     assert first == second and (handle.path / "result.txt").read_text() == "once"
     assert mismatch.reason_code == "IDEMPOTENCY_KEY_MISMATCH"
+
+
+def test_capability_broker_rejects_parent_symlink_and_racing_replacement(tmp_path: Path) -> None:
+    repository = fixture_repository(tmp_path / "repo")
+    handle = WorktreeManager(tmp_path / "worktrees").create(repository, repository_id="repo", attempt_id="att_exec")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "marker.txt").write_text("must remain untouched")
+    (handle.path / "parent-link").symlink_to(outside, target_is_directory=True)
+    sessions = seed_database(tmp_path / "broker-race.db")
+    artifacts = ArtifactService(ContentAddressedArtifactStore(tmp_path / "artifacts"), sessions)
+    broker = CapabilityBroker(BubblewrapBackend(), artifacts, sessions, command_limits=limits())
+    granted = frozenset({Capability.WORKSPACE_WRITE})
+    static = broker.execute(
+        CapabilityRequest(
+            request_id="step_parent_symlink", capability=Capability.WORKSPACE_WRITE,
+            parameters={"path": "parent-link/escape.txt", "content": "must not escape"},
+        ), granted=granted, sandbox=sandbox_for(handle.path),
+    )
+    assert static.status == "denied"
+
+    race = handle.path / "race-link"
+    stop = threading.Event()
+
+    def replace_with_symlink() -> None:
+        while not stop.is_set():
+            try:
+                race.unlink()
+            except FileNotFoundError:
+                pass
+            except IsADirectoryError:
+                # The broker may have securely created the directory.  Leave
+                # a non-empty directory in place; the next operation remains
+                # anchored by its directory fd.
+                continue
+            try:
+                race.symlink_to(outside, target_is_directory=True)
+            except FileExistsError:
+                pass
+
+    attacker = threading.Thread(target=replace_with_symlink)
+    attacker.start()
+    try:
+        results = [broker.execute(
+            CapabilityRequest(
+                request_id=f"step_race_{index}", capability=Capability.WORKSPACE_WRITE,
+                parameters={"path": "race-link/escape.txt", "content": "must not escape"},
+            ), granted=granted, sandbox=sandbox_for(handle.path),
+        ) for index in range(40)]
+    finally:
+        stop.set()
+        attacker.join(timeout=2)
+    assert all(result.status in {"denied", "ok"} for result in results)
+    assert not (outside / "escape.txt").exists()
+    assert (outside / "marker.txt").read_text() == "must remain untouched"
 
 
 def test_duplicate_job_operation_and_restart_reconcile_running_job(tmp_path: Path) -> None:

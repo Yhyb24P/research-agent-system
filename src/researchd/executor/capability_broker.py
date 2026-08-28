@@ -1,5 +1,6 @@
 import os
 import hashlib
+import stat
 from pathlib import Path
 from typing import Any
 
@@ -132,36 +133,77 @@ class CapabilityBroker:
         content = self._required_string(request.parameters, "content").encode()
         if len(content) > self.command_limits.file_size_mb * 1024 * 1024:
             raise CapabilityDenied("write exceeds file-size limit")
-        target = self._resolve_workspace_path(sandbox, relative, for_write=True)
-        target.parent.mkdir(parents=True, exist_ok=True)
+        parent_fd: int | None = None
         try:
-            descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+            parent_fd, leaf = self._open_parent_fd(sandbox, relative, create=True)
+            descriptor = os.open(
+                leaf, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW | os.O_CLOEXEC,
+                0o600, dir_fd=parent_fd,
+            )
         except OSError as error:
             raise CapabilityDenied("workspace write target is not a safe regular path") from error
-        with os.fdopen(descriptor, "wb") as stream:
+        finally:
+            if parent_fd is not None:
+                os.close(parent_fd)
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            os.close(descriptor)
+            raise CapabilityDenied("workspace write target is not a regular file")
+        with os.fdopen(descriptor, "wb", closefd=True) as stream:
             stream.write(content)
         return CapabilityResult(request_id=request.request_id, status="ok", output=f"wrote {len(content)} bytes")
 
     def _read(self, request: CapabilityRequest, sandbox: SandboxSpec) -> CapabilityResult:
         relative = self._relative_path(self._required_string(request.parameters, "path"))
-        target = self._resolve_workspace_path(sandbox, relative, for_write=False)
-        data = target.read_bytes()
+        parent_fd: int | None = None
+        try:
+            parent_fd, leaf = self._open_parent_fd(sandbox, relative, create=False)
+            descriptor = os.open(leaf, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=parent_fd)
+        except OSError as error:
+            raise CapabilityDenied("workspace read target is not a safe regular path") from error
+        finally:
+            if parent_fd is not None:
+                os.close(parent_fd)
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            os.close(descriptor)
+            raise CapabilityDenied("workspace read target is not a regular file")
+        with os.fdopen(descriptor, "rb", closefd=True) as stream:
+            data = stream.read(self.command_limits.output_bytes + 1)
         if len(data) > self.command_limits.output_bytes:
             raise CapabilityDenied("read exceeds output limit")
         return CapabilityResult(request_id=request.request_id, status="ok", output=self._bounded_text(data))
 
-    def _resolve_workspace_path(self, sandbox: SandboxSpec, relative: Path, *, for_write: bool) -> Path:
+    def _open_parent_fd(self, sandbox: SandboxSpec, relative: Path, *, create: bool) -> tuple[int, str]:
+        """Open each parent component beneath an anchored workspace directory.
+
+        Directory FDs and ``O_NOFOLLOW`` remove the resolve-then-open TOCTOU
+        window: replacing a parent with a symlink after validation cannot move
+        the operation outside the already-open workspace root.
+        """
         root = Path(sandbox.workspace).resolve(strict=True)
-        candidate = root / relative
-        resolved = (candidate.parent.resolve(strict=False) / candidate.name) if for_write else candidate.resolve(strict=True)
-        if not resolved.is_relative_to(root):
-            raise CapabilityDenied("workspace path escapes attempt root")
-        return resolved
+        if not root.is_dir():
+            raise CapabilityDenied("workspace root is not a directory")
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW
+        parent_fd = os.open(root, flags)
+        try:
+            for component in relative.parts[:-1]:
+                try:
+                    child_fd = os.open(component, flags, dir_fd=parent_fd)
+                except FileNotFoundError:
+                    if not create:
+                        raise
+                    os.mkdir(component, mode=0o700, dir_fd=parent_fd)
+                    child_fd = os.open(component, flags, dir_fd=parent_fd)
+                os.close(parent_fd)
+                parent_fd = child_fd
+            return parent_fd, relative.parts[-1]
+        except BaseException:
+            os.close(parent_fd)
+            raise
 
     @staticmethod
     def _relative_path(value: str) -> Path:
         path = Path(value)
-        if path.is_absolute() or ".." in path.parts or value.startswith("~"):
+        if not path.parts or path.is_absolute() or ".." in path.parts or value.startswith("~"):
             raise CapabilityDenied("path must be relative and traversal-free")
         return path
 
