@@ -51,6 +51,23 @@ def test_metrics_snapshot_covers_cloud_and_workflow_records(tmp_path: Path) -> N
     assert "research_cloud_calls_total 2" in metrics.prometheus()
 
 
+def test_short_mixed_workload_soak_keeps_runs_and_metrics_consistent(tmp_path: Path) -> None:
+    responses: list[str] = []
+    for index in range(4):
+        responses.extend([
+            _proposal().replace("plan_nan_001", f"plan_soak_{index}").replace("fix_nan_001", f"fix_soak_{index}"),
+            _review(),
+        ])
+    sessions, orchestrator, _, _ = make_orchestrator(tmp_path, cloud_responses=responses)
+    run_ids = [orchestrator.create_run(workspace_id="ws_e2e", objective=f"short soak {index}", run_id=f"run_soak_{index}") for index in range(4)]
+    snapshots = [asyncio.run(orchestrator.run(run_id, max_steps=30)) for run_id in run_ids]
+    assert all(snapshot.state.value == "COMPLETED" for snapshot in snapshots)
+    metrics = collect_metrics(sessions)
+    assert metrics.cloud_calls == 8
+    assert metrics.cloud_statuses == {"COMPLETED": 8}
+    assert metrics.verifier_outcomes == {"pass": 4}
+
+
 def test_sqlite_and_artifact_backup_restore_validates_checksums(tmp_path: Path) -> None:
     sessions, orchestrator, _, _ = make_orchestrator(tmp_path, cloud_responses=[_proposal(), _review()])
     run_id = orchestrator.create_run(workspace_id="ws_e2e", objective="backup")
