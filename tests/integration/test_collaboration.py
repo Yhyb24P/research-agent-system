@@ -1,5 +1,7 @@
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+import asyncio
+from typing import cast
 
 import pytest
 from sqlalchemy.orm import Session, sessionmaker
@@ -8,6 +10,9 @@ from researchd.collaboration.contracts import AgentProfile, AgentRuntime, Discov
 from researchd.collaboration.registry import AgentRegistryService
 from researchd.collaboration.delegation import DelegationService
 from researchd.collaboration.invocation import InvocationService
+from researchd.collaboration.adapters import CloudLeadAgentAdapter, LocalExecutorAgentAdapter
+from researchd.agents.cloud_lead import CloudLeadAdapter
+from researchd.executor.worker import LocalExecutorWorker
 from researchd.collaboration.contracts import AgentInvocationRequest, AgentInvocationResult, Delegation
 from researchd.domain.enums import AgentAdapterKind, AgentTrustZone, DelegationPurpose, InvocationStatus, ResearchRunState
 from researchd.domain.ids import DelegationId, InvocationId
@@ -104,3 +109,12 @@ def test_assignment_freezes_profile_and_invocation_is_structured(database: tuple
     with sessions() as session:
         row = session.get(AgentRuntimeRecord, "runtime_qwen")
         assert row is not None
+
+
+def test_canonical_adapters_expose_health_and_preserve_boundaries() -> None:
+    runtime = AgentRuntime(runtime_id=AgentRuntimeId("runtime_qwen"), agent_id=AgentId("agent_executor"), adapter_kind=AgentAdapterKind.HTTP, runtime_name="Qwen")
+    assert asyncio.run(CloudLeadAgentAdapter(cast(CloudLeadAdapter, None)).health(runtime)).healthy
+    adapter = LocalExecutorAgentAdapter(cast(LocalExecutorWorker, None))
+    request = AgentInvocationRequest(invocation_id=InvocationId("inv_invalid"), delegation_id=DelegationId("del_execute"), run_id="run_test", agent_id=AgentId("agent_executor"), runtime_id=AgentRuntimeId("runtime_qwen"), purpose=DelegationPurpose.EXECUTE, input_sha256="b" * 64)
+    result = asyncio.run(adapter.invoke(request))
+    assert result.status == InvocationStatus.FAILED and result.reason_code == "GRANTED_WORK_ORDER_REQUIRED"

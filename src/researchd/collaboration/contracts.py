@@ -67,6 +67,7 @@ class AgentInvocationRequest(DomainModel):
     runtime_id: AgentRuntimeId
     purpose: DelegationPurpose
     input_sha256: str
+    payload: object | None = None
 
 
 class AgentInvocationResult(DomainModel):
@@ -75,3 +76,8 @@ class AgentInvocationResult(DomainModel):
     output_type: str | None = None
     output: dict[str, object] | None = None
     reason_code: str | None = None
+
+
+class AgentHealth(DomainModel):
+    healthy: bool
+    reason: str | None = None
