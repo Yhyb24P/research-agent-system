@@ -4,3 +4,9 @@
 __pycache__/
 *.py[cod]
 release-manifest.json
+# Runtime state and SQLite sidecars must never enter the release baseline.
+*.db
+*.db-wal
+*.db-shm
+backup/
+backups/
