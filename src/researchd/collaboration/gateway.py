@@ -5,6 +5,7 @@ from researchd.collaboration.contracts import AgentInvocationRequest, AgentInvoc
 from researchd.collaboration.delegation import DelegationService
 from researchd.collaboration.invocation import InvocationService
 from researchd.collaboration.selector import AgentSelector
+from researchd.collaboration.runtime import AgentAdapter, AgentAdapterCatalog
 from researchd.agents.cloud_lead import CloudLeadResult
 from researchd.agents.schemas import PlanProposal
 from researchd.domain.review import ReviewDecision
@@ -22,12 +23,13 @@ class CollaborationGateway:
     def __init__(self, cloud: CloudLeadAgentAdapter, executor: LocalExecutorAgentAdapter, *,
                  delegations: DelegationService | None = None, invocations: InvocationService | None = None,
                  agent_id: AgentId | None = None, runtime_id: AgentRuntimeId | None = None,
-                 selector: AgentSelector | None = None) -> None:
+                 selector: AgentSelector | None = None, catalog: AgentAdapterCatalog | None = None) -> None:
         self.cloud = cloud
         self.executor = executor
         self.delegations, self.invocations = delegations, invocations
         self.agent_id, self.runtime_id = agent_id, runtime_id
         self.selector = selector
+        self.catalog = catalog
 
     @property
     def tracking_enabled(self) -> bool:
@@ -77,10 +79,26 @@ class CollaborationGateway:
             assert self.invocations is not None
             self.invocations.complete(AgentInvocationResult(invocation_id=invocation_id, status=InvocationStatus.SUCCEEDED if success else InvocationStatus.FAILED, output_type=output_type, output=output, reason_code=reason))
 
+    def _tracked_adapter(self, tracking: tuple[DelegationId, InvocationId] | None) -> AgentAdapter | None:
+        if tracking is None or self.catalog is None or self.invocations is None:
+            return None
+        with self.invocations.sessions() as session:
+            row = session.get(AgentInvocationRecord, str(tracking[1]))
+        if row is None:
+            raise ValueError("tracked invocation disappeared")
+        _, adapter = self.catalog.resolve(row.runtime_id)
+        return adapter
+
     async def plan(self, selection: CloudContextSelection) -> CloudLeadResult[PlanProposal]:
         tracking = self._start(selection.run_id, DelegationPurpose.PLAN, required_roles=("planner",))
         try:
-            result = await self.cloud.plan(selection)
+            adapter = self._tracked_adapter(tracking)
+            if adapter is None:
+                result = await self.cloud.plan(selection)
+            elif isinstance(adapter, CloudLeadAgentAdapter):
+                result = await adapter.plan(selection)
+            else:
+                raise ValueError("assigned runtime adapter does not support PLAN")
         except Exception as error:
             self._finish(tracking[1] if tracking else None, success=False, reason=type(error).__name__)
             raise
@@ -90,7 +108,13 @@ class CollaborationGateway:
     async def review(self, selection: CloudContextSelection) -> CloudLeadResult[ReviewDecision]:
         tracking = self._start(selection.run_id, DelegationPurpose.REVIEW, work_order_id=selection.work_order_id, required_roles=("reviewer",))
         try:
-            result = await self.cloud.review(selection)
+            adapter = self._tracked_adapter(tracking)
+            if adapter is None:
+                result = await self.cloud.review(selection)
+            elif isinstance(adapter, CloudLeadAgentAdapter):
+                result = await adapter.review(selection)
+            else:
+                raise ValueError("assigned runtime adapter does not support REVIEW")
         except Exception as error:
             self._finish(tracking[1] if tracking else None, success=False, reason=type(error).__name__)
             raise
@@ -100,7 +124,13 @@ class CollaborationGateway:
     async def execute(self, work_order: WorkOrderRecord, attempt: AttemptRecord) -> ExecutorResult:
         tracking = self._start(work_order.run_id, DelegationPurpose.EXECUTE, work_order_id=work_order.work_order_id, attempt_id=attempt.attempt_id, required_roles=("executor",), existing_delegation_id=attempt.delegation_id)
         try:
-            result = await self.executor.execute(work_order, attempt)
+            adapter = self._tracked_adapter(tracking)
+            if adapter is None:
+                result = await self.executor.execute(work_order, attempt)
+            elif isinstance(adapter, LocalExecutorAgentAdapter):
+                result = await adapter.execute(work_order, attempt)
+            else:
+                raise ValueError("assigned runtime adapter does not support EXECUTE")
         except Exception as error:
             self._finish(tracking[1] if tracking else None, success=False, reason=type(error).__name__)
             raise
