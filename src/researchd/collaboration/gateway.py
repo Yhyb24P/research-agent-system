@@ -122,6 +122,12 @@ class CollaborationGateway:
             row = session.scalar(select(DelegationRecord.assigned_agent_id).where(DelegationRecord.work_order_id == work_order_id).order_by(DelegationRecord.created_at.desc()).limit(1))
             return row
 
+    def assigned_agent_for_run(self, run_id: str, purpose: DelegationPurpose) -> str | None:
+        if self.delegations is None:
+            return None
+        with self.delegations.sessions() as session:
+            return session.scalar(select(DelegationRecord.assigned_agent_id).where(DelegationRecord.run_id == run_id, DelegationRecord.purpose == purpose.value).order_by(DelegationRecord.created_at.desc()).limit(1))
+
     def reconcile_attempt(self, attempt_id: str, result: ExecutorResult) -> None:
         """Close a durable execution Invocation during controller recovery."""
         if self.invocations is None:

@@ -14,7 +14,7 @@ from researchd.collaboration.gateway import CollaborationGateway
 from researchd.agents.schemas import PlanProposal, WorkOrderProposal
 from researchd.context.builder import CloudContextSelection
 from researchd.domain.enums import (
-    AttemptState, Capability, PolicyOutcome, ResearchRunState, ReviewDecisionKind,
+    AttemptState, Capability, DelegationPurpose, PolicyOutcome, ResearchRunState, ReviewDecisionKind,
     VerificationOverall, WorkOrderState,
 )
 from researchd.domain.review import ReviewDecision
@@ -93,6 +93,7 @@ class ResearchOrchestrator:
             agent_id = self.collaboration.assigned_agent_for(work_order_id)
             if agent_id is not None:
                 return "agent", agent_id
+            raise OrchestrationError(f"no assigned Agent for WorkOrder {work_order_id}")
         return fallback_type, fallback_id
 
     def create_run(self, *, workspace_id: str, objective: str, run_id: str | None = None) -> str:
@@ -171,6 +172,12 @@ class ResearchOrchestrator:
 
     def _persist_plan(self, run_id: str, result: CloudLeadResult[PlanProposal]) -> None:
         now = utc_now()
+        actor_type, actor_id = "controller", "orchestrator"
+        if self.collaboration is not None:
+            assigned = self.collaboration.assigned_agent_for_run(run_id, DelegationPurpose.PLAN)
+            if assigned is None:
+                raise OrchestrationError(f"no assigned planning Agent for run {run_id}")
+            actor_type, actor_id = "agent", assigned
         with self.sessions.begin() as session:
             session.add(PlanRecord(
                 plan_id=result.output.proposal_id, run_id=run_id,
@@ -181,8 +188,8 @@ class ResearchOrchestrator:
                 self._add_work_order(session, run_id, proposal, parent=None, reason=None)
             session.add(AuditEventRecord(
                 event_id=f"evt_{uuid4().hex}", event_type="PLAN_CREATED", run_id=run_id,
-                entity_type="plan", entity_id=result.output.proposal_id, actor_type="controller",
-                actor_id="orchestrator", timestamp=now, correlation_id=run_id,
+                entity_type="plan", entity_id=result.output.proposal_id, actor_type=actor_type,
+                actor_id=actor_id, timestamp=now, correlation_id=run_id,
                 causation_id=result.interaction_id, metadata_json={"work_order_count": len(result.output.proposed_work_orders)},
             ))
 
