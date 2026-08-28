@@ -19,6 +19,10 @@ jobs:
       - uses: astral-sh/setup-uv@v5
       - name: Install from committed lock
         run: uv sync --frozen
+      - name: Generate lock-derived SBOM
+        run: |
+          uv run python scripts/lock_sbom.py --output /tmp/dq00-python-sbom.json
+          uv run python -c 'import json; p=json.load(open("/tmp/dq00-python-sbom.json")); assert p["bomFormat"] == "CycloneDX" and p["components"]'
       - name: Test
         run: uv run pytest -q
       - name: Type check
