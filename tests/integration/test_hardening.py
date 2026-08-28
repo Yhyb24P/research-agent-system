@@ -9,6 +9,8 @@ from typing import Any
 
 import pytest
 import httpx
+from alembic import command
+from alembic.config import Config
 from sqlalchemy import select
 
 from researchd.backup import BackupError, backup_snapshot, check_restored_snapshot, restore_snapshot
@@ -37,6 +39,8 @@ from researchd.storage.models import ResearchRunRecord
 from researchd.testing.faults import FaultInjector, InjectedFault
 from test_orchestrator import _proposal, _review, make_orchestrator
 from test_executor import FixingFakeLocalModel, fixture_repository, limits, sandbox_for
+
+ROOT = Path(__file__).parents[2]
 
 
 def test_metrics_snapshot_covers_cloud_and_workflow_records(tmp_path: Path) -> None:
@@ -119,6 +123,26 @@ def test_sqlite_and_artifact_backup_restore_validates_checksums(tmp_path: Path) 
     (tampered / "manifest.json").write_text(json.dumps(tampered_manifest, sort_keys=True) + "\n")
     with pytest.raises(BackupError, match="reference mismatch"):
         restore_snapshot(tampered, tmp_path / "tampered.db", tmp_path / "tampered-artifacts")
+
+
+def test_legacy_backup_restore_then_upgrade_to_head(tmp_path: Path) -> None:
+    legacy_db = tmp_path / "legacy.db"
+    legacy_artifacts = tmp_path / "legacy-artifacts"
+    legacy_artifacts.mkdir()
+    config = Config(str(ROOT / "alembic.ini"))
+    config.set_main_option("sqlalchemy.url", f"sqlite:///{legacy_db}")
+    command.upgrade(config, "0008")
+    snapshot = backup_snapshot(legacy_db, legacy_artifacts, tmp_path / "legacy-backup")
+    assert snapshot.schema_revision == "0008"
+    restored_db = tmp_path / "restored-legacy.db"
+    restored_artifacts = tmp_path / "restored-legacy-artifacts"
+    restore_snapshot(tmp_path / "legacy-backup", restored_db, restored_artifacts)
+    restored_config = Config(str(ROOT / "alembic.ini"))
+    restored_config.set_main_option("sqlalchemy.url", f"sqlite:///{restored_db}")
+    command.upgrade(restored_config, "head")
+    with sqlite3.connect(restored_db) as connection:
+        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == ("0012",)
+    assert check_restored_snapshot(restored_db, restored_artifacts).healthy
 
 
 def test_storage_metrics_report_cas_and_backup_freshness(tmp_path: Path) -> None:
