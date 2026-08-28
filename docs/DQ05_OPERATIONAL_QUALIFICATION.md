@@ -16,6 +16,23 @@ output. A production soak must still define acceptable growth and maximum
 backup age thresholds for the target environment; collection alone is not a
 freshness policy.
 
+For repeatable evidence capture, run the probe beside the agreed workload:
+
+```bash
+.venv/bin/python scripts/dq05_storage_probe.py \
+  --database /var/lib/researchd/orchestrator.db \
+  --artifacts /var/lib/researchd/artifacts \
+  --backup /var/lib/researchd/backups/latest \
+  --samples 60 --interval-seconds 60 \
+  --max-backup-age-seconds 3600 \
+  --output dq05-storage-evidence.json
+```
+
+The output records the RC commit, host Python/OS, every sample, configured
+thresholds, and explicit pass/fail violations. It does not certify workload
+correctness; pair it with the run/audit/cloud metrics and fault-injection
+evidence required below.
+
 ## Production qualification still required
 
 Run a target-environment workload with mixed success/failure, approvals,
