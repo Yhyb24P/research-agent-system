@@ -40,6 +40,9 @@ CAS bytes, or runtime database contents.
   GPU drivers, cloud credentials, or production secrets.
 - Manifest version 2 records the tags pointing at the captured commit; DQ06
   requires at least one immutable `v1.0.0-rc.*` tag.
+- The manifest also embeds a dependency inventory parsed from `uv.lock`,
+  including package versions, sources, and direct dependency names; this is a
+  lock-derived inventory, not a substitute for target-image SBOM attestation.
 
 ## Gate checklist
 

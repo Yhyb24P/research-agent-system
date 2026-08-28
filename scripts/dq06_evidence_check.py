@@ -50,6 +50,9 @@ def validate(
     checks.append({"name": "manifest_rc_tag_present", "passed": isinstance(tags, list) and any(isinstance(tag, str) and tag.startswith("v1.0.0-rc.") for tag in tags)})
     checks.append({"name": "manifest_worktree_clean", "passed": isinstance(source, dict) and source.get("working_tree") == "clean"})
     checks.append({"name": "schema_head_present", "passed": isinstance(manifest.get("schema"), dict) and bool(manifest["schema"].get("alembic_head"))})
+    dependencies = manifest.get("dependencies")
+    inventory = dependencies.get("uv_lock_inventory") if isinstance(dependencies, dict) else None
+    checks.append({"name": "lock_inventory_present", "passed": isinstance(inventory, dict) and isinstance(inventory.get("packages"), list) and bool(inventory["packages"])})
     if storage_evidence is not None:
         evidence = _load(storage_evidence)
         evidence_commit = evidence.get("release_commit")

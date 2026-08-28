@@ -17,6 +17,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tomllib
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -75,6 +76,29 @@ def package_versions() -> dict[str, str]:
     return result
 
 
+def lock_inventory() -> dict[str, Any]:
+    with (ROOT / "uv.lock").open("rb") as stream:
+        lock = tomllib.load(stream)
+    packages = []
+    for package in lock.get("package", []):
+        if not isinstance(package, dict) or not package.get("name") or not package.get("version"):
+            continue
+        packages.append({
+            "name": package["name"],
+            "version": package["version"],
+            "source": package.get("source", {}),
+            "dependencies": sorted(
+                item["name"] for item in package.get("dependencies", [])
+                if isinstance(item, dict) and item.get("name")
+            ),
+        })
+    return {
+        "requires_python": lock.get("requires-python"),
+        "package_count": len(packages),
+        "packages": sorted(packages, key=lambda item: (str(item["name"]), str(item["version"]))),
+    }
+
+
 def build_manifest(require_clean: bool) -> dict[str, Any]:
     status = run("git", "status", "--porcelain")
     if require_clean and status:
@@ -97,6 +121,7 @@ def build_manifest(require_clean: bool) -> dict[str, Any]:
         "dependencies": {
             "uv_lock_sha256": sha256(ROOT / "uv.lock"),
             "packages": package_versions(),
+            "uv_lock_inventory": lock_inventory(),
             "python": sys.version.split()[0],
         },
         "schema": {"alembic_head": schema_head()},
