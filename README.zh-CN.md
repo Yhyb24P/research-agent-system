@@ -11,7 +11,8 @@
 > V1 控制面已完成；部署资格验证仍在进行。
 
 这不是“已获得生产 GO”声明。生产发布仍需目标部署环境中的云服务、备份恢复和
-长时间 soak 证据，并通过 DQ06 Go/No-Go 审查。
+长时间 soak 证据，并通过 Go/No-Go 审查。资格报告和运行证据不提交到本 GitHub
+仓库。
 
 ## 当前推理拓扑
 
@@ -52,15 +53,5 @@ uv run alembic upgrade head
 # DQ01 主机预检
 .venv/bin/python scripts/dq01_preflight.py --strict --output dq01-preflight-evidence.json
 ```
-
-DQ00–DQ06 的详细要求、证据格式和当前 Go/No-Go 判断见：
-
-- [DQ00 发布基线](docs/DQ00_RELEASE_BASELINE.md)
-- [DQ01 沙箱资格](docs/DQ01_SANDBOX_QUALIFICATION.md)
-- [DQ02 GPU/推理资格](docs/DQ02_GPU_JOB_QUALIFICATION.md)
-- [DQ03 云服务资格](docs/DQ03_CLOUD_QUALIFICATION.md)
-- [DQ04 备份与灾备资格](docs/DQ04_BACKUP_DR_QUALIFICATION.md)
-- [DQ05 运行与 soak 资格](docs/DQ05_OPERATIONAL_QUALIFICATION.md)
-- [DQ06 生产 Go/No-Go](docs/DQ06_PRODUCTION_GO_NO_GO.md)
 
 英文说明见 [README.md](README.md)。

@@ -18,8 +18,8 @@ does not expose a public A2A/MCP endpoint, silently fall back from local to
 cloud models, or claim exactly-once scheduler semantics.
 
 Current status: **V1 control plane complete; deployment qualification pending**.
-RCs, DQ00–DQ06 evidence requirements, and the current Go/No-Go decision are in
-`docs/DQ00_RELEASE_BASELINE.md` through `docs/DQ06_PRODUCTION_GO_NO_GO.md`.
+RCs and qualification evidence are maintained outside the source repository;
+the deployment decision remains target-environment dependent.
 The control plane and agent process do not need GPU resources to run. The
 current deployment uses `aweswitch qw` to launch the Qwen agent against the
 remote workstation inference node; GPU and model weights belong to that remote
@@ -35,6 +35,5 @@ Run the full regression suite with:
 .venv/bin/mypy
 ```
 
-Task-specific reports and limitations are in `docs/TASK00_CHANGELOG.md`
-through `docs/TASK08_CHANGELOG.md`; operations and the bounded pilot are
-documented in `docs/OPERATIONS_RUNBOOK.md` and `docs/PILOT_REPORT.md`.
+Qualification reports and operational evidence are intentionally not committed
+to this GitHub repository.
