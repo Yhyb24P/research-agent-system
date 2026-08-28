@@ -26,23 +26,20 @@ CAS bytes, or runtime database contents.
 
 - Repository: `https://github.com/Yhyb24P/research-agent-system`
 - Qualification branch: `main`
-- Current commit: `96d7516a61ee37b2a8e6623e2db8214f1b81dbd0`
-- Functional baseline schema head: `0007`; the current DQ branch advances the
+- Qualification baseline commit: `125a2cc` (`v1.0.0-rc.17`)
+- Current schema head: `0008`; the DQ branch advances the
   schema only through explicitly reviewed qualification changes.
-- Initial functional baseline regression: 95 pytest tests passed; strict mypy
-  passed for 95 files. Current RC reruns the suite after each DQ hardening
-  change; the current count is recorded in the qualification report.
-- Functional baseline at `96d7516`: 140 files / 9215 lines. The RC adds only
-  DQ00/DQ01 governance tooling and documentation; the generated manifest is the
-  authoritative count for the tagged checkout.
+- Current RC regression: 107 pytest tests passed; strict mypy passed for 86
+  source files. The RC is tagged only after these checks pass.
+- The generated manifest is the authoritative file/line/dependency count for
+  the tagged checkout and must be retained with qualification evidence.
 - Dependency lock: `uv.lock` is committed; its SHA-256 must be captured by the
   generated manifest.
 
 ## Gate checklist
 
 - [x] Source is a Git repository and `main` is pushed to the public remote.
-- [ ] An immutable RC tag (for example `v1.0.0-rc.1`) is created after the
-      baseline commit and points to the exact tested commit.
+- [x] Immutable RC tag `v1.0.0-rc.17` points to the exact tested commit.
 - [ ] A generated `release-manifest.json` is retained with the DQ evidence.
 - [ ] Dependency/SBOM and target container image digests are recorded.
 - [ ] Bubblewrap binary version, path, permissions, and file capabilities are
