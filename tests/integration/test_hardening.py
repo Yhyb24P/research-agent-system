@@ -1,5 +1,8 @@
 import asyncio
+import hashlib
 import json
+import shutil
+import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -52,6 +55,10 @@ def test_sqlite_and_artifact_backup_restore_validates_checksums(tmp_path: Path) 
     sessions, orchestrator, _, _ = make_orchestrator(tmp_path, cloud_responses=[_proposal(), _review()])
     run_id = orchestrator.create_run(workspace_id="ws_e2e", objective="backup")
     asyncio.run(orchestrator.run(run_id, max_steps=30))
+    ArtifactService(ContentAddressedArtifactStore(tmp_path / "artifacts"), sessions).register(
+        b"referenced backup payload", mime_type="text/plain", artifact_type="fixture",
+        classification=DataClassification.PUBLIC, producer_type="test", producer_id="backup-test",
+    )
     orphan = tmp_path / "artifacts" / "sha256" / "ff" / ("f" * 64)
     orphan.parent.mkdir(parents=True)
     orphan.write_bytes(b"unreferenced CAS residue")
@@ -65,9 +72,34 @@ def test_sqlite_and_artifact_backup_restore_validates_checksums(tmp_path: Path) 
         restore_snapshot(backup_dir, restored_db, tmp_path / "other-artifacts")
     assert restored_db.is_file() and restored_artifacts.is_dir()
     # The restored DB remains readable without reconstructing state from model output.
-    import sqlite3
     with sqlite3.connect(restored_db) as connection:
         assert connection.execute("SELECT state FROM research_runs WHERE run_id = ?", (run_id,)).fetchone() == ("COMPLETED",)
+
+    missing = ArtifactService(ContentAddressedArtifactStore(tmp_path / "artifacts"), sessions).register(
+        b"missing backup payload", mime_type="text/plain", artifact_type="fixture",
+        classification=DataClassification.PUBLIC, producer_type="test", producer_id="backup-missing",
+    )
+    missing_path = tmp_path / "artifacts" / "sha256" / missing.sha256[:2] / missing.sha256
+    missing_path.unlink()
+    with pytest.raises(BackupError, match="missing or unsafe"):
+        backup_snapshot(tmp_path / "orchestrator.db", tmp_path / "artifacts", tmp_path / "missing-backup")
+
+    tampered = tmp_path / "tampered-backup"
+    shutil.copytree(backup_dir, tampered)
+    tampered_db = tampered / "research.db"
+    with sqlite3.connect(tampered_db) as connection:
+        artifact_id = connection.execute("SELECT artifact_id FROM artifacts LIMIT 1").fetchone()[0]
+        # Tamper only the copied evidence DB; production DB immutability stays
+        # enabled and is itself covered by the storage security tests.
+        connection.execute("DROP TRIGGER artifacts_metadata_immutable")
+        connection.execute("UPDATE artifacts SET artifact_id = ? WHERE artifact_id = ?", ("artifact://sha256/" + "0" * 64, artifact_id))
+        connection.commit()
+    tampered_manifest = json.loads((tampered / "manifest.json").read_text())
+    digest = hashlib.sha256(tampered_db.read_bytes()).hexdigest()
+    tampered_manifest["database_sha256"] = digest
+    (tampered / "manifest.json").write_text(json.dumps(tampered_manifest, sort_keys=True) + "\n")
+    with pytest.raises(BackupError, match="reference mismatch"):
+        restore_snapshot(tampered, tmp_path / "tampered.db", tmp_path / "tampered-artifacts")
 
 
 def test_fault_injector_is_one_shot_and_auditable() -> None:

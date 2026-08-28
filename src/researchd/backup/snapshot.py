@@ -5,6 +5,7 @@ import json
 import shutil
 import sqlite3
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -18,9 +19,17 @@ class BackupManifest:
     format_version: int
     database_sha256: str
     artifact_files: dict[str, str]
+    schema_revision: str | None = None
+    created_at_utc: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
-        return {"format_version": self.format_version, "database_sha256": self.database_sha256, "artifact_files": dict(self.artifact_files)}
+        return {
+            "format_version": self.format_version,
+            "database_sha256": self.database_sha256,
+            "artifact_files": dict(self.artifact_files),
+            "schema_revision": self.schema_revision,
+            "created_at_utc": self.created_at_utc,
+        }
 
 
 def backup_snapshot(database: Path, artifact_root: Path, destination: Path) -> BackupManifest:
@@ -54,7 +63,11 @@ def backup_snapshot(database: Path, artifact_root: Path, destination: Path) -> B
         str(path.relative_to(destination_artifacts)): _sha256(path)
         for path in sorted(destination_artifacts.rglob("*")) if path.is_file()
     }
-    manifest = BackupManifest(1, _sha256(database_copy), files)
+    manifest = BackupManifest(
+        2, _sha256(database_copy), files,
+        schema_revision=_schema_revision(database_copy),
+        created_at_utc=datetime.now(UTC).isoformat(),
+    )
     (destination / "manifest.json").write_text(json.dumps(manifest.as_dict(), sort_keys=True, indent=2) + "\n")
     return manifest
 
@@ -68,11 +81,17 @@ def restore_snapshot(snapshot: Path, database_destination: Path, artifact_destin
         raise BackupError("snapshot is incomplete")
     try:
         raw = json.loads(manifest_path.read_text())
-        manifest = BackupManifest(int(raw["format_version"]), str(raw["database_sha256"]), dict(raw["artifact_files"]))
+        manifest = BackupManifest(
+            int(raw["format_version"]), str(raw["database_sha256"]), dict(raw["artifact_files"]),
+            str(raw["schema_revision"]) if raw.get("schema_revision") is not None else None,
+            str(raw["created_at_utc"]) if raw.get("created_at_utc") is not None else None,
+        )
     except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as error:
         raise BackupError("snapshot manifest is invalid") from error
-    if manifest.format_version != 1 or _sha256(database_source) != manifest.database_sha256:
+    if manifest.format_version not in {1, 2} or _sha256(database_source) != manifest.database_sha256:
         raise BackupError("snapshot database checksum mismatch")
+    if manifest.format_version == 2 and manifest.schema_revision != _schema_revision(database_source):
+        raise BackupError("snapshot schema revision mismatch")
     actual_files = {str(path.relative_to(artifacts_source)): _sha256(path) for path in sorted(artifacts_source.rglob("*")) if path.is_file()}
     if actual_files != manifest.artifact_files:
         raise BackupError("snapshot artifact checksum mismatch")
@@ -116,3 +135,14 @@ def _referenced_artifact_digests(database: Path) -> set[str]:
 
 def _referenced_artifact_files(database: Path) -> set[str]:
     return {f"sha256/{digest[:2]}/{digest}" for digest in _referenced_artifact_digests(database)}
+
+
+def _schema_revision(database: Path) -> str:
+    try:
+        with sqlite3.connect(str(database)) as connection:
+            row = connection.execute("SELECT version_num FROM alembic_version").fetchone()
+    except sqlite3.Error as error:
+        raise BackupError("snapshot schema version is unreadable") from error
+    if row is None or not isinstance(row[0], str) or not row[0]:
+        raise BackupError("snapshot schema version is missing")
+    return row[0]

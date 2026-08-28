@@ -2,6 +2,10 @@
 
 ## Current contract
 
+GPU is an optional deployment capability, not a prerequisite for the current
+CPU/local-model control-plane workflow. DQ02 should be activated only when a
+real GPU scheduler or container deployment is selected.
+
 The V1 controller now treats GPU requests as an explicit resource contract:
 
 - a GPU job requires a `GpuAdmissionController`;

@@ -21,6 +21,10 @@ or a clean-environment production restore certificate.
 ## Implemented evidence
 
 - A regression test creates an unreferenced CAS file and verifies it is omitted.
+- A regression test deletes a referenced CAS file and verifies backup refuses
+  to create an incomplete snapshot.
+- A copied database with a tampered artifact reference is rejected during
+  restore even after its database checksum is rewritten.
 - Existing corruption/tamper and restore tests remain active.
 - The restore path refuses a manifest whose files do not match the database's
   referenced artifact set.
