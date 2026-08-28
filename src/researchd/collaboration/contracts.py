@@ -2,7 +2,7 @@ from pydantic import Field, PositiveInt
 
 from researchd.domain.base import DomainModel
 from researchd.domain.enums import AgentAdapterKind, AgentTrustZone, DelegationPurpose, DelegationState, InvocationStatus
-from researchd.domain.ids import AgentId, AgentRuntimeId, DelegationId, InvocationId
+from researchd.domain.ids import AgentId, AgentRuntimeId, DelegationId, InvocationId, MessageId
 
 
 class AgentProfile(DomainModel):
@@ -76,6 +76,23 @@ class AgentInvocationResult(DomainModel):
     output_type: str | None = None
     output: dict[str, object] | None = None
     reason_code: str | None = None
+
+
+class HumanDirective(DomainModel):
+    directive_id: MessageId
+    text: str = Field(min_length=1, max_length=16_384)
+    requested_action: str | None = None
+
+
+class CollaborationMessage(DomainModel):
+    message_id: MessageId
+    run_id: str
+    sender_actor_type: str = Field(min_length=1)
+    sender_actor_id: str = Field(min_length=1)
+    recipient_agent_id: AgentId | None = None
+    purpose: str = Field(min_length=1)
+    body: str = Field(min_length=1, max_length=32_768)
+    metadata: dict[str, str] = Field(default_factory=dict)
 
 
 class AgentHealth(DomainModel):

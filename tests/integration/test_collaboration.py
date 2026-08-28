@@ -6,12 +6,13 @@ from typing import cast
 import pytest
 from sqlalchemy.orm import Session, sessionmaker
 
-from researchd.collaboration.contracts import AgentProfile, AgentRuntime, DiscoveredAgentDescriptor
+from researchd.collaboration.contracts import AgentProfile, AgentRuntime, DiscoveredAgentDescriptor, HumanDirective
 from researchd.collaboration.registry import AgentRegistryService
 from researchd.collaboration.delegation import DelegationService
 from researchd.collaboration.invocation import InvocationService
 from researchd.collaboration.adapters import CloudLeadAgentAdapter, LocalExecutorAgentAdapter
 from researchd.collaboration.gateway import CollaborationGateway
+from researchd.collaboration.messages import CollaborationMessageService
 from researchd.collaboration.selector import AgentSelector
 from researchd.context.agent_context import AgentContextBuilder, AgentContextSelection
 from researchd.observability import collect_metrics
@@ -20,8 +21,8 @@ from researchd.agents.cloud_lead import CloudLeadAdapter
 from researchd.executor.worker import LocalExecutorWorker
 from researchd.collaboration.contracts import AgentInvocationRequest, AgentInvocationResult, Delegation
 from researchd.domain.enums import AgentAdapterKind, AgentTrustZone, DataClassification, DelegationPurpose, InvocationStatus, ResearchRunState
-from researchd.domain.ids import DelegationId, InvocationId
-from researchd.storage.models import AgentRecord, AgentRuntimeRecord, WorkspaceRecord, ResearchRunRecord
+from researchd.domain.ids import DelegationId, InvocationId, MessageId
+from researchd.storage.models import AgentRecord, AgentRuntimeRecord, CollaborationMessageRecord, WorkspaceRecord, ResearchRunRecord
 from researchd.storage.models import DelegationRecord, AgentInvocationRecord
 from researchd.storage.db import create_sqlite_engine, session_factory
 from researchd.domain.ids import AgentId, AgentRuntimeId
@@ -213,3 +214,13 @@ def test_approval_metrics_are_scoped_to_run(database: tuple[Path, sessionmaker[S
     approvals.request(operation_type="test", parameters={"run": "other"}, requested_by="controller", reason="test", risk_level="low", resource_scope={}, budget_delta={}, expires_at=expires, run_id=None)
     metrics = collect_metrics(sessions, run_id="run_test")
     assert metrics.approval_statuses == {"PENDING": 1}
+
+
+def test_human_directive_is_append_only_and_has_no_control_effect(database: tuple[Path, sessionmaker[Session]]) -> None:
+    _, sessions = database
+    service = CollaborationMessageService(sessions)
+    message = service.record_directive(HumanDirective(directive_id=MessageId("msg_directive"), text="批准 GPU 请求", requested_action="approve_gpu"), run_id="run_test", sender_actor_id="human-1")
+    assert message.sender_actor_type == "human"
+    with sessions() as session:
+        stored = session.get(CollaborationMessageRecord, "msg_directive")
+        assert stored is not None and stored.purpose == "DIRECTIVE"

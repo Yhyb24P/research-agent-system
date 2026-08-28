@@ -6,5 +6,6 @@ from researchd.collaboration.invocation import InvocationService
 from researchd.collaboration.adapters import CloudLeadAgentAdapter, LocalExecutorAgentAdapter
 from researchd.collaboration.gateway import CollaborationGateway
 from researchd.collaboration.selector import AgentSelector, AgentSelection
+from researchd.collaboration.messages import CollaborationMessageService
 
-__all__ = ["AgentRegistryService", "DelegationService", "InvocationService", "CloudLeadAgentAdapter", "LocalExecutorAgentAdapter", "CollaborationGateway", "AgentSelector", "AgentSelection"]
+__all__ = ["AgentRegistryService", "DelegationService", "InvocationService", "CloudLeadAgentAdapter", "LocalExecutorAgentAdapter", "CollaborationGateway", "AgentSelector", "AgentSelection", "CollaborationMessageService"]

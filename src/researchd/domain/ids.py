@@ -68,3 +68,7 @@ class DelegationId(_EntityId):
 
 class InvocationId(_EntityId):
     pattern = r"^inv_[A-Za-z0-9][A-Za-z0-9_-]*$"
+
+
+class MessageId(_EntityId):
+    pattern = r"^msg_[A-Za-z0-9][A-Za-z0-9_-]*$"
