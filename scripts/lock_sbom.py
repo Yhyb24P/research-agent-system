@@ -20,14 +20,18 @@ def build(lock_path: Path) -> dict[str, Any]:
             "version": package["version"],
             "purl": f"pkg:pypi/{package['name']}@{package['version']}",
         }
+        hashes: set[str] = set()
+        sdist = package.get("sdist")
+        if isinstance(sdist, dict) and isinstance(sdist.get("hash"), str):
+            hashes.add(sdist["hash"])
         wheels = package.get("wheels", [])
         if isinstance(wheels, list):
-            hashes = sorted(
+            hashes.update(
                 item["hash"] for item in wheels
                 if isinstance(item, dict) and isinstance(item.get("hash"), str)
             )
-            if hashes:
-                component["hashes"] = [{"alg": "SHA-256", "content": value.removeprefix("sha256:")} for value in hashes]
+        if hashes:
+            component["hashes"] = [{"alg": "SHA-256", "content": value.removeprefix("sha256:")} for value in sorted(hashes)]
         components.append(component)
     return {
         "bomFormat": "CycloneDX",
