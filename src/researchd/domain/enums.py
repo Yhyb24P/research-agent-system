@@ -121,3 +121,17 @@ class PolicyOutcome(StrEnum):
     ALLOW = "ALLOW"
     DENY = "DENY"
     APPROVAL_REQUIRED = "APPROVAL_REQUIRED"
+
+
+class AgentTrustZone(StrEnum):
+    LOCAL_PRIVATE = "LOCAL_PRIVATE"
+    REMOTE_PRIVATE = "REMOTE_PRIVATE"
+    EXTERNAL_CLOUD = "EXTERNAL_CLOUD"
+    EXTERNAL_UNTRUSTED = "EXTERNAL_UNTRUSTED"
+
+
+class AgentAdapterKind(StrEnum):
+    INTERNAL = "INTERNAL"
+    PROCESS = "PROCESS"
+    HTTP = "HTTP"
+    A2A = "A2A"

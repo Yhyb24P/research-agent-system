@@ -52,3 +52,11 @@ class ClaimId(_EntityId):
 
 class VerificationId(_EntityId):
     pattern = r"^ver_[A-Za-z0-9][A-Za-z0-9_-]*$"
+
+
+class AgentId(_EntityId):
+    pattern = r"^agent_[A-Za-z0-9][A-Za-z0-9_-]*$"
+
+
+class AgentRuntimeId(_EntityId):
+    pattern = r"^runtime_[A-Za-z0-9][A-Za-z0-9_-]*$"

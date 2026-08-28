@@ -106,6 +106,39 @@ class GpuLeaseRecord(Base):
     released_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
 
 
+class AgentRecord(Base, VersionedTimestamps):
+    __tablename__ = "agents"
+    __table_args__ = (Index("ix_agents_enabled", "enabled"),)
+    agent_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    display_name: Mapped[str] = mapped_column(String(256), nullable=False)
+    roles_json: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    skills_json: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    trust_zone: Mapped[str] = mapped_column(String(32), nullable=False)
+    constraints_json: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    labels_json: Mapped[dict[str, str]] = mapped_column(JSON, nullable=False, default=dict)
+    max_parallel_delegations: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    enabled: Mapped[bool] = mapped_column(nullable=False, default=True)
+    profile_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+
+
+class AgentRuntimeRecord(Base, VersionedTimestamps):
+    __tablename__ = "agent_runtimes"
+    __table_args__ = (Index("ix_agent_runtimes_agent", "agent_id"), Index("ix_agent_runtimes_lease", "lease_expires_at"))
+    runtime_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    agent_id: Mapped[str] = mapped_column(ForeignKey("agents.agent_id"), nullable=False)
+    adapter_kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    runtime_name: Mapped[str] = mapped_column(String(256), nullable=False)
+    endpoint_ref: Mapped[str | None] = mapped_column(String(512))
+    framework: Mapped[str | None] = mapped_column(String(128))
+    model_provider: Mapped[str | None] = mapped_column(String(128))
+    model_name: Mapped[str | None] = mapped_column(String(256))
+    protocols_json: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    metadata_json: Mapped[dict[str, str]] = mapped_column("metadata", JSON, nullable=False, default=dict)
+    enabled: Mapped[bool] = mapped_column(nullable=False, default=True)
+    last_heartbeat_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    lease_expires_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+
+
 class ArtifactRecord(Base):
     __tablename__ = "artifacts"
     __table_args__ = (
