@@ -1,5 +1,7 @@
 # Research Agent System
 
+[中文版 / Chinese](README.zh-CN.md)
+
 This repository implements the trusted local control plane described by the
 Cloud Research Lead + Local Research Executor handoff pack.
 
