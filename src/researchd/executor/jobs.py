@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from researchd.domain.enums import JobState, NetworkMode
 from researchd.executor.contracts import JobHandle, JobSpec
+from researchd.executor.gpu import GpuAdmissionController, GpuAdmissionError
 from researchd.storage.models import AttemptRecord, AuditEventRecord, JobRecord, WorkOrderRecord
 from researchd.storage.repositories import JobRepository
 
@@ -149,9 +150,10 @@ class LocalDurableJobBackend:
 
 
 class JobManager:
-    def __init__(self, sessions: sessionmaker[Session], backend: JobBackend) -> None:
+    def __init__(self, sessions: sessionmaker[Session], backend: JobBackend, gpu_admission: GpuAdmissionController | None = None) -> None:
         self.sessions = sessions
         self.backend = backend
+        self.gpu_admission = gpu_admission
 
     def submit(self, spec: JobSpec) -> JobRecord:
         now = datetime.now(UTC)
@@ -170,7 +172,18 @@ class JobManager:
                 if existing is None:
                     raise
                 return existing
-        handle = self.backend.submit(spec)
+        if spec.resources.gpu_count and self.gpu_admission is None:
+            self._mark_failed(job_id, "GPU_ADMISSION_REQUIRED")
+            raise GpuAdmissionError("GPU admission controller is required for GPU jobs")
+        try:
+            if self.gpu_admission is not None:
+                self.gpu_admission.acquire(job_id, spec.resources.gpu_count)
+            handle = self.backend.submit(spec)
+        except Exception:
+            if self.gpu_admission is not None:
+                self.gpu_admission.release(job_id)
+            self._mark_failed(job_id, "GPU_OR_BACKEND_SUBMIT_FAILED")
+            raise
         with self.sessions.begin() as session:
             record = session.get(JobRecord, job_id)
             assert record is not None
@@ -186,6 +199,7 @@ class JobManager:
         with self.sessions() as session:
             identifiers = [record.job_id for record in JobRepository(session).active()]
         for job_id in identifiers:
+            release = False
             with self.sessions.begin() as session:
                 record = session.get(JobRecord, job_id)
                 assert record is not None
@@ -193,10 +207,13 @@ class JobManager:
                 record.state = JobState.LOST.value if handle is None else handle.state
                 if handle is not None:
                     record.native_handle = handle.native_handle
+                release = record.state in {JobState.SUCCEEDED.value, JobState.FAILED.value, JobState.CANCELLED.value, JobState.LOST.value}
                 record.version += 1
                 record.updated_at = datetime.now(UTC)
                 self._append_event(session, record.attempt_id, job_id, "JOB_STATUS_CHANGED", {"state": record.state})
                 reconciled.append(record)
+            if release and self.gpu_admission is not None:
+                self.gpu_admission.release(job_id)
         return reconciled
 
     def cancel(self, job_id: str) -> JobRecord:
@@ -210,6 +227,8 @@ class JobManager:
             handle_value = record.native_handle
             self._append_event(session, record.attempt_id, job_id, "JOB_CANCEL_REQUESTED", {})
         handle = self.backend.cancel(handle_value)
+        if self.gpu_admission is not None and handle.state in {JobState.CANCELLED.value, JobState.FAILED.value, JobState.LOST.value}:
+            self.gpu_admission.release(job_id)
         with self.sessions.begin() as session:
             record = session.get(JobRecord, job_id)
             assert record is not None
@@ -218,6 +237,16 @@ class JobManager:
             record.updated_at = datetime.now(UTC)
             self._append_event(session, record.attempt_id, job_id, "JOB_STATUS_CHANGED", {"state": record.state})
             return record
+
+    def _mark_failed(self, job_id: str, reason: str) -> None:
+        with self.sessions.begin() as session:
+            record = session.get(JobRecord, job_id)
+            if record is None:
+                return
+            record.state = JobState.FAILED.value
+            record.version += 1
+            record.updated_at = datetime.now(UTC)
+            self._append_event(session, record.attempt_id, job_id, "JOB_SUBMISSION_FAILED", {"reason": reason})
 
     @staticmethod
     def _append_event(session: Session, attempt_id: str, job_id: str, event_type: str, metadata: dict[str, str]) -> None:

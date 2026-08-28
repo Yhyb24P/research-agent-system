@@ -27,7 +27,8 @@ CAS bytes, or runtime database contents.
 - Repository: `https://github.com/Yhyb24P/research-agent-system`
 - Qualification branch: `main`
 - Current commit: `96d7516a61ee37b2a8e6623e2db8214f1b81dbd0`
-- Schema head: `0007`
+- Functional baseline schema head: `0007`; the current DQ branch advances the
+  schema only through explicitly reviewed qualification changes.
 - Initial functional baseline regression: 95 pytest tests passed; strict mypy
   passed for 95 files. Current RC reruns the suite after each DQ hardening
   change; the current count is recorded in the qualification report.

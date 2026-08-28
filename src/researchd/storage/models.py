@@ -91,6 +91,21 @@ class JobRecord(Base, VersionedTimestamps):
     native_handle: Mapped[str | None] = mapped_column(String(256))
 
 
+class GpuLeaseRecord(Base):
+    __tablename__ = "gpu_leases"
+    __table_args__ = (
+        UniqueConstraint("job_id", "device_id", name="uq_gpu_leases_job_device"),
+        Index("ix_gpu_leases_device_state", "device_id", "state"),
+        Index("ix_gpu_leases_job_state", "job_id", "state"),
+    )
+    lease_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    job_id: Mapped[str] = mapped_column(ForeignKey("jobs.job_id"), nullable=False)
+    device_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    released_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+
+
 class ArtifactRecord(Base):
     __tablename__ = "artifacts"
     __table_args__ = (

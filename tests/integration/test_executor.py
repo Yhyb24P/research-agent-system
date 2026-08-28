@@ -28,6 +28,7 @@ from researchd.executor.contracts import (
     SandboxSpec,
 )
 from researchd.executor.jobs import JobManager, LocalDurableJobBackend
+from researchd.executor.gpu import GpuAdmissionController, GpuAdmissionError
 from researchd.executor.sandbox import BubblewrapBackend
 from researchd.executor.worker import LocalExecutorWorker
 from researchd.executor.worktree import WorktreeError, WorktreeManager
@@ -35,6 +36,7 @@ from researchd.models.base import LocalModelUnavailable
 from researchd.models.vllm import VLLMLocalModel
 from researchd.storage.db import create_sqlite_engine, session_factory
 from researchd.storage.models import AttemptRecord, AttemptWorktreeRecord, AuditEventRecord, JobRecord, ResearchRunRecord, WorkspaceRecord, WorkOrderRecord
+from researchd.storage.repositories import JobRepository
 
 ROOT = Path(__file__).parents[2]
 RUNTIME = ROOT / ".venv"
@@ -278,6 +280,42 @@ def test_duplicate_job_operation_and_restart_reconcile_running_job(tmp_path: Pat
     with sessions() as session:
         event_types = session.scalars(select(AuditEventRecord.event_type).where(AuditEventRecord.entity_id == first.job_id).order_by(AuditEventRecord.timestamp)).all()
         assert event_types == ["JOB_SUBMISSION_RESERVED", "JOB_SUBMITTED", "JOB_STATUS_CHANGED", "JOB_CANCEL_REQUESTED", "JOB_STATUS_CHANGED"]
+
+
+def test_gpu_admission_is_exclusive_durable_and_releasable(tmp_path: Path) -> None:
+    sessions = seed_database(tmp_path / "gpu-admission.db")
+    now = datetime.now(UTC)
+    with sessions.begin() as session:
+        session.add_all([
+            JobRecord(job_id="job_gpu_a", attempt_id="att_exec", operation_id="op-gpu-a", state=JobState.CREATED.value, backend="gpu", native_handle=None, version=1, created_at=now, updated_at=now),
+            JobRecord(job_id="job_gpu_b", attempt_id="att_exec", operation_id="op-gpu-b", state=JobState.CREATED.value, backend="gpu", native_handle=None, version=1, created_at=now, updated_at=now),
+        ])
+    admission = GpuAdmissionController(sessions, ("gpu0",))
+    first = admission.acquire("job_gpu_a", 1)
+    assert [item.device_id for item in first] == ["gpu0"]
+    with pytest.raises(GpuAdmissionError, match="insufficient"):
+        admission.acquire("job_gpu_b", 1)
+    # A newly constructed controller observes the persisted lease.
+    assert [item.job_id for item in GpuAdmissionController(sessions, ("gpu0",)).active()] == ["job_gpu_a"]
+    assert admission.release("job_gpu_a") == ("gpu0",)
+    second = admission.acquire("job_gpu_b", 1)
+    assert [item.device_id for item in second] == ["gpu0"]
+    assert admission.release("job_gpu_b") == ("gpu0",)
+
+
+def test_gpu_job_without_admission_controller_fails_closed(tmp_path: Path) -> None:
+    sessions = seed_database(tmp_path / "gpu-required.db")
+    backend = LocalDurableJobBackend(tmp_path / "job-backend", {"gpu_fixture": ("/usr/bin/true",)})
+    manager = JobManager(sessions, backend)
+    spec = JobSpec(
+        job_type="gpu_fixture", attempt_id="att_exec", resources=JobResources(gpu_count=1, max_gpu_seconds=10, memory_mb=256),
+        operation_id="op-gpu-required", workspace=str(tmp_path), network=NetworkMode.NONE,
+    )
+    with pytest.raises(GpuAdmissionError, match="required"):
+        manager.submit(spec)
+    with sessions() as session:
+        record = JobRepository(session).get_by_operation_id(spec.operation_id)
+        assert record is not None and record.state == JobState.FAILED.value
 
 
 def test_job_crash_window_reconciles_side_effect_without_native_handle(tmp_path: Path) -> None:

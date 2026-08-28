@@ -4,7 +4,7 @@ The V1 architecture and tests deliberately leave these deployment-dependent limi
 
 - SQLite is single-host/single-controller oriented; PostgreSQL and distributed queues are deferred.
 - The local durable Job backend offers operation-ID deduplication and reconciliation, not universal exactly-once execution.
-- GPU isolation/resource enforcement is not promised by the local backend and requires a separately validated scheduler/container deployment.
+- GPU isolation/resource enforcement is not promised by the local backend. V1 now provides durable logical admission leases, but hardware visibility and enforcement require a separately validated scheduler/container deployment.
 - Bubblewrap and filesystem checks are validated on the current Linux environment; mount races, WSL differences, and other kernels need target-environment testing.
 - Provider structured-output behavior and provider-side retention/account configuration require deployment-specific review.
 - Backup snapshots are checksum-verified but encryption, off-host retention, restore drills, and key management are operational responsibilities.
