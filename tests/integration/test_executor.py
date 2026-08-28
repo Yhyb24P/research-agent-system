@@ -304,6 +304,41 @@ def test_gpu_admission_is_exclusive_durable_and_releasable(tmp_path: Path) -> No
     assert admission.release("job_gpu_b") == ("gpu0",)
 
 
+def test_gpu_assignment_is_passed_to_backend_submission(tmp_path: Path) -> None:
+    sessions = seed_database(tmp_path / "gpu-binding.db")
+    captured: list[JobSpec] = []
+
+    class GpuBackend:
+        def submit(self, spec: JobSpec) -> JobHandle:
+            captured.append(spec)
+            return JobHandle(native_handle="native-gpu", state=JobState.SUBMITTED.value)
+
+        def find_by_operation(self, operation_id: str) -> JobHandle | None:
+            del operation_id
+            return None
+
+        def get(self, native_handle: str) -> JobHandle | None:
+            del native_handle
+            return None
+
+        def cancel(self, native_handle: str) -> JobHandle:
+            del native_handle
+            return JobHandle(native_handle="native-gpu", state=JobState.CANCELLED.value)
+
+    spec = JobSpec(
+        job_type="gpu_fixture", attempt_id="att_exec",
+        resources=JobResources(gpu_count=1, max_gpu_seconds=10, memory_mb=256),
+        operation_id="op-gpu-binding", workspace=str(tmp_path), network=NetworkMode.NONE,
+    )
+    manager = JobManager(sessions, GpuBackend(), GpuAdmissionController(sessions, ("gpu0",)))
+    record = manager.submit(spec)
+    assert record.state == JobState.SUBMITTED.value
+    assert len(captured) == 1
+    assert captured[0].gpu_device_ids == ("gpu0",)
+    assert spec.gpu_device_ids == ()
+    manager.cancel(record.job_id)
+
+
 def test_gpu_job_without_admission_controller_fails_closed(tmp_path: Path) -> None:
     sessions = seed_database(tmp_path / "gpu-required.db")
     backend = LocalDurableJobBackend(tmp_path / "job-backend", {"gpu_fixture": ("/usr/bin/true",)})

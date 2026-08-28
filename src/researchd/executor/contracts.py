@@ -113,6 +113,9 @@ class JobSpec(DomainModel):
     operation_id: str = Field(min_length=8)
     workspace: str
     inputs: tuple[str, ...] = ()
+    # Populated by the trusted GPU admission controller immediately before
+    # backend submission; callers must not use this as an authorization input.
+    gpu_device_ids: tuple[str, ...] = ()
 
 
 class JobHandle(DomainModel):

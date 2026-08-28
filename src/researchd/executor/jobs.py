@@ -176,9 +176,11 @@ class JobManager:
             self._mark_failed(job_id, "GPU_ADMISSION_REQUIRED")
             raise GpuAdmissionError("GPU admission controller is required for GPU jobs")
         try:
+            submitted_spec = spec
             if self.gpu_admission is not None:
-                self.gpu_admission.acquire(job_id, spec.resources.gpu_count)
-            handle = self.backend.submit(spec)
+                leases = self.gpu_admission.acquire(job_id, spec.resources.gpu_count)
+                submitted_spec = spec.model_copy(update={"gpu_device_ids": tuple(item.device_id for item in leases)})
+            handle = self.backend.submit(submitted_spec)
         except Exception:
             if self.gpu_admission is not None:
                 self.gpu_admission.release(job_id)

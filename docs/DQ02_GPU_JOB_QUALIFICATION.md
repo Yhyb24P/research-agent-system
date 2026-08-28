@@ -6,6 +6,8 @@ The V1 controller now treats GPU requests as an explicit resource contract:
 
 - a GPU job requires a `GpuAdmissionController`;
 - configured logical device IDs are leased exclusively and durably in SQLite;
+- the trusted controller injects the leased device IDs into the typed backend
+  submission contract;
 - a second job cannot acquire an occupied device;
 - releasing a terminal job makes the device available again;
 - a backend that cannot enforce the assigned device must fail closed.
