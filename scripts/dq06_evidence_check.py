@@ -46,6 +46,8 @@ def validate(
     checks: list[dict[str, Any]] = []
     commit = source.get("commit") if isinstance(source, dict) else None
     checks.append({"name": "manifest_source_commit", "passed": isinstance(commit, str) and bool(commit)})
+    tags = source.get("tags") if isinstance(source, dict) else None
+    checks.append({"name": "manifest_rc_tag_present", "passed": isinstance(tags, list) and any(isinstance(tag, str) and tag.startswith("v1.0.0-rc.") for tag in tags)})
     checks.append({"name": "manifest_worktree_clean", "passed": isinstance(source, dict) and source.get("working_tree") == "clean"})
     checks.append({"name": "schema_head_present", "passed": isinstance(manifest.get("schema"), dict) and bool(manifest["schema"].get("alembic_head"))})
     if storage_evidence is not None:

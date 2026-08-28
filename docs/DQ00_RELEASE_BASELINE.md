@@ -38,6 +38,8 @@ CAS bytes, or runtime database contents.
 - The repository quality workflow reruns pytest, mypy, Alembic migrations, and
   diff hygiene on pushes and pull requests. It intentionally does not require
   GPU drivers, cloud credentials, or production secrets.
+- Manifest version 2 records the tags pointing at the captured commit; DQ06
+  requires at least one immutable `v1.0.0-rc.*` tag.
 
 ## Gate checklist
 

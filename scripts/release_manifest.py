@@ -84,10 +84,11 @@ def build_manifest(require_clean: bool) -> dict[str, Any]:
     tracked = [item for item in tracked if item]
     line_count = sum((ROOT / item).read_text(errors="replace").count("\n") for item in tracked)
     return {
-        "manifest_version": 1,
+        "manifest_version": 2,
         "captured_at_utc": datetime.now(UTC).isoformat(),
         "source": {
             "commit": run("git", "rev-parse", "HEAD"),
+            "tags": [tag for tag in run("git", "tag", "--points-at", "HEAD").splitlines() if tag],
             "branch": run("git", "branch", "--show-current"),
             "working_tree": "clean" if not status else "dirty",
             "tracked_file_count": len(tracked),
