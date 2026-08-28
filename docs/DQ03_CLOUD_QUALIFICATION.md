@@ -19,7 +19,7 @@ transport version. The result is valid only for that configuration and date.
 | Timeout/unavailable | `WAITING_EXTERNAL` and no local/cloud fallback | provider-timeout test |
 | Response limit | Oversized response fails closed | Cloud Lead integration tests |
 | Token/cost budget | All attempts accumulate usage and cost | repair/accounting test |
-| 429/5xx/rate limit | Bounded provider-specific behavior and audit trail | **pending real staging** |
+| 429/5xx/rate limit | Bounded provider-specific behavior and audit trail | Retry classification/backoff unit evidence; **pending real staging** |
 | Retention/training | Account and endpoint policy recorded and reviewed | **pending deployment** |
 | Model drift | Repeated canary run preserves schema and semantic review gates | **pending staging** |
 
@@ -36,7 +36,8 @@ model, bundle hash, status, reason code, token count, and cost. Never use an
 unbounded `while failure` loop, and never retry by silently changing the
 context classification or provider.
 
-The current implementation already bounds total Cloud Lead requests and schema
-repair, records accounting, and fails closed on provider unavailability. A
-production retry/backoff policy remains a deployment decision until a real
-provider's 429/5xx behavior and cost limits are measured.
+The current implementation bounds total Cloud Lead requests and schema repair,
+classifies transient provider failures, applies capped exponential backoff (or
+the provider's bounded `Retry-After`), records accounting, and fails closed on
+unavailable providers. A production retry/backoff policy remains a deployment
+decision until a real provider's 429/5xx behavior and cost limits are measured.

@@ -1,3 +1,4 @@
+import asyncio
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Generic, TypeVar
@@ -41,12 +42,17 @@ class CloudLeadAdapter:
     def __init__(
         self, model: CloudModel, sessions: sessionmaker[Session], context_builder: ContextBuilder, *,
         budget: CloudCallBudget, pricing: CloudPricing,
+        retry_backoff_seconds: float = 0.25, max_retry_backoff_seconds: float = 8.0,
     ) -> None:
         self.model = model
         self.sessions = sessions
         self.context_builder = context_builder
         self.budget = budget
         self.pricing = pricing
+        if retry_backoff_seconds < 0 or max_retry_backoff_seconds < retry_backoff_seconds:
+            raise ValueError("invalid cloud retry backoff bounds")
+        self.retry_backoff_seconds = retry_backoff_seconds
+        self.max_retry_backoff_seconds = max_retry_backoff_seconds
 
     async def propose_plan(self, selection: CloudContextSelection) -> CloudLeadResult[PlanProposal]:
         return await self._invoke(self._build(selection), PlanProposal, "PLAN")
@@ -107,6 +113,14 @@ class CloudLeadAdapter:
             try:
                 response = await self.model.complete(request)
             except (CloudProviderUnavailable, TimeoutError) as error:
+                retryable = isinstance(error, CloudProviderUnavailable) and error.retryable
+                if retryable and attempts < self.budget.max_requests:
+                    provider_delay = error.retry_after_seconds if isinstance(error, CloudProviderUnavailable) else None
+                    delay = provider_delay if provider_delay is not None else min(
+                        self.retry_backoff_seconds * (2 ** (attempts - 1)), self.max_retry_backoff_seconds,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
                 self._finish(
                     interaction_id, status="WAITING_EXTERNAL", reason_code="CLOUD_UNAVAILABLE",
                     attempts=attempts, prompt_tokens=prompt_tokens,

@@ -122,11 +122,12 @@ def plan_json() -> str:
     return json.dumps({"proposal_id": "plan-proposal-1", "hypotheses": [], "proposed_work_orders": [], "risks": [], "required_evidence": []})
 
 
-def adapter(model: QueueCloudModel | OpenAICompatibleCloudModel, fixture: CloudFixture, *, requests: int = 3) -> CloudLeadAdapter:
+def adapter(model: QueueCloudModel | OpenAICompatibleCloudModel, fixture: CloudFixture, *, requests: int = 3, retry_backoff: float = 0.25) -> CloudLeadAdapter:
     return CloudLeadAdapter(
         model, fixture.sessions, fixture.builder,
         budget=CloudCallBudget(max_requests=requests, max_input_bytes=200_000, max_response_bytes=50_000, max_output_tokens=1000, max_total_tokens=10_000),
         pricing=CloudPricing(prompt_usd_per_million=Decimal("1.5"), completion_usd_per_million=Decimal("6")),
+        retry_backoff_seconds=retry_backoff,
     )
 
 
@@ -240,6 +241,25 @@ def test_provider_timeout_persists_waiting_external(fixture: CloudFixture) -> No
         assert record.status == "WAITING_EXTERNAL" and record.reason_code == "CLOUD_UNAVAILABLE"
 
 
+def test_retryable_provider_failure_is_bounded_and_audited(fixture: CloudFixture) -> None:
+    model = QueueCloudModel([CloudProviderUnavailable("temporary", retryable=True), plan_json()])
+    result = asyncio.run(adapter(model, fixture, retry_backoff=0).propose_plan(CloudContextSelection(run_id="run_cloud")))
+    assert result.output.proposal_id == "plan-proposal-1"
+    assert len(model.requests) == 2
+    with fixture.sessions() as session:
+        record = session.scalar(select(AgentInteractionRecord))
+        assert record is not None and record.status == "COMPLETED" and record.attempts == 2
+
+
+def test_retryable_provider_failure_stops_at_request_budget(fixture: CloudFixture) -> None:
+    model = QueueCloudModel([CloudProviderUnavailable("temporary", retryable=True)] * 2)
+    with pytest.raises(CloudProviderUnavailable):
+        asyncio.run(adapter(model, fixture, requests=2, retry_backoff=0).propose_plan(CloudContextSelection(run_id="run_cloud")))
+    with fixture.sessions() as session:
+        record = session.scalar(select(AgentInteractionRecord))
+        assert record is not None and record.status == "WAITING_EXTERNAL" and record.attempts == 2
+
+
 def test_configured_https_provider_is_outbound_only_without_tools_or_tracing(fixture: CloudFixture) -> None:
     captured: list[httpx.Request] = []
 
@@ -291,4 +311,22 @@ def test_provider_transport_response_has_hard_byte_limit() -> None:
     )
     with pytest.raises(CloudProviderUnavailable, match="transport byte limit"):
         asyncio.run(model.complete(request))
+    asyncio.run(client.aclose())
+
+
+def test_provider_429_is_marked_retryable() -> None:
+    client = httpx.AsyncClient(transport=httpx.MockTransport(
+        lambda _: httpx.Response(429, headers={"retry-after": "2"}),
+    ), trust_env=False)
+    model = OpenAICompatibleCloudModel(
+        base_url="https://provider.example", api_key="fixture-key", model="configured-model",
+        allowed_hosts=frozenset({"provider.example"}), client=client,
+    )
+    request = CloudModelRequest(
+        system_prompt="structured", context_json="{}", response_schema={"type": "object"},
+        response_type="Object", repair_instruction=None, max_output_tokens=10,
+    )
+    with pytest.raises(CloudProviderUnavailable) as raised:
+        asyncio.run(model.complete(request))
+    assert raised.value.retryable and raised.value.retry_after_seconds == 2
     asyncio.run(client.aclose())

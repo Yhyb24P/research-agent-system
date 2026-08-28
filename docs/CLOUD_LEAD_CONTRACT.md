@@ -21,7 +21,7 @@ Provider output is JSON validated by Pydantic. Duplicate proposal/capability IDs
 
 Every interaction has request-count, input-byte, response-byte, output-token, and aggregate-token limits. Reported token usage is accumulated across repair attempts using at least prompt plus completion tokens, and cost is calculated from configured pricing. The interaction stores its bundle hash, provider/model, purpose, structured successful response, request ID, attempts, tokens, cost, status, and reason code. Started/finished audit events bracket it.
 
-Provider timeout or unavailability produces the explicit `WAITING_EXTERNAL` interaction state with `CLOUD_UNAVAILABLE`; it is not interpreted as model rejection or local fallback. TASK 06 orchestration will decide run-level retry/resume behavior.
+Provider timeout or non-retryable unavailability produces the explicit `WAITING_EXTERNAL` interaction state with `CLOUD_UNAVAILABLE`; bounded classified transient failures may retry within the interaction request budget using capped backoff. It is never interpreted as model rejection or local fallback. TASK 06 orchestration still decides run-level retry/resume behavior.
 
 ## Non-authority guarantees
 

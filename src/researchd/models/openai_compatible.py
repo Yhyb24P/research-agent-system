@@ -83,8 +83,25 @@ class OpenAICompatibleCloudModel:
             )
         except CloudProviderUnavailable:
             raise
-        except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError, json.JSONDecodeError) as error:
-            raise CloudProviderUnavailable(f"cloud provider call failed: {type(error).__name__}") from error
+        except httpx.HTTPStatusError as error:
+            status = error.response.status_code
+            retryable = status == 408 or status == 409 or status == 425 or status == 429 or 500 <= status <= 599
+            retry_after: float | None = None
+            value = error.response.headers.get("retry-after")
+            if value is not None:
+                try:
+                    retry_after = max(0.0, float(value))
+                except ValueError:
+                    retry_after = None
+            raise CloudProviderUnavailable(
+                f"cloud provider HTTP {status}", retryable=retryable, retry_after_seconds=retry_after,
+            ) from error
+        except httpx.TimeoutException as error:
+            raise CloudProviderUnavailable("cloud provider timeout", retryable=True) from error
+        except httpx.HTTPError as error:
+            raise CloudProviderUnavailable(f"cloud provider call failed: {type(error).__name__}", retryable=True) from error
+        except (KeyError, IndexError, TypeError, ValueError, json.JSONDecodeError) as error:
+            raise CloudProviderUnavailable(f"cloud provider response invalid: {type(error).__name__}") from error
         finally:
             if owns_client:
                 await client.aclose()
