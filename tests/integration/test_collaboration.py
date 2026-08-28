@@ -253,6 +253,22 @@ def test_adapter_catalog_resolves_enabled_healthy_runtime(database: tuple[Path, 
     assert asyncio.run(catalog.health("runtime_http")).healthy
 
 
+def test_registry_delegation_and_control_plane_work_without_a2a_registration(database: tuple[Path, sessionmaker[Session]]) -> None:
+    _, sessions = database
+    registry = AgentRegistryService(sessions)
+    registry.register_profile(profile())
+    registry.register_runtime(AgentRuntime(runtime_id=AgentRuntimeId("runtime_internal"), agent_id=AgentId("agent_executor"), adapter_kind=AgentAdapterKind.INTERNAL, runtime_name="Internal"))
+    registry.heartbeat("runtime_internal")
+    catalog = AgentAdapterCatalog(sessions)
+    assert AgentAdapterKind.A2A not in catalog._adapters
+    selected = AgentSelector(sessions).select(required_roles=("executor",), required_skills=("code.modify",))
+    assert selected is not None and selected.runtime_id == "runtime_internal"
+    delegation = Delegation(delegation_id=DelegationId("del_no_a2a"), run_id="run_test", purpose=DelegationPurpose.EXECUTE, idempotency_key="no-a2a")
+    service = DelegationService(sessions)
+    service.create(delegation)
+    assert service.assign("del_no_a2a", agent_id="agent_executor", runtime_id="runtime_internal")
+
+
 def test_http_and_process_adapters_reject_unsafe_or_oversized_inputs() -> None:
     runtime = AgentRuntime(runtime_id=AgentRuntimeId("runtime_http"), agent_id=AgentId("agent_executor"), adapter_kind=AgentAdapterKind.HTTP, runtime_name="HTTP", endpoint_ref="http://user:pass@example")
     assert not asyncio.run(HttpAgentAdapter(cast(HttpAgentClient, None)).health(runtime)).healthy
