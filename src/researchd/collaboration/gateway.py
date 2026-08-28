@@ -1,7 +1,7 @@
 """Gateway routing orchestration through adapters and recording collaboration facts."""
 import hashlib
 from uuid import uuid4
-from researchd.collaboration.contracts import AgentInvocationRequest, AgentInvocationResult, Delegation
+from researchd.collaboration.contracts import AgentInvocationRequest, AgentInvocationResult, Delegation, InvocationInput, PlanInvocationInput, ReviewInvocationInput
 from researchd.collaboration.delegation import DelegationService
 from researchd.collaboration.invocation import InvocationService
 from researchd.collaboration.selector import AgentSelector
@@ -35,7 +35,7 @@ class CollaborationGateway:
     def tracking_enabled(self) -> bool:
         return self.delegations is not None and self.invocations is not None and ((self.agent_id is not None and self.runtime_id is not None) or self.selector is not None)
 
-    def _start(self, run_id: str, purpose: DelegationPurpose, *, work_order_id: str | None = None, attempt_id: str | None = None, required_roles: tuple[str, ...] = (), required_skills: tuple[str, ...] = (), existing_delegation_id: str | None = None) -> tuple[DelegationId, InvocationId] | None:
+    def _start(self, run_id: str, purpose: DelegationPurpose, *, work_order_id: str | None = None, attempt_id: str | None = None, required_roles: tuple[str, ...] = (), required_skills: tuple[str, ...] = (), existing_delegation_id: str | None = None, typed_input: InvocationInput | None = None) -> tuple[DelegationId, InvocationId] | None:
         if not self.tracking_enabled:
             return None
         delegation_id = DelegationId(existing_delegation_id) if existing_delegation_id else DelegationId(f"del_{uuid4().hex}")
@@ -58,7 +58,7 @@ class CollaborationGateway:
         if existing_delegation_id is None:
             self.delegations.create(Delegation(delegation_id=delegation_id, run_id=run_id, work_order_id=work_order_id, purpose=purpose, idempotency_key=f"{delegation_id}-orchestration"))
             self.delegations.assign(str(delegation_id), agent_id=str(agent_id), runtime_id=str(runtime_id))
-        self.invocations.start(AgentInvocationRequest(invocation_id=invocation_id, delegation_id=delegation_id, run_id=run_id, work_order_id=work_order_id, attempt_id=attempt_id, agent_id=agent_id, runtime_id=runtime_id, purpose=purpose, input_sha256=hashlib.sha256(f"{run_id}:{purpose.value}:{work_order_id}:{attempt_id}".encode()).hexdigest()))
+        self.invocations.start(AgentInvocationRequest(invocation_id=invocation_id, delegation_id=delegation_id, run_id=run_id, work_order_id=work_order_id, attempt_id=attempt_id, agent_id=agent_id, runtime_id=runtime_id, purpose=purpose, input_sha256=hashlib.sha256(f"{run_id}:{purpose.value}:{work_order_id}:{attempt_id}".encode()).hexdigest(), typed_input=typed_input))
         return delegation_id, invocation_id
 
     def prepare_execution(self, work_order: WorkOrderRecord) -> str | None:
@@ -90,7 +90,7 @@ class CollaborationGateway:
         return adapter
 
     async def plan(self, selection: CloudContextSelection) -> CloudLeadResult[PlanProposal]:
-        tracking = self._start(selection.run_id, DelegationPurpose.PLAN, required_roles=("planner",))
+        tracking = self._start(selection.run_id, DelegationPurpose.PLAN, required_roles=("planner",), typed_input=PlanInvocationInput(context=selection))
         try:
             adapter = self._tracked_adapter(tracking)
             if adapter is None:
@@ -106,7 +106,7 @@ class CollaborationGateway:
         return result
 
     async def review(self, selection: CloudContextSelection) -> CloudLeadResult[ReviewDecision]:
-        tracking = self._start(selection.run_id, DelegationPurpose.REVIEW, work_order_id=selection.work_order_id, required_roles=("reviewer",))
+        tracking = self._start(selection.run_id, DelegationPurpose.REVIEW, work_order_id=selection.work_order_id, required_roles=("reviewer",), typed_input=ReviewInvocationInput(context=selection))
         try:
             adapter = self._tracked_adapter(tracking)
             if adapter is None:

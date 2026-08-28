@@ -1,8 +1,37 @@
+from typing import Annotated, Literal
 from pydantic import Field, PositiveInt
 
 from researchd.domain.base import DomainModel
 from researchd.domain.enums import AgentAdapterKind, AgentTrustZone, DelegationPurpose, DelegationState, InvocationStatus
 from researchd.domain.ids import AgentId, AgentRuntimeId, DelegationId, InvocationId, MessageId
+from researchd.context.builder import CloudContextSelection
+from researchd.executor.contracts import GrantedWorkOrder
+
+
+class PlanInvocationInput(DomainModel):
+    kind: Literal["PLAN"] = "PLAN"
+    context: CloudContextSelection
+
+
+class ReviewInvocationInput(DomainModel):
+    kind: Literal["REVIEW"] = "REVIEW"
+    context: CloudContextSelection
+
+
+class ExecuteInvocationInput(DomainModel):
+    kind: Literal["EXECUTE"] = "EXECUTE"
+    work_order: GrantedWorkOrder
+
+
+class EvidenceInvocationInput(DomainModel):
+    kind: Literal["EVIDENCE"] = "EVIDENCE"
+    context: CloudContextSelection
+
+
+InvocationInput = Annotated[
+    PlanInvocationInput | ReviewInvocationInput | ExecuteInvocationInput | EvidenceInvocationInput,
+    Field(discriminator="kind"),
+]
 
 
 class AgentProfile(DomainModel):
@@ -67,6 +96,9 @@ class AgentInvocationRequest(DomainModel):
     runtime_id: AgentRuntimeId
     purpose: DelegationPurpose
     input_sha256: str
+    typed_input: InvocationInput | None = None
+    # Deprecated compatibility escape hatch for pre-ACP adapters. New gateway
+    # calls must use typed_input so purpose and payload cannot drift apart.
     payload: object | None = None
 
 

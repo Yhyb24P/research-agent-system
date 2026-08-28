@@ -6,7 +6,7 @@ from typing import cast
 import pytest
 from sqlalchemy.orm import Session, sessionmaker
 
-from researchd.collaboration.contracts import AgentProfile, AgentRuntime, DiscoveredAgentDescriptor, HumanDirective
+from researchd.collaboration.contracts import AgentProfile, AgentRuntime, AgentInvocationRequest, DiscoveredAgentDescriptor, HumanDirective, PlanInvocationInput
 from researchd.collaboration.registry import AgentRegistryService
 from researchd.collaboration.delegation import DelegationService
 from researchd.collaboration.invocation import InvocationService
@@ -26,7 +26,7 @@ from researchd.observability import collect_metrics
 from researchd.policy.approval import ApprovalService
 from researchd.agents.cloud_lead import CloudLeadAdapter
 from researchd.executor.worker import LocalExecutorWorker
-from researchd.collaboration.contracts import AgentInvocationRequest, AgentInvocationResult, Delegation
+from researchd.collaboration.contracts import AgentInvocationResult, Delegation
 from researchd.domain.enums import AgentAdapterKind, AgentTrustZone, DataClassification, DelegationPurpose, InvocationStatus, ResearchRunState
 from researchd.domain.ids import DelegationId, InvocationId, MessageId
 from researchd.storage.models import AgentRecord, AgentRuntimeRecord, CollaborationMessageRecord, WorkspaceRecord, ResearchRunRecord
@@ -120,6 +120,18 @@ def test_skill_declaration_is_not_a_capability_grant() -> None:
     candidate = profile()
     assert "code.modify" in candidate.skills
     assert "workspace.write" not in candidate.skills
+
+
+def test_invocation_input_uses_purpose_discriminator() -> None:
+    request = AgentInvocationRequest(
+        invocation_id=InvocationId("inv_typed"), delegation_id=DelegationId("del_typed"),
+        run_id="run_test", agent_id=AgentId("agent_executor"), runtime_id=AgentRuntimeId("runtime_qwen"),
+        purpose=DelegationPurpose.PLAN, input_sha256="e" * 64,
+        typed_input=PlanInvocationInput(context=CloudContextSelection(run_id="run_test")),
+    )
+    assert request.typed_input is not None and request.typed_input.kind == "PLAN"
+    with pytest.raises(ValueError):
+        AgentInvocationRequest.model_validate({**request.model_dump(mode="json"), "typed_input": {"kind": "EXECUTE", "context": {"run_id": "run_test"}}})
 
 
 def test_assignment_freezes_profile_and_invocation_is_structured(database: tuple[Path, sessionmaker[Session]]) -> None:
