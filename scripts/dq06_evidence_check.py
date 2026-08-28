@@ -6,6 +6,10 @@ from pathlib import Path
 from typing import Any
 
 
+_CLOUD_METADATA = ("provider", "model", "tested_at_utc", "credential_reference", "retention_policy")
+_FORBIDDEN_CLOUD_KEYS = {"api_key", "apikey", "password", "secret", "access_token", "refresh_token"}
+
+
 def _load(path: Path) -> dict[str, Any]:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
@@ -14,6 +18,19 @@ def _load(path: Path) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError(f"evidence root must be an object: {path}")
     return value
+
+
+def _has_forbidden_key(value: Any) -> bool:
+    if isinstance(value, dict):
+        return any(
+            str(key).lower() in _FORBIDDEN_CLOUD_KEYS
+            or str(key).lower().endswith(("_secret", "_token", "_api_key"))
+            or _has_forbidden_key(item)
+            for key, item in value.items()
+        )
+    if isinstance(value, list):
+        return any(_has_forbidden_key(item) for item in value)
+    return False
 
 
 def validate(
@@ -46,6 +63,11 @@ def validate(
             evidence = _load(path)
             checks.append({"name": f"{name}_evidence_commit_matches", "passed": evidence.get("release_commit") == commit})
             checks.append({"name": f"{name}_evidence_passed", "passed": evidence.get("passed") is True})
+            if name == "cloud":
+                metadata = evidence.get("metadata")
+                checks.append({"name": "cloud_metadata_complete", "passed": isinstance(metadata, dict) and all(metadata.get(field) for field in _CLOUD_METADATA)})
+                checks.append({"name": "cloud_scenarios_present", "passed": isinstance(evidence.get("scenarios"), list) and bool(evidence["scenarios"])})
+                checks.append({"name": "cloud_credentials_absent", "passed": not _has_forbidden_key(evidence)})
     failures = [item["name"] for item in checks if not item["passed"]]
     return {"evidence_version": 1, "manifest": str(manifest_path), "checks": checks, "failures": failures, "passed": not failures}
 
