@@ -1,0 +1,32 @@
+name: control-plane-quality
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install locked application and test tools
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+          python -m pip install "pytest>=8.4,<9" "mypy>=1.17,<2" "jsonschema>=4.23,<5"
+      - name: Test
+        run: pytest -q
+      - name: Type check
+        run: mypy src tests
+      - name: Migration head
+        run: alembic upgrade head
+      - name: Diff hygiene
+        run: git diff --check

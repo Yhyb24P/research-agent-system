@@ -35,6 +35,9 @@ CAS bytes, or runtime database contents.
   the tagged checkout and must be retained with qualification evidence.
 - Dependency lock: `uv.lock` is committed; its SHA-256 must be captured by the
   generated manifest.
+- The repository quality workflow reruns pytest, mypy, Alembic migrations, and
+  diff hygiene on pushes and pull requests. It intentionally does not require
+  GPU drivers, cloud credentials, or production secrets.
 
 ## Gate checklist
 
