@@ -26,7 +26,7 @@ class A2ARemoteAgentAdapter:
     async def invoke(self, request: AgentInvocationRequest) -> AgentInvocationResult:
         if request.work_order_id is None or request.attempt_id is None or not isinstance(request.payload, dict):
             return AgentInvocationResult(invocation_id=request.invocation_id, status=InvocationStatus.FAILED, reason_code="A2A_SCOPE_REQUIRED")
-        task = await self.delegate.dispatch(work_order_id=request.work_order_id, attempt_id=request.attempt_id, payload=request.payload)
+        task = await self.delegate.dispatch(work_order_id=request.work_order_id, attempt_id=request.attempt_id, payload=request.payload, invocation_id=str(request.invocation_id))
         terminal = task.status.state in {"completed", "failed", "canceled", "rejected"}
         return AgentInvocationResult(invocation_id=request.invocation_id, status=InvocationStatus.SUCCEEDED if terminal else InvocationStatus.RUNNING, output_type="A2ATask", output=task.model_dump(mode="json"), reason_code=None if terminal else "A2A_TASK_NONTERMINAL")
 

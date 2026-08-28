@@ -46,7 +46,7 @@ class A2AAdapter:
         self.client = client
         self.remote_agent_id = remote_agent_id
 
-    async def dispatch(self, *, work_order_id: str, attempt_id: str, payload: dict[str, Any], force_new: bool = False) -> A2ATask:
+    async def dispatch(self, *, work_order_id: str, attempt_id: str, payload: dict[str, Any], force_new: bool = False, invocation_id: str | None = None) -> A2ATask:
         order, attempt = self._scope(work_order_id, attempt_id)
         context_id = f"ctx_{order.run_id}"
         key = self._key(work_order_id, attempt_id, self.remote_agent_id, payload if force_new else None)
@@ -62,7 +62,7 @@ class A2AAdapter:
         })
         interaction_id = existing.interaction_id if existing else f"interaction_{uuid4().hex}"
         if existing is None:
-            self._reserve(interaction_id, order, attempt, context_id, task_id, body)
+            self._reserve(interaction_id, order, attempt, context_id, task_id, body, invocation_id=invocation_id)
         response = await self.client.send(body)
         task = A2ATask.model_validate(response)
         self._finish(interaction_id, task, body)
@@ -104,12 +104,12 @@ class A2AAdapter:
                 AgentInteractionRecord.purpose == "A2A_DISPATCH",
             ).order_by(AgentInteractionRecord.created_at.desc()).limit(1))
 
-    def _reserve(self, interaction_id: str, order: WorkOrderRecord, attempt: AttemptRecord, context_id: str, task_id: str, body: dict[str, Any]) -> None:
+    def _reserve(self, interaction_id: str, order: WorkOrderRecord, attempt: AttemptRecord, context_id: str, task_id: str, body: dict[str, Any], *, invocation_id: str | None = None) -> None:
         now = utc_now()
         digest = hashlib.sha256(json.dumps(body, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         with self.sessions.begin() as session:
             session.add(AgentInteractionRecord(
-                interaction_id=interaction_id, run_id=order.run_id, work_order_id=order.work_order_id,
+                interaction_id=interaction_id, invocation_id=invocation_id, run_id=order.run_id, work_order_id=order.work_order_id,
                 attempt_id=attempt.attempt_id, remote_agent_id=self.remote_agent_id,
                 a2a_context_id=context_id, a2a_task_id=task_id, role="a2a_adapter", purpose="A2A_DISPATCH",
                 provider=self.remote_agent_id, model="a2a-1.0", bundle_sha256=digest,
