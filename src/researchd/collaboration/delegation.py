@@ -32,6 +32,12 @@ class DelegationService:
                 raise ValueError("delegation is not pending")
             if agent is None or not agent.enabled or runtime is None or not runtime.enabled or runtime.agent_id != agent_id:
                 raise ValueError("agent runtime is unavailable")
+            if any(role not in agent.roles_json for role in delegation.required_roles_json):
+                raise ValueError("agent does not satisfy required roles")
+            if any(skill not in agent.skills_json for skill in delegation.required_skills_json):
+                raise ValueError("agent does not satisfy required skills")
+            if delegation.required_trust_zones_json and agent.trust_zone not in delegation.required_trust_zones_json:
+                raise ValueError("agent trust zone is not allowed")
             snapshot = {"agent_id": agent.agent_id, "profile_version": agent.profile_version, "roles": agent.roles_json, "skills": agent.skills_json, "trust_zone": agent.trust_zone, "constraints": agent.constraints_json, "runtime_id": runtime.runtime_id}
             digest = hashlib.sha256(json.dumps(snapshot, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
             delegation.assigned_agent_id, delegation.assigned_runtime_id = agent_id, runtime_id

@@ -149,8 +149,29 @@ def test_gateway_tracking_creates_delegation_and_invocation(database: tuple[Path
     with sessions() as session:
         delegation = session.get(DelegationRecord, str(tracking[0]))
         invocation = session.get(AgentInvocationRecord, str(tracking[1]))
-        assert delegation is not None and delegation.state == "ASSIGNED"
+        assert delegation is not None and delegation.state == "COMPLETED"
         assert invocation is not None and invocation.status == InvocationStatus.SUCCEEDED.value
+
+
+def test_delegation_constraints_and_terminal_state_are_enforced(database: tuple[Path, sessionmaker[Session]]) -> None:
+    _, sessions = database
+    registry = AgentRegistryService(sessions)
+    registry.register_profile(profile())
+    registry.register_runtime(AgentRuntime(runtime_id=AgentRuntimeId("runtime_qwen"), agent_id=AgentId("agent_executor"), adapter_kind=AgentAdapterKind.HTTP, runtime_name="Qwen"))
+    service = DelegationService(sessions)
+    constrained = Delegation(delegation_id=DelegationId("del_constrained"), run_id="run_test", purpose=DelegationPurpose.EXECUTE, required_roles=("reviewer",), idempotency_key="constrained")
+    service.create(constrained)
+    with pytest.raises(ValueError, match="required roles"):
+        service.assign("del_constrained", agent_id="agent_executor", runtime_id="runtime_qwen")
+    done = Delegation(delegation_id=DelegationId("del_terminal"), run_id="run_test", purpose=DelegationPurpose.EXECUTE, idempotency_key="terminal")
+    service.create(done)
+    service.assign("del_terminal", agent_id="agent_executor", runtime_id="runtime_qwen")
+    invocations = InvocationService(sessions)
+    request = AgentInvocationRequest(invocation_id=InvocationId("inv_terminal"), delegation_id=DelegationId("del_terminal"), run_id="run_test", agent_id=AgentId("agent_executor"), runtime_id=AgentRuntimeId("runtime_qwen"), purpose=DelegationPurpose.EXECUTE, input_sha256="c" * 64)
+    invocations.start(request)
+    invocations.complete(AgentInvocationResult(invocation_id=InvocationId("inv_terminal"), status=InvocationStatus.SUCCEEDED))
+    with pytest.raises(ValueError, match="terminal"):
+        invocations.start(AgentInvocationRequest(invocation_id=InvocationId("inv_reopen"), delegation_id=DelegationId("del_terminal"), run_id="run_test", agent_id=AgentId("agent_executor"), runtime_id=AgentRuntimeId("runtime_qwen"), purpose=DelegationPurpose.EXECUTE, input_sha256="d" * 64))
 
 
 def test_selector_is_deterministic_and_requires_healthy_runtime(database: tuple[Path, sessionmaker[Session]]) -> None:
