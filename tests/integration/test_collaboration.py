@@ -11,12 +11,14 @@ from researchd.collaboration.registry import AgentRegistryService
 from researchd.collaboration.delegation import DelegationService
 from researchd.collaboration.invocation import InvocationService
 from researchd.collaboration.adapters import CloudLeadAgentAdapter, LocalExecutorAgentAdapter
+from researchd.collaboration.gateway import CollaborationGateway
 from researchd.agents.cloud_lead import CloudLeadAdapter
 from researchd.executor.worker import LocalExecutorWorker
 from researchd.collaboration.contracts import AgentInvocationRequest, AgentInvocationResult, Delegation
 from researchd.domain.enums import AgentAdapterKind, AgentTrustZone, DelegationPurpose, InvocationStatus, ResearchRunState
 from researchd.domain.ids import DelegationId, InvocationId
 from researchd.storage.models import AgentRecord, AgentRuntimeRecord, WorkspaceRecord, ResearchRunRecord
+from researchd.storage.models import DelegationRecord, AgentInvocationRecord
 from researchd.storage.db import create_sqlite_engine, session_factory
 from researchd.domain.ids import AgentId, AgentRuntimeId
 from test_storage import migrate
@@ -118,3 +120,23 @@ def test_canonical_adapters_expose_health_and_preserve_boundaries() -> None:
     request = AgentInvocationRequest(invocation_id=InvocationId("inv_invalid"), delegation_id=DelegationId("del_execute"), run_id="run_test", agent_id=AgentId("agent_executor"), runtime_id=AgentRuntimeId("runtime_qwen"), purpose=DelegationPurpose.EXECUTE, input_sha256="b" * 64)
     result = asyncio.run(adapter.invoke(request))
     assert result.status == InvocationStatus.FAILED and result.reason_code == "GRANTED_WORK_ORDER_REQUIRED"
+
+
+def test_gateway_tracking_creates_delegation_and_invocation(database: tuple[Path, sessionmaker[Session]]) -> None:
+    _, sessions = database
+    registry = AgentRegistryService(sessions)
+    registry.register_profile(profile())
+    registry.register_runtime(AgentRuntime(runtime_id=AgentRuntimeId("runtime_qwen"), agent_id=AgentId("agent_executor"), adapter_kind=AgentAdapterKind.HTTP, runtime_name="Qwen"))
+    gateway = CollaborationGateway(
+        cast(CloudLeadAgentAdapter, None), cast(LocalExecutorAgentAdapter, None),
+        delegations=DelegationService(sessions), invocations=InvocationService(sessions),
+        agent_id=AgentId("agent_executor"), runtime_id=AgentRuntimeId("runtime_qwen"),
+    )
+    tracking = gateway._start("run_test", DelegationPurpose.EXECUTE)
+    assert tracking is not None
+    gateway._finish(tracking[1], success=True, output_type="ExecutorResult", output={"ok": True})
+    with sessions() as session:
+        delegation = session.get(DelegationRecord, str(tracking[0]))
+        invocation = session.get(AgentInvocationRecord, str(tracking[1]))
+        assert delegation is not None and delegation.state == "ASSIGNED"
+        assert invocation is not None and invocation.status == InvocationStatus.SUCCEEDED.value
