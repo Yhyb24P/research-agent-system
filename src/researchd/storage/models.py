@@ -72,6 +72,7 @@ class AttemptRecord(Base, VersionedTimestamps):
     )
     attempt_id: Mapped[str] = mapped_column(String(128), primary_key=True)
     work_order_id: Mapped[str] = mapped_column(ForeignKey("work_orders.work_order_id"), nullable=False)
+    delegation_id: Mapped[str | None] = mapped_column(ForeignKey("delegations.delegation_id"))
     state: Mapped[str] = mapped_column(String(32), nullable=False)
     terminal_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
 
@@ -137,6 +138,46 @@ class AgentRuntimeRecord(Base, VersionedTimestamps):
     enabled: Mapped[bool] = mapped_column(nullable=False, default=True)
     last_heartbeat_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     lease_expires_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+
+
+class DelegationRecord(Base, VersionedTimestamps):
+    __tablename__ = "delegations"
+    __table_args__ = (Index("ix_delegations_run_state", "run_id", "state"), Index("ix_delegations_idempotency", "idempotency_key", unique=True))
+    delegation_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("research_runs.run_id"), nullable=False)
+    work_order_id: Mapped[str | None] = mapped_column(ForeignKey("work_orders.work_order_id"))
+    purpose: Mapped[str] = mapped_column(String(32), nullable=False)
+    required_roles_json: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    required_skills_json: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    required_trust_zones_json: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    assigned_agent_id: Mapped[str | None] = mapped_column(ForeignKey("agents.agent_id"))
+    assigned_runtime_id: Mapped[str | None] = mapped_column(ForeignKey("agent_runtimes.runtime_id"))
+    agent_profile_version: Mapped[int | None] = mapped_column(Integer)
+    agent_snapshot_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    assignment_sha256: Mapped[str | None] = mapped_column(String(64))
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(256), nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+
+
+class AgentInvocationRecord(Base):
+    __tablename__ = "agent_invocations"
+    __table_args__ = (Index("ix_agent_invocations_delegation", "delegation_id"), Index("ix_agent_invocations_status", "status"))
+    invocation_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    delegation_id: Mapped[str] = mapped_column(ForeignKey("delegations.delegation_id"), nullable=False)
+    run_id: Mapped[str] = mapped_column(ForeignKey("research_runs.run_id"), nullable=False)
+    work_order_id: Mapped[str | None] = mapped_column(ForeignKey("work_orders.work_order_id"))
+    attempt_id: Mapped[str | None] = mapped_column(ForeignKey("attempts.attempt_id"))
+    agent_id: Mapped[str] = mapped_column(ForeignKey("agents.agent_id"), nullable=False)
+    runtime_id: Mapped[str] = mapped_column(ForeignKey("agent_runtimes.runtime_id"), nullable=False)
+    purpose: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    input_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    output_type: Mapped[str | None] = mapped_column(String(128))
+    output_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    reason_code: Mapped[str | None] = mapped_column(String(128))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
 
 
 class ArtifactRecord(Base):
@@ -352,6 +393,7 @@ class AgentInteractionRecord(Base):
         Index("ix_agent_interactions_a2a_task", "a2a_task_id"),
     )
     interaction_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    invocation_id: Mapped[str | None] = mapped_column(ForeignKey("agent_invocations.invocation_id"))
     run_id: Mapped[str] = mapped_column(ForeignKey("research_runs.run_id"), nullable=False)
     work_order_id: Mapped[str | None] = mapped_column(ForeignKey("work_orders.work_order_id"))
     attempt_id: Mapped[str | None] = mapped_column(String(128))

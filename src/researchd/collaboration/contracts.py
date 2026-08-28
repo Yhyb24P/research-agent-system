@@ -1,8 +1,8 @@
 from pydantic import Field, PositiveInt
 
 from researchd.domain.base import DomainModel
-from researchd.domain.enums import AgentAdapterKind, AgentTrustZone
-from researchd.domain.ids import AgentId, AgentRuntimeId
+from researchd.domain.enums import AgentAdapterKind, AgentTrustZone, DelegationPurpose, DelegationState, InvocationStatus
+from researchd.domain.ids import AgentId, AgentRuntimeId, DelegationId, InvocationId
 
 
 class AgentProfile(DomainModel):
@@ -38,3 +38,40 @@ class DiscoveredAgentDescriptor(DomainModel):
     roles: tuple[str, ...] = ()
     skills: tuple[str, ...] = ()
     endpoint_ref: str | None = None
+
+
+class Delegation(DomainModel):
+    delegation_id: DelegationId
+    run_id: str
+    work_order_id: str | None = None
+    purpose: DelegationPurpose
+    required_roles: tuple[str, ...] = ()
+    required_skills: tuple[str, ...] = ()
+    required_trust_zones: tuple[AgentTrustZone, ...] = ()
+    assigned_agent_id: AgentId | None = None
+    assigned_runtime_id: AgentRuntimeId | None = None
+    agent_profile_version: int | None = None
+    agent_snapshot: dict[str, object] | None = None
+    assignment_sha256: str | None = None
+    state: DelegationState = DelegationState.PENDING
+    idempotency_key: str
+
+
+class AgentInvocationRequest(DomainModel):
+    invocation_id: InvocationId
+    delegation_id: DelegationId
+    run_id: str
+    work_order_id: str | None = None
+    attempt_id: str | None = None
+    agent_id: AgentId
+    runtime_id: AgentRuntimeId
+    purpose: DelegationPurpose
+    input_sha256: str
+
+
+class AgentInvocationResult(DomainModel):
+    invocation_id: InvocationId
+    status: InvocationStatus
+    output_type: str | None = None
+    output: dict[str, object] | None = None
+    reason_code: str | None = None

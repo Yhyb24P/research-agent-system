@@ -6,8 +6,12 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from researchd.collaboration.contracts import AgentProfile, AgentRuntime, DiscoveredAgentDescriptor
 from researchd.collaboration.registry import AgentRegistryService
-from researchd.domain.enums import AgentAdapterKind, AgentTrustZone
-from researchd.storage.models import AgentRecord, AgentRuntimeRecord
+from researchd.collaboration.delegation import DelegationService
+from researchd.collaboration.invocation import InvocationService
+from researchd.collaboration.contracts import AgentInvocationRequest, AgentInvocationResult, Delegation
+from researchd.domain.enums import AgentAdapterKind, AgentTrustZone, DelegationPurpose, InvocationStatus, ResearchRunState
+from researchd.domain.ids import DelegationId, InvocationId
+from researchd.storage.models import AgentRecord, AgentRuntimeRecord, WorkspaceRecord, ResearchRunRecord
 from researchd.storage.db import create_sqlite_engine, session_factory
 from researchd.domain.ids import AgentId, AgentRuntimeId
 from test_storage import migrate
@@ -18,7 +22,13 @@ def database(tmp_path: Path) -> tuple[Path, sessionmaker[Session]]:
     path = tmp_path / "collaboration.db"
     migrate(path)
     engine = create_sqlite_engine(path)
-    return path, session_factory(engine)
+    sessions = session_factory(engine)
+    now = datetime.now(UTC)
+    with sessions.begin() as session:
+        session.add(WorkspaceRecord(workspace_id="ws_test", name="test", version=1, created_at=now, updated_at=now))
+        session.flush()
+        session.add(ResearchRunRecord(run_id="run_test", workspace_id="ws_test", objective="collaboration", state=ResearchRunState.ACTIVE.value, version=1, created_at=now, updated_at=now))
+    return path, sessions
 
 
 def profile(agent_id: AgentId = AgentId("agent_executor")) -> AgentProfile:
@@ -75,3 +85,22 @@ def test_skill_declaration_is_not_a_capability_grant() -> None:
     candidate = profile()
     assert "code.modify" in candidate.skills
     assert "workspace.write" not in candidate.skills
+
+
+def test_assignment_freezes_profile_and_invocation_is_structured(database: tuple[Path, sessionmaker[Session]]) -> None:
+    _, sessions = database
+    registry = AgentRegistryService(sessions)
+    registry.register_profile(profile())
+    registry.register_runtime(AgentRuntime(runtime_id=AgentRuntimeId("runtime_qwen"), agent_id=AgentId("agent_executor"), adapter_kind=AgentAdapterKind.HTTP, runtime_name="Qwen"))
+    delegation = Delegation(delegation_id=DelegationId("del_execute"), run_id="run_test", purpose=DelegationPurpose.EXECUTE, idempotency_key="del-execute-1")
+    delegations = DelegationService(sessions)
+    delegations.create(delegation)
+    digest = delegations.assign("del_execute", agent_id="agent_executor", runtime_id="runtime_qwen")
+    assert len(digest) == 64
+    request = AgentInvocationRequest(invocation_id=InvocationId("inv_execute"), delegation_id=DelegationId("del_execute"), run_id="run_test", agent_id=AgentId("agent_executor"), runtime_id=AgentRuntimeId("runtime_qwen"), purpose=DelegationPurpose.EXECUTE, input_sha256="a" * 64)
+    invocations = InvocationService(sessions)
+    invocations.start(request)
+    invocations.complete(AgentInvocationResult(invocation_id=InvocationId("inv_execute"), status=InvocationStatus.SUCCEEDED, output_type="ExecutorResult", output={"ok": True}))
+    with sessions() as session:
+        row = session.get(AgentRuntimeRecord, "runtime_qwen")
+        assert row is not None

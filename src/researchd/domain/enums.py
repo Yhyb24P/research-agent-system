@@ -135,3 +135,29 @@ class AgentAdapterKind(StrEnum):
     PROCESS = "PROCESS"
     HTTP = "HTTP"
     A2A = "A2A"
+
+
+class DelegationPurpose(StrEnum):
+    PLAN = "PLAN"
+    EXECUTE = "EXECUTE"
+    REVIEW = "REVIEW"
+    EVIDENCE = "EVIDENCE"
+    SPECIALIST = "SPECIALIST"
+
+
+class DelegationState(StrEnum):
+    PENDING = "PENDING"
+    ASSIGNED = "ASSIGNED"
+    RUNNING = "RUNNING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
+    EXPIRED = "EXPIRED"
+
+
+class InvocationStatus(StrEnum):
+    PENDING = "PENDING"
+    RUNNING = "RUNNING"
+    SUCCEEDED = "SUCCEEDED"
+    FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
