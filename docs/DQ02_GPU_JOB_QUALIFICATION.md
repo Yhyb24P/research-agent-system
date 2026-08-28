@@ -20,11 +20,15 @@ can claim GPU isolation.
 
 - Migration `0008` persists `gpu_leases` with job/device/state records.
 - `GpuAdmissionController` supports acquire, active inspection, release, and
-  restart observation from a newly constructed controller.
+  restart observation from a newly constructed controller. Its reconciliation
+  pass releases only leases whose Job is known terminal, leaving `LOST` and
+  non-terminal work occupied.
 - `JobManager` rejects GPU submission without an admission controller and
   releases leases after backend submission failure or known terminal
   reconciliation. `LOST` retains its lease until an operator calls the explicit
   lost-job resolution path.
+- A GPU `JobSpec` must carry a positive `max_gpu_seconds` budget; zero-budget
+  GPU requests are rejected before submission.
 - Regression tests cover exclusive allocation, persistence, release, and
   fail-closed submission. The local durable backend still rejects GPU jobs by
   design because it has no hardware enforcement.

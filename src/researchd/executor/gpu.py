@@ -13,7 +13,8 @@ from uuid import uuid4
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
-from researchd.storage.models import GpuLeaseRecord
+from researchd.domain.enums import JobState
+from researchd.storage.models import GpuLeaseRecord, JobRecord
 
 
 GPU_LEASED = "LEASED"
@@ -86,3 +87,22 @@ class GpuAdmissionController:
                 query = query.where(GpuLeaseRecord.job_id == job_id)
             records = session.scalars(query.order_by(GpuLeaseRecord.device_id)).all()
             return tuple(GpuLease(item.lease_id, item.job_id, item.device_id) for item in records)
+
+    def reconcile(self) -> tuple[str, ...]:
+        """Release leases left behind for known terminal Jobs after a crash.
+
+        LOST and non-terminal jobs remain occupied because their native work may
+        still exist outside the controller process.
+        """
+        terminal = {JobState.SUCCEEDED.value, JobState.FAILED.value, JobState.CANCELLED.value}
+        now = datetime.now(UTC)
+        released: list[str] = []
+        with self.sessions.begin() as session:
+            records = session.scalars(select(GpuLeaseRecord).join(JobRecord, JobRecord.job_id == GpuLeaseRecord.job_id).where(GpuLeaseRecord.state == GPU_LEASED)).all()
+            for record in records:
+                job = session.get(JobRecord, record.job_id)
+                if job is not None and job.state in terminal:
+                    record.state = GPU_RELEASED
+                    record.released_at = now
+                    released.append(record.job_id)
+        return tuple(released)

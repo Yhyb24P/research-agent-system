@@ -1,7 +1,7 @@
 from typing import Any, Literal
 from uuid import uuid4
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 
 from researchd.domain.base import DomainModel
 from researchd.domain.enums import Capability, NetworkMode
@@ -116,6 +116,12 @@ class JobSpec(DomainModel):
     # Populated by the trusted GPU admission controller immediately before
     # backend submission; callers must not use this as an authorization input.
     gpu_device_ids: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def gpu_job_requires_time_budget(self) -> "JobSpec":
+        if self.resources.gpu_count and self.resources.max_gpu_seconds <= 0:
+            raise ValueError("GPU jobs require a positive max_gpu_seconds budget")
+        return self
 
 
 class JobHandle(DomainModel):

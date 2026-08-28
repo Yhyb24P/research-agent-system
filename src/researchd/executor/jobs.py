@@ -198,6 +198,8 @@ class JobManager:
 
     def reconcile(self) -> list[JobRecord]:
         reconciled: list[JobRecord] = []
+        if self.gpu_admission is not None:
+            self.gpu_admission.reconcile()
         with self.sessions() as session:
             identifiers = [record.job_id for record in JobRepository(session).active()]
         for job_id in identifiers:

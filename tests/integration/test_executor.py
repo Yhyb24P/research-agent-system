@@ -391,6 +391,21 @@ def test_lost_job_holds_gpu_lease_until_explicit_resolution(tmp_path: Path) -> N
     assert admission.active("job_gpu_lost") == ()
 
 
+def test_gpu_reconcile_releases_stale_lease_for_known_terminal_job(tmp_path: Path) -> None:
+    sessions = seed_database(tmp_path / "gpu-reconcile.db")
+    now = datetime.now(UTC)
+    with sessions.begin() as session:
+        session.add(JobRecord(
+            job_id="job_gpu_done", attempt_id="att_exec", operation_id="op-gpu-done",
+            state=JobState.SUCCEEDED.value, backend="gpu", native_handle="native-done",
+            version=1, created_at=now, updated_at=now,
+        ))
+    admission = GpuAdmissionController(sessions, ("gpu0",))
+    admission.acquire("job_gpu_done", 1)
+    assert admission.reconcile() == ("job_gpu_done",)
+    assert admission.active("job_gpu_done") == ()
+
+
 def test_job_crash_window_reconciles_side_effect_without_native_handle(tmp_path: Path) -> None:
     repository = fixture_repository(tmp_path / "repo")
     handle = WorktreeManager(tmp_path / "worktrees").create(repository, repository_id="repo", attempt_id="att_exec")
