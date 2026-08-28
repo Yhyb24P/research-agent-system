@@ -14,6 +14,8 @@ from researchd.context.builder import CloudContextSelection
 from researchd.collaboration.adapters import CloudLeadAgentAdapter, LocalExecutorAgentAdapter
 from researchd.executor.contracts import ExecutorResult
 from researchd.storage.models import AttemptRecord, WorkOrderRecord
+from researchd.storage.models import DelegationRecord
+from sqlalchemy import select
 
 
 class CollaborationGateway:
@@ -86,3 +88,10 @@ class CollaborationGateway:
 
     async def cancel(self, attempt_id: str) -> None:
         await self.executor.cancel(attempt_id)
+
+    def assigned_agent_for(self, work_order_id: str) -> str | None:
+        if self.delegations is None:
+            return None
+        with self.delegations.sessions() as session:
+            row = session.scalar(select(DelegationRecord.assigned_agent_id).where(DelegationRecord.work_order_id == work_order_id).order_by(DelegationRecord.created_at.desc()).limit(1))
+            return row

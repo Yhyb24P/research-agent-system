@@ -88,6 +88,13 @@ class ResearchOrchestrator:
         self.limits = limits
         self.transitions = TransactionalTransitionService(sessions)
 
+    def _agent_actor(self, work_order_id: str, *, fallback_type: str, fallback_id: str) -> tuple[str, str]:
+        if self.collaboration is not None:
+            agent_id = self.collaboration.assigned_agent_for(work_order_id)
+            if agent_id is not None:
+                return "agent", agent_id
+        return fallback_type, fallback_id
+
     def create_run(self, *, workspace_id: str, objective: str, run_id: str | None = None) -> str:
         identifier = run_id or f"run_{uuid4().hex}"
         now = utc_now()
@@ -375,8 +382,9 @@ class ResearchOrchestrator:
             result = await (self.collaboration.execute(order, attempt) if self.collaboration else self.executor.execute(order, attempt))
             self._store_execution_result(attempt.attempt_id, result)
         if result.status != "execution_complete":
+            actor_type, actor_id = self._agent_actor(order.work_order_id, fallback_type="executor", fallback_id="local-executor")
             self.transitions.transition_attempt(attempt.attempt_id, attempt.version, AttemptState.FAILED,
-                event_type="EXECUTION_FAILED", actor_type="executor", actor_id="local-executor", correlation_id=attempt.attempt_id)
+                event_type="EXECUTION_FAILED", actor_type=actor_type, actor_id=actor_id, correlation_id=attempt.attempt_id)
             refreshed = self._order(order.work_order_id)
             self.transitions.transition_work_order(refreshed.work_order_id, refreshed.version, WorkOrderState.EXECUTION_FAILED,
                 event_type="EXECUTION_FAILED", actor_type="controller", actor_id="orchestrator", correlation_id=attempt.attempt_id)
@@ -448,22 +456,23 @@ class ResearchOrchestrator:
             self.transitions.transition_work_order(current.work_order_id, current.version, WorkOrderState.ACCEPTED,
                 event_type="WORK_ORDER_ACCEPTED", actor_type="controller", actor_id="orchestrator", correlation_id=current.work_order_id)
             return True
+        actor_type, actor_id = self._agent_actor(current.work_order_id, fallback_type="cloud_lead", fallback_id="cloud-lead")
         if decision is ReviewDecisionKind.HUMAN_REQUIRED:
             self.transitions.transition_work_order(current.work_order_id, current.version, WorkOrderState.HUMAN_REQUIRED,
-                event_type="HUMAN_REQUIRED", actor_type="cloud_lead", actor_id="cloud-lead", correlation_id=current.work_order_id)
+                event_type="HUMAN_REQUIRED", actor_type=actor_type, actor_id=actor_id, correlation_id=current.work_order_id)
             self._transition_run(run_id, ResearchRunState.WAITING_HUMAN, "HUMAN_REQUIRED")
             return False
         if decision is ReviewDecisionKind.ABORT_RECOMMENDED:
             self.transitions.transition_work_order(current.work_order_id, current.version, WorkOrderState.FAILED,
-                event_type="ABORT_RECOMMENDED", actor_type="cloud_lead", actor_id="cloud-lead", correlation_id=current.work_order_id)
+                event_type="ABORT_RECOMMENDED", actor_type=actor_type, actor_id=actor_id, correlation_id=current.work_order_id)
             self._transition_run(run_id, ResearchRunState.FAILED, "ABORT_RECOMMENDED")
             return False
         if decision is ReviewDecisionKind.MORE_EVIDENCE:
             self.transitions.transition_work_order(current.work_order_id, current.version, WorkOrderState.MORE_EVIDENCE_REQUIRED,
-                event_type="MORE_EVIDENCE_REQUIRED", actor_type="cloud_lead", actor_id="cloud-lead", correlation_id=current.work_order_id)
+                event_type="MORE_EVIDENCE_REQUIRED", actor_type=actor_type, actor_id=actor_id, correlation_id=current.work_order_id)
             current = self._order(current.work_order_id)
         self.transitions.transition_work_order(current.work_order_id, current.version, WorkOrderState.REVISION_REQUIRED,
-            event_type="REVISION_REQUIRED", actor_type="cloud_lead", actor_id="cloud-lead", correlation_id=current.work_order_id,
+            event_type="REVISION_REQUIRED", actor_type=actor_type, actor_id=actor_id, correlation_id=current.work_order_id,
             metadata={"decision": decision.value})
         # The next objective is carried into the new WorkOrder only; the dispatched
         # predecessor remains immutable and fully traceable.
@@ -503,8 +512,8 @@ class ResearchOrchestrator:
             ))
             session.add(AuditEventRecord(
                 event_id=f"evt_{uuid4().hex}", event_type="REVIEW_DECISION_RECORDED", run_id=run_id,
-                entity_type="work_order", entity_id=order.work_order_id, actor_type="cloud_lead",
-                actor_id="cloud-lead", timestamp=now, correlation_id=order.work_order_id,
+                entity_type="work_order", entity_id=order.work_order_id, actor_type=self._agent_actor(order.work_order_id, fallback_type="cloud_lead", fallback_id="cloud-lead")[0],
+                actor_id=self._agent_actor(order.work_order_id, fallback_type="cloud_lead", fallback_id="cloud-lead")[1], timestamp=now, correlation_id=order.work_order_id,
                 causation_id=result.interaction_id, metadata_json={"decision": result.output.decision.value},
             ))
 
