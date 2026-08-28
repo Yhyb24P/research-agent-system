@@ -12,6 +12,7 @@ from researchd.collaboration.delegation import DelegationService
 from researchd.collaboration.invocation import InvocationService
 from researchd.collaboration.adapters import CloudLeadAgentAdapter, LocalExecutorAgentAdapter
 from researchd.collaboration.gateway import CollaborationGateway
+from researchd.collaboration.selector import AgentSelector
 from researchd.agents.cloud_lead import CloudLeadAdapter
 from researchd.executor.worker import LocalExecutorWorker
 from researchd.collaboration.contracts import AgentInvocationRequest, AgentInvocationResult, Delegation
@@ -140,3 +141,16 @@ def test_gateway_tracking_creates_delegation_and_invocation(database: tuple[Path
         invocation = session.get(AgentInvocationRecord, str(tracking[1]))
         assert delegation is not None and delegation.state == "ASSIGNED"
         assert invocation is not None and invocation.status == InvocationStatus.SUCCEEDED.value
+
+
+def test_selector_is_deterministic_and_requires_healthy_runtime(database: tuple[Path, sessionmaker[Session]]) -> None:
+    _, sessions = database
+    registry = AgentRegistryService(sessions)
+    registry.register_profile(profile(AgentId("agent_a")))
+    registry.register_profile(AgentProfile(agent_id=AgentId("agent_b"), display_name="B", roles=("executor",), skills=("code.modify",), trust_zone=AgentTrustZone.LOCAL_PRIVATE, labels={"priority": "5"}))
+    registry.register_runtime(AgentRuntime(runtime_id=AgentRuntimeId("runtime_a"), agent_id=AgentId("agent_a"), adapter_kind=AgentAdapterKind.HTTP, runtime_name="A"))
+    registry.register_runtime(AgentRuntime(runtime_id=AgentRuntimeId("runtime_b"), agent_id=AgentId("agent_b"), adapter_kind=AgentAdapterKind.HTTP, runtime_name="B"))
+    registry.heartbeat("runtime_a")
+    registry.heartbeat("runtime_b")
+    selected = AgentSelector(sessions).select(required_roles=("executor",), required_skills=("code.modify",))
+    assert selected is not None and selected.agent_id == "agent_b"
