@@ -47,6 +47,8 @@ pass status with:
   --manifest release-manifest.json \
   --preflight-evidence dq01-preflight-evidence.json \
   --storage-evidence dq05-storage-evidence.json \
+  --dr-evidence dq04-dr-evidence.json \
+  --cloud-evidence dq03-cloud-evidence.json \
   --output dq06-evidence-check.json
 ```
 
