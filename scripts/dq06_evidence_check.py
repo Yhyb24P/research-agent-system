@@ -16,7 +16,12 @@ def _load(path: Path) -> dict[str, Any]:
     return value
 
 
-def validate(manifest_path: Path, *, storage_evidence: Path | None = None) -> dict[str, Any]:
+def validate(
+    manifest_path: Path,
+    *,
+    storage_evidence: Path | None = None,
+    preflight_evidence: Path | None = None,
+) -> dict[str, Any]:
     manifest = _load(manifest_path)
     source = manifest.get("source")
     checks: list[dict[str, Any]] = []
@@ -29,6 +34,11 @@ def validate(manifest_path: Path, *, storage_evidence: Path | None = None) -> di
         evidence_commit = evidence.get("release_commit")
         checks.append({"name": "storage_evidence_commit_matches", "passed": evidence_commit == commit})
         checks.append({"name": "storage_evidence_passed", "passed": evidence.get("passed") is True})
+    if preflight_evidence is not None:
+        evidence = _load(preflight_evidence)
+        checks.append({"name": "preflight_evidence_commit_matches", "passed": evidence.get("release_commit") == commit})
+        preflight_failures = evidence.get("failures")
+        checks.append({"name": "preflight_evidence_passed", "passed": isinstance(preflight_failures, list) and not preflight_failures})
     failures = [item["name"] for item in checks if not item["passed"]]
     return {"evidence_version": 1, "manifest": str(manifest_path), "checks": checks, "failures": failures, "passed": not failures}
 
@@ -37,10 +47,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--storage-evidence", type=Path)
+    parser.add_argument("--preflight-evidence", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     try:
-        report = validate(args.manifest, storage_evidence=args.storage_evidence)
+        report = validate(args.manifest, storage_evidence=args.storage_evidence, preflight_evidence=args.preflight_evidence)
     except ValueError as error:
         parser.error(str(error))
     args.output.parent.mkdir(parents=True, exist_ok=True)

@@ -21,6 +21,10 @@ def command_output(*argv: str) -> str | None:
         return None
 
 
+def source_commit() -> str | None:
+    return command_output("git", "rev-parse", "HEAD")
+
+
 def collect() -> dict[str, Any]:
     executable = shutil.which("bwrap")
     mode: str | None = None
@@ -32,6 +36,7 @@ def collect() -> dict[str, Any]:
     userns_value = userns_path.read_text().strip() if userns_path.is_file() else None
     cgroup = command_output("stat", "-fc", "%T", "/sys/fs/cgroup")
     return {
+        "release_commit": source_commit(),
         "host": {
             "os": platform.platform(),
             "kernel": platform.release(),
@@ -74,10 +79,15 @@ def failures(report: dict[str, Any]) -> list[str]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--strict", action="store_true", help="exit non-zero when a required preflight check fails")
+    parser.add_argument("--output", type=Path, help="also write the JSON report to this path")
     args = parser.parse_args()
     report = collect()
     report["failures"] = failures(report)
-    print(json.dumps(report, ensure_ascii=False, indent=2))
+    rendered = json.dumps(report, ensure_ascii=False, indent=2) + "\n"
+    print(rendered, end="")
+    if args.output:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(rendered, encoding="utf-8")
     return 1 if args.strict and report["failures"] else 0
 
 

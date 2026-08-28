@@ -45,6 +45,7 @@ pass status with:
 ```bash
 .venv/bin/python scripts/dq06_evidence_check.py \
   --manifest release-manifest.json \
+  --preflight-evidence dq01-preflight-evidence.json \
   --storage-evidence dq05-storage-evidence.json \
   --output dq06-evidence-check.json
 ```

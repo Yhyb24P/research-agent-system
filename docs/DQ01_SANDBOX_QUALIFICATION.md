@@ -9,7 +9,7 @@ The result is valid only for the host/runtime manifest captured by DQ00.
 Run the following before destructive or race-oriented tests:
 
 ```text
-.venv/bin/python scripts/dq01_preflight.py --strict
+.venv/bin/python scripts/dq01_preflight.py --strict --output dq01-preflight-evidence.json
 ```
 
 The report records the OS/kernel/architecture, Bubblewrap path/version/mode/file
