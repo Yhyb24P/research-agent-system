@@ -3,7 +3,8 @@ import json
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
+import pytest
 
 from alembic import command
 from alembic.config import Config
@@ -19,6 +20,7 @@ from researchd.domain.ids import VerificationId
 from researchd.executor.contracts import ExecutorResult
 from researchd.models.cloud import CloudCallBudget, CloudModelRequest, CloudModelResponse, CloudPricing, CloudUsage
 from researchd.orchestrator.engine import OrchestrationLimits, ResearchOrchestrator
+from researchd.collaboration.gateway import CollaborationGateway
 from researchd.cli.main import build_parser
 from researchd.policy.approval import ApprovalService
 from researchd.policy.engine import BudgetLimits, DeterministicPolicyEngine, RecordingPolicyEngine
@@ -282,6 +284,18 @@ def test_cli_parser_exposes_only_local_status_controls() -> None:
     assert build_parser().parse_args(["delegation", "list", "--run", "run_demo"]).delegation_command == "list"
     assert build_parser().parse_args(["run", "status", "run_demo"]).run_command == "status"
     assert build_parser().parse_args(["events", "watch", "run_demo"]).first == "watch"
+
+
+def test_orchestrator_accepts_collaboration_only_constructor(tmp_path: Path) -> None:
+    sessions, _, _, _ = make_orchestrator(tmp_path, cloud_responses=[])
+    policy = RecordingPolicyEngine(DeterministicPolicyEngine(), sessions)
+    controller = ResearchOrchestrator(
+        sessions, policy=policy, verifier=FakeVerifier(sessions),
+        collaboration=cast(CollaborationGateway, object()),
+    )
+    assert controller.collaboration is not None
+    with pytest.raises(TypeError, match="cloud and executor"):
+        ResearchOrchestrator(sessions, policy=policy, verifier=FakeVerifier(sessions))
     assert build_parser().parse_args(["events", "run_demo", "--after", "evt_1"]).after_event_id == "evt_1"
 
 

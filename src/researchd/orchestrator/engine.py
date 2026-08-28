@@ -65,15 +65,19 @@ class ResearchOrchestrator:
     """One controller instance; all transitions are persisted before side effects."""
 
     def __init__(
-        self, sessions: sessionmaker[Session], cloud: CloudLeadAdapter,
-        policy: RecordingPolicyEngine | PolicyEvaluator, executor: ExecutionDriver,
-        verifier: VerificationDriver, *, collaboration: CollaborationGateway | None = None, approvals: ApprovalService | None = None,
+        self, sessions: sessionmaker[Session], cloud: CloudLeadAdapter | None = None,
+        policy: RecordingPolicyEngine | PolicyEvaluator | None = None, executor: ExecutionDriver | None = None,
+        verifier: VerificationDriver | None = None, *, collaboration: CollaborationGateway | None = None, approvals: ApprovalService | None = None,
         jobs: JobManager | None = None,
         workspace_capabilities: frozenset[Capability] = frozenset(),
         user_capabilities: frozenset[Capability] = frozenset(),
         maximum_budget: BudgetLimits = BudgetLimits(7200, 7200, 1200, 16_384, 16_384),
         limits: OrchestrationLimits = OrchestrationLimits(),
     ) -> None:
+        if policy is None or verifier is None:
+            raise TypeError("policy and verifier are required")
+        if collaboration is None and (cloud is None or executor is None):
+            raise TypeError("cloud and executor are required without collaboration")
         self.sessions = sessions
         self.cloud = cloud
         self.policy = policy
@@ -87,6 +91,16 @@ class ResearchOrchestrator:
         self.maximum_budget = maximum_budget
         self.limits = limits
         self.transitions = TransactionalTransitionService(sessions)
+
+    def _legacy_cloud(self) -> CloudLeadAdapter:
+        if self.cloud is None:
+            raise OrchestrationError("Cloud Lead compatibility adapter is not configured")
+        return self.cloud
+
+    def _legacy_executor(self) -> ExecutionDriver:
+        if self.executor is None:
+            raise OrchestrationError("executor compatibility adapter is not configured")
+        return self.executor
 
     def _agent_actor(self, work_order_id: str, *, fallback_type: str, fallback_id: str) -> tuple[str, str]:
         if self.collaboration is not None:
@@ -159,7 +173,7 @@ class ResearchOrchestrator:
         if not self._consume_cloud_call(run_id, run):
             return False
         try:
-            result = await (self.collaboration.plan(CloudContextSelection(run_id=run_id)) if self.collaboration else self.cloud.propose_plan(CloudContextSelection(run_id=run_id)))
+            result = await (self.collaboration.plan(CloudContextSelection(run_id=run_id)) if self.collaboration else self._legacy_cloud().propose_plan(CloudContextSelection(run_id=run_id)))
         except (CloudProviderUnavailable, TimeoutError) as error:
             self._transition_run(run_id, ResearchRunState.WAITING_EXTERNAL, "CLOUD_PLAN_WAITING", {"error": type(error).__name__})
             return False
@@ -391,7 +405,7 @@ class ResearchOrchestrator:
             raise OrchestrationError("EXECUTING WorkOrder has no Attempt")
         result = self._stored_execution_result(attempt.attempt_id)
         if result is None:
-            result = await (self.collaboration.execute(order, attempt) if self.collaboration else self.executor.execute(order, attempt))
+            result = await (self.collaboration.execute(order, attempt) if self.collaboration else self._legacy_executor().execute(order, attempt))
             self._store_execution_result(attempt.attempt_id, result)
         if result.status != "execution_complete":
             actor_type, actor_id = self._agent_actor(order.work_order_id, fallback_type="executor", fallback_id="local-executor")
@@ -444,7 +458,7 @@ class ResearchOrchestrator:
             result = await (self.collaboration.review(CloudContextSelection(
                 run_id=run_id, work_order_id=order.work_order_id,
                 verification_id=self._latest_verification_id(order.work_order_id),
-            )) if self.collaboration else self.cloud.review(CloudContextSelection(
+            )) if self.collaboration else self._legacy_cloud().review(CloudContextSelection(
                 run_id=run_id, work_order_id=order.work_order_id,
                 verification_id=self._latest_verification_id(order.work_order_id),
             )))
@@ -551,7 +565,7 @@ class ResearchOrchestrator:
             current.updated_at = utc_now()
         for attempt in self._active_attempts(run_id):
             # Cancellation is best-effort at the backend, but the state is never silently resumed.
-            await (self.collaboration.cancel(attempt.attempt_id) if self.collaboration else self.executor.cancel(attempt.attempt_id))
+            await (self.collaboration.cancel(attempt.attempt_id) if self.collaboration else self._legacy_executor().cancel(attempt.attempt_id))
             current_attempt = self._attempt(attempt.attempt_id)
             self.transitions.transition_attempt(current_attempt.attempt_id, current_attempt.version, AttemptState.CANCELLED,
                 event_type="ATTEMPT_CANCELLED", actor_type="controller", actor_id="orchestrator", correlation_id=current_attempt.attempt_id)
