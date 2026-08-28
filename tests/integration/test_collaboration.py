@@ -64,6 +64,22 @@ def test_registry_rejects_duplicate_profile(database: tuple[Path, sessionmaker[S
         registry.register_profile(profile())
 
 
+def test_registry_profile_lifecycle_advances_snapshot_version(database: tuple[Path, sessionmaker[Session]]) -> None:
+    _, sessions = database
+    registry = AgentRegistryService(sessions)
+    registry.register_profile(profile())
+    before = registry.get_agent("agent_executor")
+    registry.update_profile(profile().model_copy(update={"skills": ("code.inspect",)}))
+    after = registry.get_agent("agent_executor")
+    assert before.profile_version == 1
+    assert after.profile_version == 2
+    assert after.skills == ("code.inspect",)
+    registry.disable("agent_executor")
+    assert not registry.get_agent("agent_executor").enabled
+    registry.enable("agent_executor")
+    assert registry.get_agent("agent_executor").enabled
+
+
 def test_discovery_descriptor_does_not_persist_or_enable_agent(database: tuple[Path, sessionmaker[Session]]) -> None:
     _, sessions = database
     registry = AgentRegistryService(sessions)
