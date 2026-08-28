@@ -9,6 +9,13 @@ and aggregate cloud/verifier metrics match authoritative records.
 
 This is a bounded regression signal, not a production endurance certificate.
 
+The repository now exposes read-only storage metrics for this gate: SQLite
+database and WAL bytes, regular CAS bytes/file count, and backup manifest age.
+They are available through `collect_storage_metrics(...)` and Prometheus text
+output. A production soak must still define acceptable growth and maximum
+backup age thresholds for the target environment; collection alone is not a
+freshness policy.
+
 ## Production qualification still required
 
 Run a target-environment workload with mixed success/failure, approvals,

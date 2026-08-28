@@ -32,7 +32,7 @@ from researchd.executor.contracts import LocalAgentRequest
 from researchd.orchestrator.engine import ResearchOrchestrator
 from researchd.policy.engine import BudgetLimits, DeterministicPolicyEngine, RecordingPolicyEngine
 from researchd.storage.models import AttemptRecord, AuditEventRecord, VerificationResultRecord, WorkOrderRecord
-from researchd.observability import collect_metrics
+from researchd.observability import collect_metrics, collect_storage_metrics
 from researchd.storage.models import ResearchRunRecord
 from researchd.testing.faults import FaultInjector, InjectedFault
 from test_orchestrator import _proposal, _review, make_orchestrator
@@ -119,6 +119,23 @@ def test_sqlite_and_artifact_backup_restore_validates_checksums(tmp_path: Path) 
     (tampered / "manifest.json").write_text(json.dumps(tampered_manifest, sort_keys=True) + "\n")
     with pytest.raises(BackupError, match="reference mismatch"):
         restore_snapshot(tampered, tmp_path / "tampered.db", tmp_path / "tampered-artifacts")
+
+
+def test_storage_metrics_report_cas_and_backup_freshness(tmp_path: Path) -> None:
+    sessions, orchestrator, _, _ = make_orchestrator(tmp_path, cloud_responses=[_proposal(), _review()])
+    run_id = orchestrator.create_run(workspace_id="ws_e2e", objective="storage metrics")
+    asyncio.run(orchestrator.run(run_id, max_steps=30))
+    ArtifactService(ContentAddressedArtifactStore(tmp_path / "artifacts"), sessions).register(
+        b"storage metric payload", mime_type="text/plain", artifact_type="fixture",
+        classification=DataClassification.PUBLIC, producer_type="test", producer_id="storage-test",
+    )
+    backup_dir = tmp_path / "storage-backup"
+    backup_snapshot(tmp_path / "orchestrator.db", tmp_path / "artifacts", backup_dir)
+    metrics = collect_storage_metrics(tmp_path / "orchestrator.db", tmp_path / "artifacts", backup_dir)
+    assert metrics.database_size_bytes > 0
+    assert metrics.cas_file_count == 1 and metrics.cas_size_bytes > 0
+    assert metrics.backup_manifest_present and metrics.backup_age_seconds is not None
+    assert "research_storage_cas_files 1" in metrics.prometheus()
 
 
 def test_fault_injector_is_one_shot_and_auditable() -> None:
