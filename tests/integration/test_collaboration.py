@@ -14,6 +14,7 @@ from researchd.collaboration.adapters import CloudLeadAgentAdapter, LocalExecuto
 from researchd.collaboration.gateway import CollaborationGateway
 from researchd.collaboration.messages import CollaborationMessageService
 from researchd.collaboration.heterogeneous import A2ARemoteAgentAdapter, HttpAgentAdapter, HttpAgentClient, LocalProcessAgentAdapter, ProcessAgentRunner
+from researchd.collaboration.runtime import AgentAdapterCatalog
 from researchd.adapters.a2a.adapter import A2AAdapter
 from researchd.collaboration.selector import AgentSelector
 from researchd.context.agent_context import AgentContextBuilder, AgentContextSelection
@@ -237,3 +238,16 @@ def test_heterogeneous_adapters_keep_invocation_scope() -> None:
     assert http_result.reason_code == "HTTP_PAYLOAD_REQUIRED"
     assert process_result.reason_code == "PROCESS_PAYLOAD_REQUIRED"
     assert a2a_result.reason_code == "A2A_SCOPE_REQUIRED"
+
+
+def test_adapter_catalog_resolves_enabled_healthy_runtime(database: tuple[Path, sessionmaker[Session]]) -> None:
+    _, sessions = database
+    registry = AgentRegistryService(sessions)
+    registry.register_profile(profile())
+    registry.register_runtime(AgentRuntime(runtime_id=AgentRuntimeId("runtime_http"), agent_id=AgentId("agent_executor"), adapter_kind=AgentAdapterKind.HTTP, runtime_name="HTTP", endpoint_ref="http://127.0.0.1"))
+    registry.heartbeat("runtime_http")
+    catalog = AgentAdapterCatalog(sessions)
+    catalog.register(AgentAdapterKind.HTTP, HttpAgentAdapter(cast(HttpAgentClient, None)))
+    runtime, adapter = catalog.resolve("runtime_http")
+    assert runtime.adapter_kind is AgentAdapterKind.HTTP and isinstance(adapter, HttpAgentAdapter)
+    assert asyncio.run(catalog.health("runtime_http")).healthy
