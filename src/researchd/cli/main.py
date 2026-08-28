@@ -17,6 +17,7 @@ def build_parser() -> argparse.ArgumentParser:
     events = subparsers.add_parser("events", help="show the append-only run trace")
     events.add_argument("first")
     events.add_argument("second", nargs="?")
+    events.add_argument("--after", dest="after_event_id")
     cancel = subparsers.add_parser("cancel", help="request run cancellation")
     cancel.add_argument("run_id")
     agent = subparsers.add_parser("agent", help="inspect registered agents")
@@ -42,7 +43,7 @@ def dispatch(api: LocalControlAPI, argv: list[str] | None = None) -> dict[str, A
     if args.command == "status":
         return api.run_status(args.run_id)
     if args.command == "events":
-        return api.events(args.second if args.first == "watch" else args.first)
+        return api.events(args.second if args.first == "watch" else args.first, after_event_id=args.after_event_id)
     if args.command == "agent":
         return api.agents() if args.agent_command == "list" else api.agent(args.agent_id)
     if args.command == "delegation":

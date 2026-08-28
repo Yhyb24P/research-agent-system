@@ -282,6 +282,7 @@ def test_cli_parser_exposes_only_local_status_controls() -> None:
     assert build_parser().parse_args(["delegation", "list", "--run", "run_demo"]).delegation_command == "list"
     assert build_parser().parse_args(["run", "status", "run_demo"]).run_command == "status"
     assert build_parser().parse_args(["events", "watch", "run_demo"]).first == "watch"
+    assert build_parser().parse_args(["events", "run_demo", "--after", "evt_1"]).after_event_id == "evt_1"
 
 
 def test_retry_unchanged_work_order_creates_new_attempt(tmp_path: Path) -> None:

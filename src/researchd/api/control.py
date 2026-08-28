@@ -47,17 +47,25 @@ class LocalControlAPI:
                 "revision_reason": order.revision_reason,
             }
 
-    def events(self, run_id: str) -> list[dict[str, Any]]:
+    def events(self, run_id: str, *, after_event_id: str | None = None) -> list[dict[str, Any]]:
         with self.sessions() as session:
             records: Sequence[AuditEventRecord] = session.scalars(
                 select(AuditEventRecord).where(AuditEventRecord.run_id == run_id).order_by(AuditEventRecord.timestamp, AuditEventRecord.event_id),
             ).all()
-            return [{
+            payload = [{
                 "event_id": event.event_id, "event_type": event.event_type,
                 "entity_type": event.entity_type, "entity_id": event.entity_id,
                 "timestamp": event.timestamp.isoformat(), "correlation_id": event.correlation_id,
                 "metadata": event.metadata_json,
             } for event in records]
+            if after_event_id is None:
+                return payload
+            for index, event in enumerate(payload):
+                if event["event_id"] == after_event_id:
+                    return payload[index + 1:]
+            # An unknown cursor is treated as an initial read. This keeps clients
+            # resilient when their cursor predates retention or a new run.
+            return payload
 
     def agents(self) -> list[dict[str, Any]]:
         with self.sessions() as session:

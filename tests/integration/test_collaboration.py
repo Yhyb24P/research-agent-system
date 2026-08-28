@@ -289,7 +289,14 @@ def test_web_and_tui_clients_share_local_control_resources(tmp_path: Path) -> No
     api = LocalControlAPI(sessions, orchestrator)
     router = ControlResourceRouter(api)
     assert router.get("/api/runs/" + run_id)[0] == 200
-    assert router.get("/api/events/" + run_id)[0] == 200
+    status, event_payload = router.get("/api/events/" + run_id)
+    assert status == 200
+    assert isinstance(event_payload, dict)
+    events = event_payload["events"]
+    if events:
+        _, tail_payload = router.get(f"/api/events/{run_id}?after={events[0]['event_id']}")
+        assert isinstance(tail_payload, dict)
+        assert [item["event_id"] for item in tail_payload["events"]] == [item["event_id"] for item in events[1:]]
     assert router.get("/api/timeline/" + run_id)[0] == 200
     assert router.get("/api/approvals?run=" + run_id)[0] == 200
     assert router.get("/api/artifacts?run=" + run_id)[0] == 200

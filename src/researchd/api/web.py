@@ -34,7 +34,7 @@ class ControlResourceRouter:
             if len(parts) == 3 and parts[:2] == ["api", "runs"] and parts[2]:
                 return 200, self.api.run_status(parts[2])
             if len(parts) == 3 and parts[:2] == ["api", "events"] and parts[2]:
-                return 200, {"events": self.api.events(parts[2])}
+                return 200, {"events": self.api.events(parts[2], after_event_id=query.get("after", [None])[0])}
         except LookupError:
             return 404, {"error": "not found"}
         return 404, {"error": "unknown resource"}
