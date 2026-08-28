@@ -169,3 +169,17 @@ def test_agent_context_rejects_untrusted_target_before_egress(database: tuple[Pa
     selection = AgentContextSelection(target_agent_id="agent_ext", target_runtime_id="runtime_ext", target_trust_zone=AgentTrustZone.EXTERNAL_UNTRUSTED, purpose=DelegationPurpose.EXECUTE, run_id="run_test", artifact_ids=(artifact.artifact_id,))
     with pytest.raises(PermissionError, match="not eligible"):
         builder.build(selection)
+
+
+def test_cross_trust_redelegation_rebuilds_target_specific_bundle(database: tuple[Path, sessionmaker[Session]]) -> None:
+    from researchd.artifacts.store import ContentAddressedArtifactStore
+    from researchd.context.redaction import DeterministicRedactor
+    from researchd.context.builder import ContextBuilder
+    path, sessions = database
+    store = ContentAddressedArtifactStore(path.parent / "acp-context-rebuild")
+    builder = AgentContextBuilder(ContextBuilder(sessions, store, DeterministicRedactor()))
+    local = builder.build(AgentContextSelection(target_agent_id="agent_local", target_runtime_id="runtime_local", target_trust_zone=AgentTrustZone.LOCAL_PRIVATE, purpose=DelegationPurpose.EXECUTE, run_id="run_test"))
+    cloud = builder.build(AgentContextSelection(target_agent_id="agent_cloud", target_runtime_id="runtime_cloud", target_trust_zone=AgentTrustZone.EXTERNAL_CLOUD, purpose=DelegationPurpose.EXECUTE, run_id="run_test", previous_bundle_sha256=local.bundle_sha256))
+    assert cloud.rebuilt_from_previous_bundle
+    assert cloud.bundle_sha256 != local.bundle_sha256
+    assert cloud.policy.allowed_classifications == frozenset({DataClassification.PUBLIC, DataClassification.CLOUD_SAFE})
