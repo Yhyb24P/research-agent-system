@@ -3,6 +3,7 @@
 from collections import Counter
 from dataclasses import dataclass
 from decimal import Decimal
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import select
@@ -12,6 +13,7 @@ from researchd.storage.models import (
     AgentInteractionRecord, ApprovalRequestRecord, JobRecord, PolicyDecisionRecord,
     ReviewDecisionRecord, VerificationResultRecord, AttemptRecord, WorkOrderRecord,
     DelegationRecord, AgentInvocationRecord,
+    AgentRecord, AgentRuntimeRecord,
 )
 
 
@@ -28,6 +30,8 @@ class MetricsSnapshot:
     review_decisions: dict[str, int]
     delegations: dict[str, int]
     invocations: dict[str, int]
+    agent_utilization: dict[str, float]
+    agent_runtime_health: dict[str, int]
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -41,6 +45,8 @@ class MetricsSnapshot:
             "verifier_outcomes": dict(self.verifier_outcomes),
             "review_decisions": dict(self.review_decisions),
             "delegations": dict(self.delegations), "invocations": dict(self.invocations),
+            "agent_utilization": dict(self.agent_utilization),
+            "agent_runtime_health": dict(self.agent_runtime_health),
         }
 
     def prometheus(self) -> str:
@@ -87,7 +93,13 @@ def collect_metrics(sessions: sessionmaker[Session], *, run_id: str | None = Non
         reviews = session.scalars(review_query).all()
         delegations = session.scalars(delegation_query).all()
         invocations = session.scalars(invocation_query).all()
+        agents = session.scalars(select(AgentRecord).order_by(AgentRecord.agent_id)).all()
+        runtimes = session.scalars(select(AgentRuntimeRecord).order_by(AgentRuntimeRecord.runtime_id)).all()
         cloud_statuses = Counter(item.status for item in interactions)
+        active_by_agent = Counter(item.assigned_agent_id for item in delegations if item.state in {"ASSIGNED", "RUNNING"} and item.assigned_agent_id is not None)
+        utilization = {agent.agent_id: round(active_by_agent.get(agent.agent_id, 0) / agent.max_parallel_delegations, 6) for agent in agents}
+        reference = datetime.now(UTC)
+        runtime_health = {runtime.runtime_id: int(runtime.enabled and runtime.lease_expires_at is not None and runtime.lease_expires_at > reference and any(agent.agent_id == runtime.agent_id and agent.enabled for agent in agents)) for runtime in runtimes}
         return MetricsSnapshot(
             cloud_calls=len(interactions),
             cloud_tokens=sum(item.total_tokens for item in interactions),
@@ -100,4 +112,6 @@ def collect_metrics(sessions: sessionmaker[Session], *, run_id: str | None = Non
             review_decisions=dict(Counter(item.decision for item in reviews)),
             delegations=dict(Counter(item.state for item in delegations)),
             invocations=dict(Counter(item.status for item in invocations)),
+            agent_utilization=utilization,
+            agent_runtime_health=runtime_health,
         )

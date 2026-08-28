@@ -252,11 +252,17 @@ def test_approval_metrics_are_scoped_to_run(database: tuple[Path, sessionmaker[S
     from datetime import timedelta
     _, sessions = database
     approvals = ApprovalService(sessions)
+    registry = AgentRegistryService(sessions)
+    registry.register_profile(profile())
+    registry.register_runtime(AgentRuntime(runtime_id=AgentRuntimeId("runtime_qwen"), agent_id=AgentId("agent_executor"), adapter_kind=AgentAdapterKind.HTTP, runtime_name="Qwen"))
+    registry.heartbeat("runtime_qwen")
     expires = datetime.now(UTC) + timedelta(hours=1)
     approvals.request(operation_type="test", parameters={"run": "run_test"}, requested_by="controller", reason="test", risk_level="low", resource_scope={}, budget_delta={}, expires_at=expires, run_id="run_test", requester_actor_type="controller", requester_actor_id="controller")
     approvals.request(operation_type="test", parameters={"run": "other"}, requested_by="controller", reason="test", risk_level="low", resource_scope={}, budget_delta={}, expires_at=expires, run_id=None)
     metrics = collect_metrics(sessions, run_id="run_test")
     assert metrics.approval_statuses == {"PENDING": 1}
+    assert metrics.agent_utilization == {"agent_executor": 0.0}
+    assert metrics.agent_runtime_health == {"runtime_qwen": 1}
 
 
 def test_human_directive_is_append_only_and_has_no_control_effect(database: tuple[Path, sessionmaker[Session]]) -> None:
