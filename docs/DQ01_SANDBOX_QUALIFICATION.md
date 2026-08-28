@@ -39,6 +39,11 @@ only a denied operation or a write anchored inside the workspace and asserts
 that the outside directory is unchanged. This is evidence for the controller's
 directory-FD defense, not a substitute for a target-filesystem stress run.
 
+It also starts a host-side process with a unique environment marker and checks
+that the marker cannot be read through either the host PID's `/proc` path or
+`/proc/self/environ` from inside Bubblewrap. This demonstrates the current
+Linux/WSL PID and environment boundary; it remains scoped to the tested host.
+
 ## Qualification cases still pending
 
 These require the target deployment and must not be marked green from static

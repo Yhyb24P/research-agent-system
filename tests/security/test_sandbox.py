@@ -1,4 +1,5 @@
 import os
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -65,6 +66,26 @@ def test_host_environment_secret_is_not_available(tmp_path: Path, monkeypatch: p
     assert result.exit_code == 0
     assert b"sandbox-must-not-see-8f31" not in result.stdout
     assert b"TASK03_SECRET_TOKEN" not in result.stdout
+
+
+def test_host_pid_and_proc_environment_are_not_visible(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    marker = "DQ01-HOST-PROC-MUST-NOT-BE-VISIBLE-4d8a"
+    host_child = subprocess.Popen(
+        ["/usr/bin/sleep", "5"],
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        env={"DQ01_HOST_MARKER": marker, "PATH": "/usr/bin"},
+    )
+    try:
+        host_proc = run(workspace, ("/usr/bin/cat", f"/proc/{host_child.pid}/environ"))
+        self_proc = run(workspace, ("/usr/bin/cat", "/proc/self/environ"))
+    finally:
+        host_child.terminate()
+        host_child.wait(timeout=2)
+    assert marker.encode() not in host_proc.stdout
+    assert host_proc.exit_code != 0
+    assert marker.encode() not in self_proc.stdout
 
 
 def test_timeout_kills_descendant_before_it_can_escape(tmp_path: Path) -> None:
