@@ -238,6 +238,10 @@ class ApprovalRequestRecord(Base):
     __tablename__ = "approval_requests"
     __table_args__ = (Index("ix_approval_requests_status_expires", "status", "expires_at"),)
     approval_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    run_id: Mapped[str | None] = mapped_column(ForeignKey("research_runs.run_id"))
+    work_order_id: Mapped[str | None] = mapped_column(ForeignKey("work_orders.work_order_id"))
+    requester_actor_type: Mapped[str] = mapped_column(String(32), nullable=False, default="legacy")
+    requester_actor_id: Mapped[str | None] = mapped_column(String(128))
     operation_type: Mapped[str] = mapped_column(String(128), nullable=False)
     canonical_parameters: Mapped[str] = mapped_column(Text, nullable=False)
     parameter_sha256: Mapped[str] = mapped_column(String(64), nullable=False)

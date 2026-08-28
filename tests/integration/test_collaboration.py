@@ -14,6 +14,8 @@ from researchd.collaboration.adapters import CloudLeadAgentAdapter, LocalExecuto
 from researchd.collaboration.gateway import CollaborationGateway
 from researchd.collaboration.selector import AgentSelector
 from researchd.context.agent_context import AgentContextBuilder, AgentContextSelection
+from researchd.observability import collect_metrics
+from researchd.policy.approval import ApprovalService
 from researchd.agents.cloud_lead import CloudLeadAdapter
 from researchd.executor.worker import LocalExecutorWorker
 from researchd.collaboration.contracts import AgentInvocationRequest, AgentInvocationResult, Delegation
@@ -200,3 +202,14 @@ def test_cloud_context_exposes_derived_artifact_provenance(database: tuple[Path,
     assert provenance.classification is DataClassification.CLOUD_SAFE
     assert provenance.source_artifact_ids == (source.artifact_id,)
     assert provenance.transformation_sha256
+
+
+def test_approval_metrics_are_scoped_to_run(database: tuple[Path, sessionmaker[Session]]) -> None:
+    from datetime import timedelta
+    _, sessions = database
+    approvals = ApprovalService(sessions)
+    expires = datetime.now(UTC) + timedelta(hours=1)
+    approvals.request(operation_type="test", parameters={"run": "run_test"}, requested_by="controller", reason="test", risk_level="low", resource_scope={}, budget_delta={}, expires_at=expires, run_id="run_test", requester_actor_type="controller", requester_actor_id="controller")
+    approvals.request(operation_type="test", parameters={"run": "other"}, requested_by="controller", reason="test", risk_level="low", resource_scope={}, budget_delta={}, expires_at=expires, run_id=None)
+    metrics = collect_metrics(sessions, run_id="run_test")
+    assert metrics.approval_statuses == {"PENDING": 1}

@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from researchd.storage.models import (
     AgentInteractionRecord, ApprovalRequestRecord, JobRecord, PolicyDecisionRecord,
     ReviewDecisionRecord, VerificationResultRecord, AttemptRecord, WorkOrderRecord,
+    DelegationRecord, AgentInvocationRecord,
 )
 
 
@@ -25,6 +26,8 @@ class MetricsSnapshot:
     approval_statuses: dict[str, int]
     verifier_outcomes: dict[str, int]
     review_decisions: dict[str, int]
+    delegations: dict[str, int]
+    invocations: dict[str, int]
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -37,6 +40,7 @@ class MetricsSnapshot:
             "approval_statuses": dict(self.approval_statuses),
             "verifier_outcomes": dict(self.verifier_outcomes),
             "review_decisions": dict(self.review_decisions),
+            "delegations": dict(self.delegations), "invocations": dict(self.invocations),
         }
 
     def prometheus(self) -> str:
@@ -64,19 +68,25 @@ def collect_metrics(sessions: sessionmaker[Session], *, run_id: str | None = Non
         approval_query = select(ApprovalRequestRecord)
         verifier_query = select(VerificationResultRecord)
         review_query = select(ReviewDecisionRecord)
+        delegation_query = select(DelegationRecord)
+        invocation_query = select(AgentInvocationRecord)
         if run_id is not None:
             interaction_query = interaction_query.where(AgentInteractionRecord.run_id == run_id)
             job_query = job_query.join(AttemptRecord, AttemptRecord.attempt_id == JobRecord.attempt_id).join(WorkOrderRecord, WorkOrderRecord.work_order_id == AttemptRecord.work_order_id).where(WorkOrderRecord.run_id == run_id)
             policy_query = policy_query.where(PolicyDecisionRecord.run_id == run_id)
-            approval_query = approval_query  # approval records have no run FK in V1
+            approval_query = approval_query.where(ApprovalRequestRecord.run_id == run_id)
             verifier_query = verifier_query.join(WorkOrderRecord, WorkOrderRecord.work_order_id == VerificationResultRecord.work_order_id).where(WorkOrderRecord.run_id == run_id)
             review_query = review_query.where(ReviewDecisionRecord.run_id == run_id)
+            delegation_query = delegation_query.where(DelegationRecord.run_id == run_id)
+            invocation_query = invocation_query.where(AgentInvocationRecord.run_id == run_id)
         interactions = session.scalars(interaction_query).all()
         jobs = session.scalars(job_query).all()
         policies = session.scalars(policy_query).all()
         approvals = session.scalars(approval_query).all()
         verifications = session.scalars(verifier_query).all()
         reviews = session.scalars(review_query).all()
+        delegations = session.scalars(delegation_query).all()
+        invocations = session.scalars(invocation_query).all()
         cloud_statuses = Counter(item.status for item in interactions)
         return MetricsSnapshot(
             cloud_calls=len(interactions),
@@ -88,4 +98,6 @@ def collect_metrics(sessions: sessionmaker[Session], *, run_id: str | None = Non
             approval_statuses=dict(Counter(item.status for item in approvals)),
             verifier_outcomes=dict(Counter(item.overall for item in verifications)),
             review_decisions=dict(Counter(item.decision for item in reviews)),
+            delegations=dict(Counter(item.state for item in delegations)),
+            invocations=dict(Counter(item.status for item in invocations)),
         )

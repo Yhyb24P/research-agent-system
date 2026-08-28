@@ -34,6 +34,8 @@ class ApprovalService:
         self, *, operation_type: str, parameters: Mapping[str, Any], requested_by: str,
         reason: str, risk_level: str, resource_scope: Mapping[str, Any],
         budget_delta: Mapping[str, Any], expires_at: datetime, one_shot: bool = True,
+        run_id: str | None = None, work_order_id: str | None = None,
+        requester_actor_type: str = "legacy", requester_actor_id: str | None = None,
     ) -> ApprovalRequestRecord:
         now = datetime.now(UTC)
         if expires_at.tzinfo is None or expires_at <= now:
@@ -41,6 +43,8 @@ class ApprovalService:
         canonical, digest = parameter_hash(operation_type, parameters)
         record = ApprovalRequestRecord(
             approval_id=f"apr_{uuid4().hex}", operation_type=operation_type,
+            run_id=run_id, work_order_id=work_order_id,
+            requester_actor_type=requester_actor_type, requester_actor_id=requester_actor_id or requested_by,
             canonical_parameters=canonical, parameter_sha256=digest, requested_by=requested_by,
             reason=reason, risk_level=risk_level, resource_scope=dict(resource_scope),
             budget_delta=dict(budget_delta), expires_at=expires_at, one_shot=one_shot,
