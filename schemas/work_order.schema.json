@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/schemas/work-order.schema.json",
+  "title": "WorkOrder",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["work_order_id", "run_id", "objective", "inputs", "requested_capabilities", "constraints", "budget", "acceptance", "expected_outputs", "data_policy", "idempotency_key"],
+  "properties": {
+    "work_order_id": {"type": "string", "pattern": "^wo_[A-Za-z0-9][A-Za-z0-9_-]*$"},
+    "run_id": {"type": "string", "pattern": "^run_[A-Za-z0-9][A-Za-z0-9_-]*$"},
+    "parent_work_order_id": {"type": ["string", "null"], "pattern": "^wo_[A-Za-z0-9][A-Za-z0-9_-]*$"},
+    "objective": {"type": "string", "minLength": 1},
+    "inputs": {"type": "array", "items": {"type": "string"}},
+    "requested_capabilities": {
+      "type": "array",
+      "items": {"enum": ["workspace.read", "workspace.write", "sandbox.shell", "git.diff", "git.status", "test.run", "python.run", "job.submit.gpu", "job.cancel", "network.external", "artifact.create", "artifact.derive", "git.commit", "git.push", "package.install.system"]},
+      "uniqueItems": true
+    },
+    "constraints": {
+      "type": "object", "additionalProperties": false,
+      "properties": {"network": {"enum": ["none", "restricted", "full"]}, "writable_paths": {"type": "array", "items": {"type": "string"}}}
+    },
+    "budget": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "max_wall_seconds": {"type": "integer", "minimum": 1},
+        "max_cpu_seconds": {"type": "integer", "minimum": 0},
+        "max_gpu_seconds": {"type": "integer", "minimum": 0},
+        "max_disk_mb": {"type": "integer", "minimum": 0},
+        "max_output_mb": {"type": "integer", "minimum": 0}
+      }
+    },
+    "acceptance": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          {"$ref": "#/$defs/commandCriterion"}, {"$ref": "#/$defs/metricCriterion"},
+          {"$ref": "#/$defs/artifactCriterion"}, {"$ref": "#/$defs/reproCriterion"}
+        ]
+      }
+    },
+    "expected_outputs": {"type": "array", "items": {"type": "string"}},
+    "data_policy": {
+      "type": "object", "additionalProperties": false, "required": ["default_classification"],
+      "properties": {"default_classification": {"enum": ["PUBLIC", "CLOUD_SAFE", "PROJECT_PRIVATE", "LOCAL_ONLY", "SECRET"]}}
+    },
+    "idempotency_key": {"type": "string", "minLength": 16}
+  },
+  "$defs": {
+    "criterionBase": {
+      "type": "object", "required": ["criterion_id", "type"],
+      "properties": {"criterion_id": {"type": "string", "minLength": 1}}
+    },
+    "commandCriterion": {
+      "type": "object", "additionalProperties": false, "required": ["criterion_id", "type", "command_id"],
+      "properties": {"criterion_id": {"type": "string"}, "type": {"const": "command"}, "command_id": {"type": "string"}, "expected_exit_code": {"type": "integer", "default": 0}, "junit_artifact_id": {"type": ["string", "null"]}, "severity": {"enum": ["hard", "advisory"], "default": "hard"}}
+    },
+    "metricCriterion": {
+      "type": "object", "additionalProperties": false, "required": ["criterion_id", "type", "metric", "operator", "threshold"],
+      "properties": {"criterion_id": {"type": "string"}, "type": {"const": "metric"}, "metric": {"type": "string"}, "operator": {"enum": ["==", "!=", ">", ">=", "<", "<="]}, "threshold": {"type": "number"}, "severity": {"enum": ["hard", "advisory"], "default": "hard"}}
+    },
+    "artifactCriterion": {
+      "type": "object", "additionalProperties": false, "required": ["criterion_id", "type", "artifact_type", "min_count"],
+      "properties": {"criterion_id": {"type": "string"}, "type": {"const": "artifact"}, "artifact_type": {"type": "string"}, "min_count": {"type": "integer", "minimum": 1}, "severity": {"enum": ["hard", "advisory"], "default": "hard"}}
+    },
+    "reproCriterion": {
+      "type": "object", "additionalProperties": false, "required": ["criterion_id", "type", "runs", "required_successes"],
+      "properties": {"criterion_id": {"type": "string"}, "type": {"const": "reproducibility"}, "runs": {"type": "integer", "minimum": 1}, "required_successes": {"type": "integer", "minimum": 1}, "severity": {"enum": ["hard", "advisory"], "default": "hard"}}
+    }
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "research-local-executor",
+  "description": "Bounded executor behind the trusted controller",
+  "url": "http://127.0.0.1:8787/a2a",
+  "version": "1.0.0",
+  "protocolVersion": "1.0.0",
+  "supportedInterfaces": [
+    {
+      "url": "http://127.0.0.1:8787/a2a",
+      "protocolBinding": "HTTP+JSON",
+      "protocolVersion": "1.0.0"
+    }
+  ],
+  "capabilities": {"streaming": false, "pushNotifications": false},
+  "skills": [{"id": "execute-work-order", "name": "Execute bounded WorkOrder"}],
+  "securitySchemes": {}
+}

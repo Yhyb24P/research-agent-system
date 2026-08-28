@@ -1,0 +1,17 @@
+{
+  "work_order_id": "wo_nan_001",
+  "run_id": "run_nan_001",
+  "parent_work_order_id": null,
+  "objective": "Reproduce the first non-finite training loss under a fixed seed.",
+  "inputs": ["repo://current", "artifact://sha256/example-log"],
+  "requested_capabilities": ["workspace.read", "python.run", "test.run", "job.submit.gpu", "artifact.create"],
+  "constraints": {"network": "none", "writable_paths": ["outputs/**"]},
+  "budget": {"max_wall_seconds": 1800, "max_cpu_seconds": 7200, "max_gpu_seconds": 600, "max_disk_mb": 4096, "max_output_mb": 128},
+  "acceptance": [
+    {"criterion_id": "c1", "type": "artifact", "artifact_type": "metrics", "min_count": 1},
+    {"criterion_id": "c2", "type": "metric", "metric": "first_nonfinite_step", "operator": ">=", "threshold": 0}
+  ],
+  "expected_outputs": ["metrics", "run_log", "config_snapshot"],
+  "data_policy": {"default_classification": "LOCAL_ONLY"},
+  "idempotency_key": "6d581c8c2f2346d68a12b1114b9be091"
+}

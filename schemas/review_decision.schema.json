@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/schemas/review-decision.schema.json",
+  "title": "ReviewDecision",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["decision", "work_order_id", "evidence_refs", "deficiencies", "rationale", "requested_evidence"],
+  "properties": {
+    "decision": {"enum": ["ACCEPT", "REVISE", "MORE_EVIDENCE", "REPLAN", "HUMAN_REQUIRED", "ABORT_RECOMMENDED"]},
+    "work_order_id": {"type": "string", "pattern": "^wo_[A-Za-z0-9][A-Za-z0-9_-]*$"},
+    "evidence_refs": {"type": "array", "items": {"type": "string"}},
+    "deficiencies": {"type": "array", "items": {"type": "string"}},
+    "rationale": {"type": "string", "minLength": 1},
+    "requested_next_objective": {"type": ["string", "null"]},
+    "requested_evidence": {"type": "array", "items": {"type": "string"}},
+    "confidence": {"type": ["number", "null"], "minimum": 0, "maximum": 1}
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "decision": "MORE_EVIDENCE",
+  "work_order_id": "wo_nan_001",
+  "evidence_refs": ["ver_nan_001", "obs_first_nonfinite"],
+  "deficiencies": ["Fixed-seed reproduction has only run once."],
+  "rationale": "The deterministic evidence is insufficient for acceptance.",
+  "requested_next_objective": "Repeat the fixed-seed reproduction three times.",
+  "requested_evidence": ["three_run_reproducibility"]
+}

@@ -1,0 +1,4 @@
+<testsuite name="fixture" tests="2" failures="1" errors="0" skipped="0">
+  <testcase name="passes"/>
+  <testcase name="fails"><failure message="fixture failure"/></testcase>
+</testsuite>
