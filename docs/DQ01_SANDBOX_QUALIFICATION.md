@@ -33,6 +33,12 @@ boundary:
 No direct model, plugin, debug, or fallback path was found that can invoke a
 host command outside these typed controller/backend surfaces.
 
+The current RC also includes a broker-level regression that repeatedly replaces
+a workspace parent with a symlink while writes are attempted. The test accepts
+only a denied operation or a write anchored inside the workspace and asserts
+that the outside directory is unchanged. This is evidence for the controller's
+directory-FD defense, not a substitute for a target-filesystem stress run.
+
 ## Qualification cases still pending
 
 These require the target deployment and must not be marked green from static

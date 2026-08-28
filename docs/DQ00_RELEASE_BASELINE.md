@@ -28,7 +28,9 @@ CAS bytes, or runtime database contents.
 - Qualification branch: `main`
 - Current commit: `96d7516a61ee37b2a8e6623e2db8214f1b81dbd0`
 - Schema head: `0007`
-- Regression: 95 pytest tests passed; strict mypy passed for 95 files.
+- Initial functional baseline regression: 95 pytest tests passed; strict mypy
+  passed for 95 files. Current RC reruns the suite after each DQ hardening
+  change; the current count is recorded in the qualification report.
 - Functional baseline at `96d7516`: 140 files / 9215 lines. The RC adds only
   DQ00/DQ01 governance tooling and documentation; the generated manifest is the
   authoritative count for the tagged checkout.
