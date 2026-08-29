@@ -1,0 +1,42 @@
+{
+  "record_version": 1,
+  "candidate_commit": "0000000000000000000000000000000000000000",
+  "candidate_tag": "v0.0.0-rc.example",
+  "environment_fingerprint": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "captured_at": "2026-08-30T00:00:00Z",
+  "storage_backend": {
+    "kind": "replace-with-production-intent-backend",
+    "location_class": "off-host",
+    "account_or_project_reference": "non-secret-reference-required"
+  },
+  "access_control": {
+    "mechanism": "replace-with-actual-access-control",
+    "least_privilege_reviewed": true,
+    "authorized_roles": ["restore-operator"]
+  },
+  "encryption_at_rest": {
+    "enabled": true,
+    "mechanism": "replace-with-actual-encryption",
+    "key_owner": "operations",
+    "non_secret_key_reference": "non-secret-key-reference-required"
+  },
+  "transport_encryption": {
+    "enabled": true,
+    "protocol": "replace-with-actual-transport-protocol"
+  },
+  "restore_authorization": {
+    "required": true,
+    "approver_roles": ["restore-approver"],
+    "procedure": "replace-with-reviewed-restore-authorization-procedure"
+  },
+  "retention": {
+    "retention_days": 30,
+    "protected_snapshot_rule": "retain the latest accepted release restore point"
+  },
+  "deletion": {
+    "procedure": "replace-with-actual-secure-deletion-procedure",
+    "exercised_at": "2026-08-30T00:00:00Z",
+    "evidence_reference": "replace-with-qualification-artifact-reference"
+  },
+  "contains_secrets": false
+}

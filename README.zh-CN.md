@@ -142,6 +142,16 @@ uv run pytest -q tests/qualification/test_dq02_runtime_lifecycle.py
 uv run pytest -q tests/qualification/test_dq03_provider_egress.py
 ```
 
+运行备份、恢复与灾难恢复软件矩阵：
+
+```bash
+uv run pytest -q tests/qualification/test_dq04_backup_restore.py
+```
+
+当前格式的备份必须显式绑定不可变候选 commit 和 RC tag；恢复时还必须独立提供预期的
+commit/tag。旧快照格式和旧数据库 schema 会被直接拒绝，不做就地升级或兼容补丁。
+软件矩阵不能替代 DQ04 验收所需的真实异地存储与 primary-loss 演练。
+
 集成测试是当前可执行 reference workflow。仓库目前是 library/模块化单体基线，尚未
 提供生产 daemon 或浏览器应用的一键启动入口。
 

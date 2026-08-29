@@ -15,5 +15,5 @@ release-manifest.json
 *.db
 *.db-wal
 *.db-shm
-backup/
-backups/
+/backup/
+/backups/

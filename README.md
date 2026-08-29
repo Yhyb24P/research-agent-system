@@ -154,6 +154,18 @@ Run the provider configuration and egress-governance software matrix:
 uv run pytest -q tests/qualification/test_dq03_provider_egress.py
 ```
 
+Run the backup/restore/DR software matrix:
+
+```bash
+uv run pytest -q tests/qualification/test_dq04_backup_restore.py
+```
+
+Current-format backups require an explicit immutable candidate commit and RC
+tag. Restore also requires the independently expected commit and tag; old
+snapshot formats and old database schemas are intentionally rejected rather
+than upgraded in place. The software matrix does not replace the actual
+off-host and primary-loss drill required for DQ04 acceptance.
+
 Integration tests are the executable reference workflow. The repository is a
 library/modular-monolith baseline; it does not yet ship a production daemon or
 browser application bootstrap.
