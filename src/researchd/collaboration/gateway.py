@@ -239,3 +239,9 @@ class CollaborationGateway:
             invocation_ids = session.scalars(select(AgentInvocationRecord.invocation_id).where(AgentInvocationRecord.attempt_id == attempt_id, AgentInvocationRecord.status == InvocationStatus.RUNNING.value)).all()
         for invocation_id in invocation_ids:
             self._finish(InvocationId(invocation_id), success=result.status == "execution_complete", output_type="ExecutorResult", output=result.model_dump(mode="json"), reason=None if result.status == "execution_complete" else result.status)
+
+    def recover_run(self, run_id: str) -> tuple[str, ...]:
+        """Close invocations for which restart reconciliation found no result."""
+        if self.invocations is None:
+            return ()
+        return self.invocations.recover_run(run_id)

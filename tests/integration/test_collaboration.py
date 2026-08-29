@@ -175,6 +175,28 @@ def test_assignment_freezes_profile_and_invocation_is_structured(database: tuple
         assert row is not None
 
 
+def test_invocation_recovery_fails_closed_after_controller_restart(database: tuple[Path, sessionmaker[Session]]) -> None:
+    _, sessions = database
+    registry = AgentRegistryService(sessions)
+    registry.register_profile(profile())
+    registry.register_runtime(AgentRuntime(runtime_id=AgentRuntimeId("runtime_recovery"), agent_id=AgentId("agent_executor"), adapter_kind=AgentAdapterKind.HTTP, runtime_name="Recovery"))
+    delegations = DelegationService(sessions)
+    delegations.create(Delegation(delegation_id=DelegationId("del_recovery"), run_id="run_test", purpose=DelegationPurpose.EXECUTE, idempotency_key="recovery-delegation"))
+    delegations.assign("del_recovery", agent_id="agent_executor", runtime_id="runtime_recovery")
+    invocations = InvocationService(sessions)
+    invocations.start(AgentInvocationRequest(
+        invocation_id=InvocationId("inv_recovery"), delegation_id=DelegationId("del_recovery"), run_id="run_test",
+        agent_id=AgentId("agent_executor"), runtime_id=AgentRuntimeId("runtime_recovery"), purpose=DelegationPurpose.EXECUTE,
+        input_sha256="1" * 64,
+    ))
+    assert invocations.recover_run("run_test") == ("inv_recovery",)
+    with sessions() as session:
+        invocation = session.get(AgentInvocationRecord, "inv_recovery")
+        delegation = session.get(DelegationRecord, "del_recovery")
+        assert invocation is not None and invocation.status == InvocationStatus.FAILED.value and invocation.reason_code == "CONTROLLER_RESTARTED"
+        assert delegation is not None and delegation.state == "FAILED"
+
+
 def test_canonical_adapters_expose_health_and_preserve_boundaries() -> None:
     runtime = AgentRuntime(runtime_id=AgentRuntimeId("runtime_qwen"), agent_id=AgentId("agent_executor"), adapter_kind=AgentAdapterKind.HTTP, runtime_name="Qwen")
     assert asyncio.run(CloudLeadAgentAdapter(cast(CloudLeadAdapter, None)).health(runtime)).healthy

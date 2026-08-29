@@ -37,3 +37,25 @@ class InvocationService:
                 delegation.updated_at = now
                 delegation.completed_at = now
                 delegation.version += 1
+
+    def recover_run(self, run_id: str) -> tuple[str, ...]:
+        """Fail-closed invocations left RUNNING across a controller restart."""
+        now = datetime.now(UTC)
+        recovered: list[str] = []
+        with self.sessions.begin() as session:
+            rows = session.query(AgentInvocationRecord).filter(
+                AgentInvocationRecord.run_id == run_id,
+                AgentInvocationRecord.status == InvocationStatus.RUNNING.value,
+            ).all()
+            for row in rows:
+                row.status = InvocationStatus.FAILED.value
+                row.reason_code = "CONTROLLER_RESTARTED"
+                row.completed_at = now
+                delegation = session.get(DelegationRecord, row.delegation_id)
+                if delegation is not None and delegation.state == "RUNNING":
+                    delegation.state = InvocationStatus.FAILED.value
+                    delegation.completed_at = now
+                    delegation.updated_at = now
+                    delegation.version += 1
+                recovered.append(row.invocation_id)
+        return tuple(recovered)

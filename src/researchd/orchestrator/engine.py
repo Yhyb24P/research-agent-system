@@ -606,6 +606,17 @@ class ResearchOrchestrator:
                         actor_id="recovery", timestamp=utc_now(), correlation_id=attempt.attempt_id,
                         causation_id=None, metadata_json={"result_persisted": True},
                     ))
+        if self.collaboration is not None:
+            recovered = self.collaboration.recover_run(run_id)
+            if recovered:
+                with self.sessions.begin() as session:
+                    for invocation_id in recovered:
+                        session.add(AuditEventRecord(
+                            event_id=f"evt_{uuid4().hex}", event_type="RECOVERY_INVOCATION_FAILED", run_id=run_id,
+                            entity_type="agent_invocation", entity_id=invocation_id, actor_type="controller",
+                            actor_id="recovery", timestamp=utc_now(), correlation_id=invocation_id,
+                            causation_id=None, metadata_json={"reason": "CONTROLLER_RESTARTED"},
+                        ))
         return self.snapshot(run_id)
 
     def _assert_hard_verification(self, work_order_id: str) -> None:
