@@ -54,7 +54,12 @@ class HttpAgentAdapter:
             return AgentInvocationResult(invocation_id=request.invocation_id, status=InvocationStatus.FAILED, reason_code="HTTP_PAYLOAD_REQUIRED")
         if len(json.dumps(request.payload, sort_keys=True, separators=(",", ":")).encode()) > self.max_payload_bytes:
             return AgentInvocationResult(invocation_id=request.invocation_id, status=InvocationStatus.FAILED, reason_code="HTTP_PAYLOAD_TOO_LARGE")
-        response = await self.client.invoke(request.runtime_id, request.payload)
+        if request.endpoint_ref is None:
+            return AgentInvocationResult(invocation_id=request.invocation_id, status=InvocationStatus.FAILED, reason_code="HTTP_ENDPOINT_REQUIRED")
+        parsed = urlparse(request.endpoint_ref)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
+            return AgentInvocationResult(invocation_id=request.invocation_id, status=InvocationStatus.FAILED, reason_code="HTTP_ENDPOINT_UNSAFE")
+        response = await self.client.invoke(request.endpoint_ref, request.payload)
         return AgentInvocationResult(invocation_id=request.invocation_id, status=InvocationStatus.SUCCEEDED, output_type="HttpAgentResult", output=response)
 
     async def cancel(self, invocation_id: str) -> None:

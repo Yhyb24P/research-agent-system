@@ -96,6 +96,7 @@ class AgentInvocationRequest(DomainModel):
     runtime_id: AgentRuntimeId
     purpose: DelegationPurpose
     input_sha256: str
+    endpoint_ref: str | None = None
     typed_input: InvocationInput | None = None
     # Deprecated compatibility escape hatch for pre-ACP adapters. New gateway
     # calls must use typed_input so purpose and payload cannot drift apart.

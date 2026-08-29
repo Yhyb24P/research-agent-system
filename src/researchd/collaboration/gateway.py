@@ -55,10 +55,14 @@ class CollaborationGateway:
         else:
             assert self.agent_id is not None and self.runtime_id is not None
             agent_id, runtime_id = self.agent_id, self.runtime_id
+        endpoint_ref = None
+        if self.catalog is not None:
+            runtime, _ = self.catalog.resolve(str(runtime_id))
+            endpoint_ref = runtime.endpoint_ref
         if existing_delegation_id is None:
             self.delegations.create(Delegation(delegation_id=delegation_id, run_id=run_id, work_order_id=work_order_id, purpose=purpose, idempotency_key=f"{delegation_id}-orchestration"))
             self.delegations.assign(str(delegation_id), agent_id=str(agent_id), runtime_id=str(runtime_id))
-        self.invocations.start(AgentInvocationRequest(invocation_id=invocation_id, delegation_id=delegation_id, run_id=run_id, work_order_id=work_order_id, attempt_id=attempt_id, agent_id=agent_id, runtime_id=runtime_id, purpose=purpose, input_sha256=hashlib.sha256(f"{run_id}:{purpose.value}:{work_order_id}:{attempt_id}".encode()).hexdigest(), typed_input=typed_input))
+        self.invocations.start(AgentInvocationRequest(invocation_id=invocation_id, delegation_id=delegation_id, run_id=run_id, work_order_id=work_order_id, attempt_id=attempt_id, agent_id=agent_id, runtime_id=runtime_id, purpose=purpose, input_sha256=hashlib.sha256(f"{run_id}:{purpose.value}:{work_order_id}:{attempt_id}".encode()).hexdigest(), endpoint_ref=endpoint_ref, typed_input=typed_input))
         return delegation_id, invocation_id
 
     def prepare_execution(self, work_order: WorkOrderRecord) -> str | None:

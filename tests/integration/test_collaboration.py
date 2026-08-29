@@ -312,6 +312,27 @@ def test_heterogeneous_adapters_keep_invocation_scope() -> None:
     assert a2a_result.reason_code == "A2A_SCOPE_REQUIRED"
 
 
+def test_http_adapter_uses_validated_runtime_endpoint() -> None:
+    class Client:
+        def __init__(self) -> None:
+            self.endpoints: list[str] = []
+
+        async def invoke(self, endpoint: str, payload: dict[str, object]) -> dict[str, object]:
+            self.endpoints.append(endpoint)
+            return {"accepted": payload["value"]}
+
+    client = Client()
+    request = AgentInvocationRequest(
+        invocation_id=InvocationId("inv_http_endpoint"), delegation_id=DelegationId("del_http_endpoint"),
+        run_id="run_test", agent_id=AgentId("agent_executor"), runtime_id=AgentRuntimeId("runtime_http"),
+        purpose=DelegationPurpose.EXECUTE, input_sha256="f" * 64,
+        endpoint_ref="http://127.0.0.1:8789/agent", payload={"value": "ok"},
+    )
+    result = asyncio.run(HttpAgentAdapter(client).invoke(request))
+    assert result.status is InvocationStatus.SUCCEEDED
+    assert client.endpoints == ["http://127.0.0.1:8789/agent"]
+
+
 def test_adapter_catalog_resolves_enabled_healthy_runtime(database: tuple[Path, sessionmaker[Session]]) -> None:
     _, sessions = database
     registry = AgentRegistryService(sessions)
