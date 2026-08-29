@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://researchd.local/schemas/qualification_evidence.schema.json",
+  "title": "QualificationEvidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["evidence_id", "gate_id", "candidate_commit", "environment_fingerprint", "started_at", "completed_at", "tool_versions", "checks", "artifacts", "result"],
+  "properties": {
+    "evidence_id": {"type": "string", "minLength": 1},
+    "gate_id": {"type": "string", "pattern": "^(IQ|DQ|RQ)[0-9]{2}$"},
+    "candidate_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "candidate_tag": {"type": ["string", "null"]},
+    "environment_fingerprint": {"type": "string", "minLength": 1},
+    "started_at": {"type": "string", "format": "date-time"},
+    "completed_at": {"type": "string", "format": "date-time"},
+    "tool_versions": {"type": "object", "additionalProperties": {"type": "string"}},
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["check_id", "severity", "expected", "observed", "result"],
+        "properties": {
+          "check_id": {"type": "string", "minLength": 1},
+          "severity": {"enum": ["HARD", "MAJOR", "ADVISORY"]},
+          "expected": {},
+          "observed": {},
+          "result": {"enum": ["PASS", "FAIL", "INCONCLUSIVE"]},
+          "log_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+          "notes": {"type": "string"}
+        }
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "sha256"],
+        "properties": {
+          "name": {"type": "string", "minLength": 1},
+          "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "path_or_uri": {"type": ["string", "null"]},
+          "classification": {"type": ["string", "null"]}
+        }
+      }
+    },
+    "result": {"enum": ["PASS", "FAIL", "INCONCLUSIVE"]},
+    "supersedes_evidence_id": {"type": ["string", "null"]}
+  }
+}
