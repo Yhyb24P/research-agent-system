@@ -36,7 +36,7 @@ Freeze candidate
                                     |
                                     v
                     +--> DQ01 Host/Sandbox
-                    +--> DQ02 GPU/Jobs
+                    +--> DQ02 Agent Runtime/Lifecycle
                     +--> DQ03 Cloud/Egress
                     +--> DQ04 Backup/DR
                     +--> DQ05 Soak/Fault

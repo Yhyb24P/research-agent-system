@@ -7,7 +7,7 @@
     {"gate_id": "IQ02", "title": "Workspace transport and fault qualification", "severity": "HARD", "dependencies": [], "status": "NOT_STARTED", "accepted_evidence_ids": []},
     {"gate_id": "IQ03", "title": "AG-UI replay and reconnect qualification", "severity": "HARD", "dependencies": [], "status": "NOT_STARTED", "accepted_evidence_ids": []},
     {"gate_id": "DQ01", "title": "Host, sandbox and filesystem", "severity": "HARD", "dependencies": [], "status": "NOT_STARTED", "accepted_evidence_ids": []},
-    {"gate_id": "DQ02", "title": "GPU and job backend", "severity": "HARD", "dependencies": ["DQ01"], "status": "NOT_STARTED", "accepted_evidence_ids": []},
+    {"gate_id": "DQ02", "title": "Agent runtime and invocation lifecycle", "severity": "HARD", "dependencies": ["DQ01"], "status": "NOT_STARTED", "accepted_evidence_ids": []},
     {"gate_id": "DQ03", "title": "Cloud provider and egress", "severity": "HARD", "dependencies": [], "status": "NOT_STARTED", "accepted_evidence_ids": []},
     {"gate_id": "DQ04", "title": "Backup, restore and DR", "severity": "HARD", "dependencies": ["DQ01"], "status": "NOT_STARTED", "accepted_evidence_ids": []},
     {"gate_id": "DQ05", "title": "Soak, restart and fault endurance", "severity": "HARD", "dependencies": ["DQ01", "DQ02", "DQ03", "DQ04"], "status": "NOT_STARTED", "accepted_evidence_ids": []},

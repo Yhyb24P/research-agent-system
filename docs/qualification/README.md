@@ -14,7 +14,7 @@ IQ — Interoperability Qualification
 
 DQ — Deployment Qualification
   DQ01 Host / sandbox / filesystem
-  DQ02 GPU / job backend
+  DQ02 Agent runtime / invocation lifecycle
   DQ03 Cloud provider / egress governance
   DQ04 Backup / restore / disaster recovery
   DQ05 Soak / restart / fault endurance
