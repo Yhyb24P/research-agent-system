@@ -313,6 +313,14 @@ def test_heterogeneous_adapters_keep_invocation_scope() -> None:
     assert a2a_result.reason_code == "A2A_SCOPE_REQUIRED"
 
 
+def test_a2a_terminal_states_preserve_invocation_outcome() -> None:
+    assert A2ARemoteAgentAdapter._map_task_status("completed") == (InvocationStatus.SUCCEEDED, None)
+    assert A2ARemoteAgentAdapter._map_task_status("failed") == (InvocationStatus.FAILED, "A2A_TASK_FAILED")
+    assert A2ARemoteAgentAdapter._map_task_status("rejected") == (InvocationStatus.FAILED, "A2A_TASK_REJECTED")
+    assert A2ARemoteAgentAdapter._map_task_status("canceled") == (InvocationStatus.CANCELLED, "A2A_TASK_CANCELLED")
+    assert A2ARemoteAgentAdapter._map_task_status("working") == (InvocationStatus.RUNNING, "A2A_TASK_NONTERMINAL")
+
+
 def test_http_adapter_uses_validated_runtime_endpoint() -> None:
     class Client:
         def __init__(self) -> None:

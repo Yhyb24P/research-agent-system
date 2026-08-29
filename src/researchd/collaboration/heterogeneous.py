@@ -34,8 +34,18 @@ class A2ARemoteAgentAdapter:
         if request.work_order_id is None or request.attempt_id is None or payload is None:
             return AgentInvocationResult(invocation_id=request.invocation_id, status=InvocationStatus.FAILED, reason_code="A2A_SCOPE_REQUIRED")
         task = await self.delegate.dispatch(work_order_id=request.work_order_id, attempt_id=request.attempt_id, payload=payload, invocation_id=str(request.invocation_id))
-        terminal = task.status.state in {"completed", "failed", "canceled", "rejected"}
-        return AgentInvocationResult(invocation_id=request.invocation_id, status=InvocationStatus.SUCCEEDED if terminal else InvocationStatus.RUNNING, output_type="A2ATask", output=task.model_dump(mode="json"), reason_code=None if terminal else "A2A_TASK_NONTERMINAL")
+        status, reason = self._map_task_status(task.status.state)
+        return AgentInvocationResult(invocation_id=request.invocation_id, status=status, output_type="A2ATask", output=task.model_dump(mode="json"), reason_code=reason)
+
+    @staticmethod
+    def _map_task_status(state: str) -> tuple[InvocationStatus, str | None]:
+        if state == "completed":
+            return InvocationStatus.SUCCEEDED, None
+        if state == "canceled":
+            return InvocationStatus.CANCELLED, "A2A_TASK_CANCELLED"
+        if state in {"failed", "rejected"}:
+            return InvocationStatus.FAILED, f"A2A_TASK_{state.upper()}"
+        return InvocationStatus.RUNNING, "A2A_TASK_NONTERMINAL"
 
     async def cancel(self, invocation_id: str) -> None:
         del invocation_id
