@@ -1,5 +1,5 @@
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Thread
 from typing import Any, cast
@@ -12,11 +12,17 @@ import pytest
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session, sessionmaker
 
-from researchd.api.agui import AGUIProjectionAdapter
+from researchd.api.agui import AGUIProjectionAdapter, CustomEvent
 from researchd.api.control import LocalControlAPI
 from researchd.api.web import ControlCommandRouter, ControlResourceRouter, serve_local_control
+from researchd.policy.approval import ApprovalNotValid, ApprovalService
 from researchd.storage.db import create_sqlite_engine, session_factory
-from researchd.storage.models import AuditEventRecord, ResearchRunRecord, WorkspaceRecord
+from researchd.storage.models import (
+    AuditEventRecord,
+    CollaborationMessageRecord,
+    ResearchRunRecord,
+    WorkspaceRecord,
+)
 
 
 ROOT = Path(__file__).parents[2]
@@ -221,3 +227,146 @@ def test_loopback_sse_honors_last_event_id(tmp_path: Path) -> None:
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+
+
+def test_controller_restart_preserves_monotonic_offsets_and_resume_cursor(tmp_path: Path) -> None:
+    path = tmp_path / "restart.db"
+    sessions = _seed_run(path)
+    now = datetime.now(UTC)
+    _append_event(sessions, "evt_before_restart", "PLAN_CREATED", timestamp=now)
+    before = LocalControlAPI(sessions).events("run_stream")
+    assert len(before) == 1 and before[0]["stream_offset"] == 1
+
+    restarted = session_factory(create_sqlite_engine(path))
+    _append_event(restarted, "evt_after_restart", "WORK_ORDER_CREATED", timestamp=now)
+    api = LocalControlAPI(restarted)
+    after = api.events("run_stream")
+    assert [item["event_id"] for item in after] == ["evt_before_restart", "evt_after_restart"]
+    assert [item["stream_offset"] for item in after] == [1, 2]
+    resumed = AGUIProjectionAdapter(api).replay("run_stream", after_stream_offset=1)
+    assert [item.stream_offset for item in resumed] == [2]
+
+
+@pytest.mark.parametrize("classification", ("LOCAL_ONLY", "SECRET"))
+def test_classified_collaboration_body_is_absent_from_agui_and_sse(
+    tmp_path: Path, classification: str
+) -> None:
+    sessions = _seed_run(tmp_path / f"redaction-{classification}.db")
+    marker = f"NEVER_EXPOSE_{classification}_BODY"
+    now = datetime.now(UTC)
+    message_id = f"msg_{classification.lower()}"
+    with sessions.begin() as session:
+        session.add(CollaborationMessageRecord(
+            message_id=message_id,
+            run_id="run_stream",
+            work_order_id=None,
+            sender_actor_type="agent",
+            sender_actor_id="agent_sensitive",
+            recipient_agent_id=None,
+            purpose="STATUS",
+            body=marker,
+            classification=classification,
+            metadata_json={},
+            created_at=now,
+        ))
+        session.add(AuditEventRecord(
+            event_id=f"evt_{classification.lower()}",
+            event_type="COLLABORATION_MESSAGE_RECORDED",
+            run_id="run_stream",
+            entity_type="collaboration_message",
+            entity_id=message_id,
+            actor_type="controller",
+            actor_id="collaboration-message-store",
+            timestamp=now,
+            correlation_id="run_stream",
+            causation_id=None,
+            metadata_json={"message_id": message_id},
+        ))
+    projected = AGUIProjectionAdapter(LocalControlAPI(sessions)).replay("run_stream")
+    serialized = b"".join(item.as_sse() for item in projected).decode()
+    assert marker not in serialized
+    redacted = [item.event for item in projected if item.event.type == "CUSTOM"]
+    assert len(redacted) == 1
+    assert isinstance(redacted[0], CustomEvent)
+    assert redacted[0].name == "researchd.message.redacted"
+    assert redacted[0].value == {
+        "message_id": message_id,
+        "classification": classification,
+    }
+
+
+def test_high_volume_replay_has_exact_bounded_sequence(tmp_path: Path) -> None:
+    sessions = _seed_run(tmp_path / "high-volume.db")
+    now = datetime.now(UTC)
+    count = 2_000
+    with sessions.begin() as session:
+        session.add_all([
+            AuditEventRecord(
+                event_id=f"evt_load_{index:04d}",
+                event_type="PLAN_CREATED",
+                run_id="run_stream",
+                entity_type="plan",
+                entity_id=f"plan_{index:04d}",
+                actor_type="controller",
+                actor_id="load-fixture",
+                timestamp=now,
+                correlation_id="run_stream",
+                causation_id=None,
+                metadata_json={"index": index},
+            )
+            for index in range(count)
+        ])
+    replay = AGUIProjectionAdapter(LocalControlAPI(sessions)).replay("run_stream")
+    offsets = [item.stream_offset for item in replay[1:]]
+    assert offsets == list(range(1, count + 1))
+    assert len(set(offsets)) == count
+    serialized_bytes = sum(len(item.as_sse()) for item in replay)
+    assert serialized_bytes < 2_000_000
+
+
+def test_simultaneous_typed_approval_commands_preserve_one_shot_authority(tmp_path: Path) -> None:
+    sessions = _seed_run(tmp_path / "concurrent-commands.db")
+    approvals = ApprovalService(sessions)
+    parameters = {"work_order_id": "wo_stream", "capabilities": ["network.external"]}
+    request = approvals.request(
+        operation_type="work_order.capabilities",
+        parameters=parameters,
+        requested_by="agent_requester",
+        reason="exercise typed command concurrency",
+        risk_level="high",
+        resource_scope={"work_order_id": "wo_stream"},
+        budget_delta={},
+        expires_at=datetime.now(UTC) + timedelta(minutes=5),
+        one_shot=True,
+    )
+    grant = approvals.approve(request.approval_id, granted_by="human_reviewer")
+
+    class ApprovalAPI:
+        async def approve(self, work_order_id: str, grant_id: str) -> dict[str, Any]:
+            await asyncio.to_thread(
+                approvals.authorize,
+                grant_id,
+                operation_type="work_order.capabilities",
+                parameters={"work_order_id": work_order_id, "capabilities": ["network.external"]},
+            )
+            return {"work_order_id": work_order_id, "authorized": True}
+
+    router = ControlCommandRouter(cast(LocalControlAPI, ApprovalAPI()))
+
+    async def invoke() -> object:
+        try:
+            return await router.post(
+                "/api/work-orders/wo_stream/approve",
+                {"grant_id": grant.grant_id},
+            )
+        except ApprovalNotValid as error:
+            return error
+
+    async def invoke_concurrently() -> list[object]:
+        return list(await asyncio.gather(invoke(), invoke()))
+
+    results = asyncio.run(invoke_concurrently())
+    successes = [item for item in results if isinstance(item, tuple)]
+    failures = [item for item in results if isinstance(item, ApprovalNotValid)]
+    assert len(successes) == 1 and successes[0][0] == 200
+    assert len(failures) == 1 and "already been used" in str(failures[0])
