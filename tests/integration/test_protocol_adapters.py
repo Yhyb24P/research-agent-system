@@ -1,5 +1,6 @@
 import asyncio
 import json
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -47,12 +48,17 @@ class FakeA2AClient:
         self.payloads: list[dict[str, Any]] = []
         self.cancelled_task_ids: list[str] = []
 
-    async def send(self, payload: dict[str, Any]) -> dict[str, Any]:
+    async def send(
+        self,
+        payload: dict[str, Any],
+        *,
+        on_task: Callable[[dict[str, Any]], None] | None = None,
+    ) -> dict[str, Any]:
         self.payloads.append(payload)
         message = payload["message"]
         work_order = message["parts"][0]["data"]
         attempt_id = work_order["attempt_id"]
-        return {
+        response = {
             "id": f"task_{message['messageId']}", "contextId": message["contextId"],
             "status": {"state": "TASK_STATE_COMPLETED"},
             "artifacts": [{
@@ -70,6 +76,9 @@ class FakeA2AClient:
             }],
             "history": [message], "metadata": payload.get("metadata", {}),
         }
+        if on_task is not None:
+            on_task(response)
+        return response
 
     async def cancel(self, *, task_id: str, tenant: str | None = None) -> dict[str, Any]:
         del tenant

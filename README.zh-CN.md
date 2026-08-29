@@ -124,6 +124,12 @@ uv run pytest -q \
   tests/integration/test_langgraph_runtime.py
 ```
 
+安装 `a2a` extra 后，可运行跨独立进程的 A2A 互操作资格矩阵：
+
+```bash
+uv run pytest -q tests/qualification/test_iq01_real_interoperability.py
+```
+
 集成测试是当前可执行 reference workflow。仓库目前是 library/模块化单体基线，尚未
 提供生产 daemon 或浏览器应用的一键启动入口。
 

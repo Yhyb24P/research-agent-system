@@ -2,6 +2,8 @@
 
 from uuid import uuid4
 
+from pydantic import ValidationError
+
 from researchd.adapters.a2a.schemas import A2AArtifact, A2AMessage, A2APart, A2ATask
 from researchd.domain.base import DomainModel
 from researchd.executor.contracts import ExecutorResult, GrantedWorkOrder
@@ -50,7 +52,10 @@ def decode_executor_result(task: A2ATask, *, expected_attempt_id: str) -> Execut
     ]
     if len(candidates) != 1:
         raise A2ACodecError("A2A Task must contain exactly one typed ExecutorResult artifact")
-    result = ExecutorResult.model_validate(candidates[0])
+    try:
+        result = ExecutorResult.model_validate(candidates[0])
+    except ValidationError as exc:
+        raise A2ACodecError("A2A ExecutorResult artifact is malformed") from exc
     if result.attempt_id != expected_attempt_id:
         raise A2ACodecError("A2A ExecutorResult attempt scope does not match the invocation")
     return result
@@ -67,4 +72,7 @@ def decode_typed_artifact(task: A2ATask, *, media_type: str, output_type: type[D
     ]
     if len(candidates) != 1:
         raise A2ACodecError(f"A2A Task must contain exactly one {media_type} artifact")
-    return output_type.model_validate(candidates[0])
+    try:
+        return output_type.model_validate(candidates[0])
+    except ValidationError as exc:
+        raise A2ACodecError(f"A2A {media_type} artifact is malformed") from exc

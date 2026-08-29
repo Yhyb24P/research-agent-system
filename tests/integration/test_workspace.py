@@ -1,6 +1,7 @@
 from datetime import UTC, datetime, timedelta
 import asyncio
 import io
+from collections.abc import Callable
 from pathlib import Path
 import subprocess
 import tarfile
@@ -192,7 +193,12 @@ def test_git_workspace_delegation_reconciles_to_artifact_then_verifier(tmp_path:
     assert not (remote / "src" / "private.txt").exists()
 
     class WorkspaceA2AClient:
-        async def send(self, payload: dict[str, object]) -> dict[str, object]:
+        async def send(
+            self,
+            payload: dict[str, object],
+            *,
+            on_task: Callable[[dict[str, object]], None] | None = None,
+        ) -> dict[str, object]:
             message = payload["message"]
             assert isinstance(message, dict)
             parts = message["parts"]
@@ -203,7 +209,7 @@ def test_git_workspace_delegation_reconciles_to_artifact_then_verifier(tmp_path:
             assert isinstance(binding, dict) and binding["workspace_grant_id"] == "wsg_git"
             delegated_root = Path(str(binding["remote_workspace_handle"]))
             (delegated_root / "src" / "allowed.txt").write_text("after\n")
-            return {
+            response: dict[str, object] = {
                 "id": "task_workspace",
                 "contextId": message["contextId"],
                 "status": {"state": "TASK_STATE_COMPLETED"},
@@ -222,6 +228,9 @@ def test_git_workspace_delegation_reconciles_to_artifact_then_verifier(tmp_path:
                 }],
                 "history": [message],
             }
+            if on_task is not None:
+                on_task(response)
+            return response
 
         async def cancel(self, *, task_id: str, tenant: str | None = None) -> dict[str, object]:
             del tenant

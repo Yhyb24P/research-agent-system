@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Protocol
 from uuid import uuid4
 
@@ -28,7 +29,12 @@ if TYPE_CHECKING:
 
 
 class A2AClient(Protocol):
-    async def send(self, payload: dict[str, Any]) -> dict[str, Any]: ...
+    async def send(
+        self,
+        payload: dict[str, Any],
+        *,
+        on_task: Callable[[dict[str, Any]], None] | None = None,
+    ) -> dict[str, Any]: ...
 
     async def cancel(self, *, task_id: str, tenant: str | None = None) -> dict[str, Any]: ...
 
@@ -117,7 +123,14 @@ class A2AAdapter:
         interaction_id = existing.interaction_id if existing else f"interaction_{uuid4().hex}"
         if existing is None:
             self._reserve(interaction_id, order, attempt, outbound.contextId or context_id, body, invocation_id=invocation_id)
-        response = await self.client.send(body)
+        response = await self.client.send(
+            body,
+            on_task=lambda task: self._bind_task(
+                interaction_id,
+                task,
+                expected_context_id=outbound.contextId or context_id,
+            ),
+        )
         task = A2ATask.model_validate(response)
         if task.contextId != outbound.contextId:
             raise A2AAdapterError("A2A response changed the invocation context")
@@ -229,6 +242,37 @@ class A2AAdapter:
                 entity_type="agent_interaction", entity_id=interaction_id, actor_type="controller",
                 actor_id="a2a-adapter", timestamp=utc_now(), correlation_id=record.attempt_id or record.run_id,
                 causation_id=None, metadata_json={"task_id": task.id, "state": task.status.state},
+            ))
+
+    def _bind_task(
+        self,
+        interaction_id: str,
+        task_value: dict[str, Any],
+        *,
+        expected_context_id: str,
+    ) -> None:
+        task = A2ATask.model_validate(task_value)
+        if task.contextId != expected_context_id:
+            raise A2AAdapterError("A2A initial Task changed the invocation context")
+        with self.sessions.begin() as session:
+            record = session.get(AgentInteractionRecord, interaction_id)
+            if record is None or record.status != "IN_PROGRESS":
+                raise A2AAdapterError("A2A interaction cannot bind a running Task")
+            if record.a2a_task_id not in {None, task.id}:
+                raise A2AAdapterError("A2A interaction changed its running Task identity")
+            record.a2a_task_id = task.id
+            session.add(AuditEventRecord(
+                event_id=f"evt_{uuid4().hex}",
+                event_type="A2A_TASK_BOUND",
+                run_id=record.run_id,
+                entity_type="agent_interaction",
+                entity_id=interaction_id,
+                actor_type="controller",
+                actor_id="a2a-adapter",
+                timestamp=utc_now(),
+                correlation_id=record.attempt_id or record.run_id,
+                causation_id=None,
+                metadata_json={"task_id": task.id, "context_id": task.contextId},
             ))
 
     @staticmethod
