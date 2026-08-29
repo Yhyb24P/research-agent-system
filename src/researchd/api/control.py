@@ -57,25 +57,60 @@ class LocalControlAPI:
                 "revision_reason": order.revision_reason,
             }
 
-    def events(self, run_id: str, *, after_event_id: str | None = None) -> list[dict[str, Any]]:
+    def events(
+        self,
+        run_id: str,
+        *,
+        after_stream_offset: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """Read the authoritative stream in database-assigned order."""
         with self.sessions() as session:
+            query = select(AuditEventRecord).where(AuditEventRecord.run_id == run_id)
+            if after_stream_offset is not None:
+                query = query.where(AuditEventRecord.audit_seq > after_stream_offset)
             records: Sequence[AuditEventRecord] = session.scalars(
-                select(AuditEventRecord).where(AuditEventRecord.run_id == run_id).order_by(AuditEventRecord.timestamp, AuditEventRecord.event_id),
+                query.order_by(AuditEventRecord.audit_seq),
             ).all()
             payload = [{
                 "event_id": event.event_id, "event_type": event.event_type,
+                "stream_offset": event.audit_seq,
                 "entity_type": event.entity_type, "entity_id": event.entity_id,
                 "timestamp": event.timestamp.isoformat(), "correlation_id": event.correlation_id,
                 "metadata": event.metadata_json,
             } for event in records]
-            if after_event_id is None:
-                return payload
-            for index, event in enumerate(payload):
-                if event["event_id"] == after_event_id:
-                    return payload[index + 1:]
-            # An unknown cursor is treated as an initial read. This keeps clients
-            # resilient when their cursor predates retention or a new run.
             return payload
+
+    def stream_snapshot(self, run_id: str) -> dict[str, Any]:
+        """Return the current read model used for an initial AG-UI snapshot."""
+
+        status = self.run_status(run_id)
+        return {
+            "run": status,
+            "agents": self.agents(),
+            "delegations": self.delegations(run_id),
+            "approvals": self.approvals(run_id),
+            "artifacts": self.artifacts(run_id),
+            "workspace_grants": self.workspace_grants(run_id),
+        }
+
+    def collaboration_message(self, message_id: str) -> dict[str, Any]:
+        """Resolve an audited message for presentation without widening authority."""
+
+        with self.sessions() as session:
+            row = session.get(CollaborationMessageRecord, message_id)
+            if row is None:
+                raise LookupError(message_id)
+            return {
+                "message_id": row.message_id,
+                "run_id": row.run_id,
+                "work_order_id": row.work_order_id,
+                "sender_actor_type": row.sender_actor_type,
+                "sender_actor_id": row.sender_actor_id,
+                "recipient_agent_id": row.recipient_agent_id,
+                "purpose": row.purpose,
+                "body": row.body,
+                "classification": row.classification,
+            }
 
     def agents(self) -> list[dict[str, Any]]:
         with self.sessions() as session:

@@ -351,7 +351,7 @@ def test_orchestrator_accepts_collaboration_only_constructor(tmp_path: Path) -> 
     assert controller.collaboration is not None
     with pytest.raises(TypeError, match="collaboration"):
         ResearchOrchestrator(sessions, policy=policy, verifier=FakeVerifier(sessions))  # type: ignore[call-arg]
-    assert build_parser().parse_args(["events", "run_demo", "--after", "evt_1"]).after_event_id == "evt_1"
+    assert build_parser().parse_args(["events", "run_demo", "--after", "17"]).after_stream_offset == 17
 
 
 def test_retry_unchanged_work_order_creates_new_attempt(tmp_path: Path) -> None:

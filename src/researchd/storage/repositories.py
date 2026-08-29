@@ -122,7 +122,7 @@ class EventRepository:
         self.session.add(event)
 
     def for_run(self, run_id: str) -> Sequence[AuditEventRecord]:
-        query = select(AuditEventRecord).where(AuditEventRecord.run_id == run_id).order_by(AuditEventRecord.timestamp, AuditEventRecord.event_id)
+        query = select(AuditEventRecord).where(AuditEventRecord.run_id == run_id).order_by(AuditEventRecord.audit_seq)
         return self.session.scalars(query).all()
 
 

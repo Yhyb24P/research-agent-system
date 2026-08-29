@@ -296,10 +296,16 @@ class AuditEventRecord(Base):
     __table_args__ = (
         CheckConstraint("length(event_type) > 0", name="ck_audit_events_event_type_nonempty"),
         Index("ix_audit_events_run_timestamp", "run_id", "timestamp"),
+        Index("ix_audit_events_run_seq", "run_id", "audit_seq"),
+        Index("ux_audit_events_audit_seq", "audit_seq", unique=True),
         Index("ix_audit_events_entity", "entity_type", "entity_id"),
         Index("ix_audit_events_correlation_id", "correlation_id"),
     )
     event_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    # Assigned by the database trigger installed in migration 0016. It remains
+    # nullable at the ORM boundary because SQLite AFTER INSERT triggers run only
+    # after the initial row has been accepted.
+    audit_seq: Mapped[int | None] = mapped_column(Integer)
     event_type: Mapped[str] = mapped_column(String(64), nullable=False)
     run_id: Mapped[str] = mapped_column(ForeignKey("research_runs.run_id"), nullable=False)
     entity_type: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -310,6 +316,18 @@ class AuditEventRecord(Base):
     correlation_id: Mapped[str] = mapped_column(String(128), nullable=False)
     causation_id: Mapped[str | None] = mapped_column(String(128))
     metadata_json: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, nullable=False, default=dict)
+
+
+class AuditStreamClockRecord(Base):
+    """Single-row allocator backing the durable audit stream cursor."""
+
+    __tablename__ = "audit_stream_clock"
+    __table_args__ = (
+        CheckConstraint("singleton = 1", name="ck_audit_stream_clock_singleton"),
+        CheckConstraint("next_seq > 0", name="ck_audit_stream_clock_next_seq"),
+    )
+    singleton: Mapped[int] = mapped_column(Integer, primary_key=True)
+    next_seq: Mapped[int] = mapped_column(Integer, nullable=False)
 
 
 class ArtifactDerivationRecord(Base):

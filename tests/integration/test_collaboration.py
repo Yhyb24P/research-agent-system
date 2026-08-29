@@ -616,7 +616,7 @@ def test_web_and_tui_clients_share_local_control_resources(tmp_path: Path) -> No
     assert isinstance(event_payload, dict)
     events = event_payload["events"]
     if events:
-        _, tail_payload = router.get(f"/api/events/{run_id}?after={events[0]['event_id']}")
+        _, tail_payload = router.get(f"/api/events/{run_id}?after={events[0]['stream_offset']}")
         assert isinstance(tail_payload, dict)
         assert [item["event_id"] for item in tail_payload["events"]] == [item["event_id"] for item in events[1:]]
     assert router.get("/api/timeline/" + run_id)[0] == 200
