@@ -429,6 +429,9 @@ def test_web_and_tui_clients_share_local_control_resources(tmp_path: Path) -> No
     api = LocalControlAPI(sessions, orchestrator)
     router = ControlResourceRouter(api)
     assert router.get("/api/runs/" + run_id)[0] == 200
+    status, runs_payload = router.get("/api/runs")
+    assert status == 200 and isinstance(runs_payload, list)
+    assert any(item["run_id"] == run_id for item in runs_payload)
     status, event_payload = router.get("/api/events/" + run_id)
     assert status == 200
     assert isinstance(event_payload, dict)

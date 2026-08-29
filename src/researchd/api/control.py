@@ -36,6 +36,11 @@ class LocalControlAPI:
                 "cancellation_requested": run.cancellation_requested,
             }
 
+    def runs(self) -> list[dict[str, Any]]:
+        with self.sessions() as session:
+            identifiers = session.scalars(select(ResearchRunRecord.run_id).order_by(ResearchRunRecord.created_at, ResearchRunRecord.run_id)).all()
+        return [self.run_status(run_id) for run_id in identifiers]
+
     def work_order_status(self, work_order_id: str) -> dict[str, Any]:
         with self.sessions() as session:
             order = session.get(WorkOrderRecord, work_order_id)

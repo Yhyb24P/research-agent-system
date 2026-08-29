@@ -33,6 +33,7 @@ def build_parser() -> argparse.ArgumentParser:
     delegation_show.add_argument("delegation_id")
     run = subparsers.add_parser("run", help="inspect a research run")
     run_sub = run.add_subparsers(dest="run_command", required=True)
+    run_sub.add_parser("list")
     run_status = run_sub.add_parser("status")
     run_status.add_argument("run_id")
     return parser
@@ -49,7 +50,7 @@ def dispatch(api: LocalControlAPI, argv: list[str] | None = None) -> dict[str, A
     if args.command == "delegation":
         return api.delegations(args.run_id) if args.delegation_command == "list" else api.delegation(args.delegation_id)
     if args.command == "run":
-        return api.run_status(args.run_id)
+        return api.runs() if args.run_command == "list" else api.run_status(args.run_id)
     return asyncio.run(api.cancel_run(args.run_id))
 
 

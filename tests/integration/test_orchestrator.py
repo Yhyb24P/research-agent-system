@@ -284,6 +284,7 @@ def test_cli_parser_exposes_only_local_status_controls() -> None:
     assert build_parser().parse_args(["delegation", "list", "--run", "run_demo"]).delegation_command == "list"
     assert build_parser().parse_args(["run", "status", "run_demo"]).run_command == "status"
     assert build_parser().parse_args(["events", "watch", "run_demo"]).first == "watch"
+    assert build_parser().parse_args(["run", "list"]).run_command == "list"
 
 
 def test_orchestrator_accepts_collaboration_only_constructor(tmp_path: Path) -> None:

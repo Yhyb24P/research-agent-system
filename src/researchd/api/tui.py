@@ -26,5 +26,7 @@ def render_tui(api: LocalControlAPI, *, run_id: str | None = None) -> str:
         lines.extend(f"{item['delegation_id']}  purpose={item['purpose']}  state={item['state']}  agent={item['assigned_agent_id']}" for item in delegations)
         lines.extend(["", "Approvals", "=========", f"count={len(approvals)}"])
         lines.extend(["", "Artifacts", "=========", f"count={len(artifacts)}"])
+    else:
+        lines.extend(f"{item['run_id']}  state={item['state']}  active_attempts={len(item['active_attempt_ids'])}" for item in api.runs())
     lines.extend(["", "System", "======", "Use the local control API for structured details."])
     return "\n".join(lines) + "\n"
