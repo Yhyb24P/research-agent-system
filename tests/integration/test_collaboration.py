@@ -216,7 +216,20 @@ def test_invocation_persists_target_context_snapshot(database: tuple[Path, sessi
     with sessions() as session:
         row = session.get(AgentInvocationRecord, str(tracking[1]))
         assert row is not None and row.context_bundle_sha256 is not None and row.context_bundle_json is not None
-        assert row.context_bundle_json["bundle_sha256"] == row.context_bundle_sha256
+        context_hash = row.context_bundle_sha256
+        assert row.context_bundle_json["bundle_sha256"] == context_hash
+    class Client:
+        async def invoke(self, endpoint: str, payload: dict[str, object]) -> dict[str, object]:
+            return payload
+
+    catalog = AgentAdapterCatalog(sessions)
+    catalog.register(AgentAdapterKind.HTTP, HttpAgentAdapter(Client()))
+    restarted = CollaborationGateway(
+        delegations=DelegationService(sessions), invocations=InvocationService(sessions), catalog=catalog,
+    )
+    request = restarted._canonical_request(tracking, PlanInvocationInput(context=CloudContextSelection(run_id="run_test")))
+    assert request.context_bundle is not None
+    assert request.context_bundle.bundle_sha256 == context_hash
 
 
 def test_canonical_adapters_expose_health_and_preserve_boundaries() -> None:
