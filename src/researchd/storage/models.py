@@ -173,6 +173,8 @@ class AgentInvocationRecord(Base):
     purpose: Mapped[str] = mapped_column(String(32), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     input_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    context_bundle_sha256: Mapped[str | None] = mapped_column(String(64))
+    context_bundle_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     output_type: Mapped[str | None] = mapped_column(String(128))
     output_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     reason_code: Mapped[str | None] = mapped_column(String(128))

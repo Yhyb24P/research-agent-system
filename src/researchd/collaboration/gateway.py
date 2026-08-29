@@ -48,13 +48,16 @@ class CollaborationGateway:
         if row is None:
             raise ValueError("tracked invocation disappeared")
         runtime, _ = self.catalog.resolve(row.runtime_id)
+        context_bundle = AgentContextBundle.model_validate(row.context_bundle_json) if row.context_bundle_json is not None else self._context_bundles.get(str(tracking[1]))
+        if row.context_bundle_sha256 is not None and (context_bundle is None or context_bundle.bundle_sha256 != row.context_bundle_sha256):
+            raise ValueError("persisted context bundle checksum mismatch")
         return AgentInvocationRequest(
             invocation_id=InvocationId(row.invocation_id), delegation_id=DelegationId(row.delegation_id),
             run_id=row.run_id, work_order_id=row.work_order_id, attempt_id=row.attempt_id,
             agent_id=AgentId(row.agent_id), runtime_id=AgentRuntimeId(row.runtime_id),
             purpose=DelegationPurpose(row.purpose), input_sha256=row.input_sha256,
             endpoint_ref=runtime.endpoint_ref,
-            context_bundle=self._context_bundles.get(str(tracking[1])), typed_input=typed_input,
+            context_bundle=context_bundle, typed_input=typed_input,
         )
 
     async def _invoke_business(self, tracking: tuple[DelegationId, InvocationId], typed_input: InvocationInput, output_type: type[PlanProposal] | type[ReviewDecision]) -> CloudLeadResult[Any]:

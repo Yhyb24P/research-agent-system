@@ -18,7 +18,7 @@ class InvocationService:
                 raise ValueError("invocation scope does not match delegation")
             if delegation.state not in {"ASSIGNED", "RUNNING"}:
                 raise ValueError("delegation is terminal")
-            session.add(AgentInvocationRecord(invocation_id=str(request.invocation_id), delegation_id=str(request.delegation_id), run_id=request.run_id, work_order_id=request.work_order_id, attempt_id=request.attempt_id, agent_id=str(request.agent_id), runtime_id=str(request.runtime_id), purpose=request.purpose.value, status=InvocationStatus.RUNNING.value, input_sha256=request.input_sha256, created_at=now))
+            session.add(AgentInvocationRecord(invocation_id=str(request.invocation_id), delegation_id=str(request.delegation_id), run_id=request.run_id, work_order_id=request.work_order_id, attempt_id=request.attempt_id, agent_id=str(request.agent_id), runtime_id=str(request.runtime_id), purpose=request.purpose.value, status=InvocationStatus.RUNNING.value, input_sha256=request.input_sha256, context_bundle_sha256=request.context_bundle.bundle_sha256 if request.context_bundle else None, context_bundle_json=request.context_bundle.model_dump(mode="json") if request.context_bundle else None, created_at=now))
             delegation.state = "RUNNING"
             delegation.updated_at = now
             delegation.version += 1

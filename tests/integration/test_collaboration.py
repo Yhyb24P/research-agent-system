@@ -197,6 +197,28 @@ def test_invocation_recovery_fails_closed_after_controller_restart(database: tup
         assert delegation is not None and delegation.state == "FAILED"
 
 
+def test_invocation_persists_target_context_snapshot(database: tuple[Path, sessionmaker[Session]]) -> None:
+    from researchd.artifacts.store import ContentAddressedArtifactStore
+    from researchd.context.agent_context import AgentContextBuilder
+    from researchd.context.builder import ContextBuilder
+    from researchd.context.redaction import DeterministicRedactor
+    path, sessions = database
+    registry = AgentRegistryService(sessions)
+    registry.register_profile(profile(AgentId("agent_context")))
+    registry.register_runtime(AgentRuntime(runtime_id=AgentRuntimeId("runtime_context"), agent_id=AgentId("agent_context"), adapter_kind=AgentAdapterKind.HTTP, runtime_name="Context"))
+    context_builder = AgentContextBuilder(ContextBuilder(sessions, ContentAddressedArtifactStore(path.parent / "context-snapshot"), DeterministicRedactor()))
+    gateway = CollaborationGateway(
+        delegations=DelegationService(sessions), invocations=InvocationService(sessions),
+        agent_id=AgentId("agent_context"), runtime_id=AgentRuntimeId("runtime_context"), context_builder=context_builder,
+    )
+    tracking = gateway._start("run_test", DelegationPurpose.PLAN, typed_input=PlanInvocationInput(context=CloudContextSelection(run_id="run_test")))
+    assert tracking is not None
+    with sessions() as session:
+        row = session.get(AgentInvocationRecord, str(tracking[1]))
+        assert row is not None and row.context_bundle_sha256 is not None and row.context_bundle_json is not None
+        assert row.context_bundle_json["bundle_sha256"] == row.context_bundle_sha256
+
+
 def test_canonical_adapters_expose_health_and_preserve_boundaries() -> None:
     runtime = AgentRuntime(runtime_id=AgentRuntimeId("runtime_qwen"), agent_id=AgentId("agent_executor"), adapter_kind=AgentAdapterKind.HTTP, runtime_name="Qwen")
     assert asyncio.run(CloudLeadAgentAdapter(cast(CloudLeadAdapter, None)).health(runtime)).healthy
