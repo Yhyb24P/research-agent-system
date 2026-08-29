@@ -459,3 +459,6 @@ def test_collaboration_only_reference_workflow_records_agent_chain(tmp_path: Pat
         assert attempt is not None and attempt.delegation_id is not None
         plan_event = session.scalar(select(AuditEventRecord).where(AuditEventRecord.run_id == run_id, AuditEventRecord.event_type == "PLAN_CREATED"))
         assert plan_event is not None and plan_event.actor_type == "agent" and plan_event.actor_id == "agent_planner"
+    rendered = render_tui(LocalControlAPI(sessions, controller), run_id=run_id)
+    assert "Runtime runtime_planner" in rendered
+    assert "Delegations" in rendered and "Approvals" in rendered and "Artifacts" in rendered and "System" in rendered

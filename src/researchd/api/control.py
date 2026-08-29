@@ -81,7 +81,7 @@ class LocalControlAPI:
 
     def _agent_payload(self, session: Session, row: AgentRecord) -> dict[str, Any]:
         runtimes = session.scalars(select(AgentRuntimeRecord).where(AgentRuntimeRecord.agent_id == row.agent_id).order_by(AgentRuntimeRecord.runtime_id)).all()
-        return {"agent_id": row.agent_id, "display_name": row.display_name, "roles": row.roles_json, "skills": row.skills_json, "trust_zone": row.trust_zone, "enabled": row.enabled, "profile_version": row.profile_version, "runtimes": [{"runtime_id": item.runtime_id, "adapter_kind": item.adapter_kind, "runtime_name": item.runtime_name, "enabled": item.enabled, "lease_expires_at": item.lease_expires_at.isoformat() if item.lease_expires_at else None} for item in runtimes]}
+        return {"agent_id": row.agent_id, "display_name": row.display_name, "roles": row.roles_json, "skills": row.skills_json, "trust_zone": row.trust_zone, "enabled": row.enabled, "profile_version": row.profile_version, "runtimes": [{"runtime_id": item.runtime_id, "adapter_kind": item.adapter_kind, "runtime_name": item.runtime_name, "framework": item.framework, "model_provider": item.model_provider, "model_name": item.model_name, "protocols": item.protocols_json, "enabled": item.enabled, "lease_expires_at": item.lease_expires_at.isoformat() if item.lease_expires_at else None} for item in runtimes]}
 
     def delegations(self, run_id: str | None = None) -> list[dict[str, Any]]:
         with self.sessions() as session:
