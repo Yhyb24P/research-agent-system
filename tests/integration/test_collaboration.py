@@ -480,6 +480,27 @@ def test_http_adapter_uses_validated_runtime_endpoint() -> None:
     assert result.output is not None and result.output["accepted"] == "typed execute"
 
 
+def test_process_adapter_forwards_typed_execute_contract() -> None:
+    class Runner:
+        async def invoke(self, command: tuple[str, ...], payload: dict[str, object]) -> dict[str, object]:
+            assert command == ("agent", "run")
+            assert payload["attempt_id"] == "att_process"
+            return {"attempt_id": "att_process", "status": "execution_complete", "capability_results": [], "reported_claims": ["process ok"], "errors": []}
+
+    request = AgentInvocationRequest(
+        invocation_id=InvocationId("inv_process"), delegation_id=DelegationId("del_process"), run_id="run_test",
+        agent_id=AgentId("agent_executor"), runtime_id=AgentRuntimeId("runtime_process"), purpose=DelegationPurpose.EXECUTE,
+        input_sha256="2" * 64,
+        typed_input=ExecuteInvocationInput(work_order=GrantedWorkOrder(
+            attempt_id="att_process", objective="typed process", granted_capabilities=frozenset({Capability.TEST_RUN}),
+            sandbox=SandboxSpec(attempt_id="att_process", workspace="/workspace"),
+        )),
+    )
+    result = asyncio.run(LocalProcessAgentAdapter(Runner(), ("agent", "run")).invoke(request))
+    assert result.status is InvocationStatus.SUCCEEDED and result.output is not None
+    assert result.output["reported_claims"] == ["process ok"]
+
+
 def test_adapter_catalog_resolves_enabled_healthy_runtime(database: tuple[Path, sessionmaker[Session]]) -> None:
     _, sessions = database
     registry = AgentRegistryService(sessions)
