@@ -297,13 +297,14 @@ class ResearchOrchestrator:
                 metadata={"outcome": decision.outcome.value, "reason_codes": list(decision.reason_codes)})
             return True
         if decision.outcome is PolicyOutcome.APPROVAL_REQUIRED and self.approvals is not None:
+            requester_type, requester_id = self._agent_actor(order.work_order_id, fallback_type="cloud_lead", fallback_id="cloud-lead")
             approval = self.approvals.request(
                 operation_type="work_order.capabilities", parameters={"work_order_id": order.work_order_id, "capabilities": sorted(requested)},
-                requested_by="cloud_lead", reason=order.objective, risk_level="elevated", resource_scope={"run_id": order.run_id},
+                requested_by=requester_id, reason=order.objective, risk_level="elevated", resource_scope={"run_id": order.run_id},
                 budget_delta=budget_json, expires_at=datetime.now(UTC) + timedelta(hours=1),
                 run_id=order.run_id, work_order_id=order.work_order_id,
-                requester_actor_type=self._agent_actor(order.work_order_id, fallback_type="cloud_lead", fallback_id="cloud-lead")[0],
-                requester_actor_id=self._agent_actor(order.work_order_id, fallback_type="cloud_lead", fallback_id="cloud-lead")[1],
+                requester_actor_type=requester_type,
+                requester_actor_id=requester_id,
             )
             with self.sessions.begin() as session:
                 current = session.get(WorkOrderRecord, order.work_order_id)
