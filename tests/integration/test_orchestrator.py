@@ -155,7 +155,9 @@ def collaboration_gateway(sessions: Any, cloud: CloudLeadAdapter, executor: Fake
             registry.register_profile(profile)
         if str(runtime.runtime_id) not in existing_runtimes:
             registry.register_runtime(runtime)
-        registry.heartbeat(str(runtime.runtime_id), lease_seconds=3600)
+        registry.acquire_runtime(
+            str(runtime.runtime_id), owner_id="orchestrator-fixture", lease_seconds=3600
+        )
     return CollaborationGateway(
         cloud=CloudLeadAgentAdapter(cloud),
         executor=cast(LocalExecutorAgentAdapter, executor),
@@ -401,7 +403,9 @@ def test_failed_agent_redelegation_creates_new_delegation_and_attempt(tmp_path: 
         agent_id=AgentId("agent_backup_code_executor"), adapter_kind=AgentAdapterKind.INTERNAL,
         runtime_name="Backup code executor runtime",
     ))
-    registry.heartbeat("runtime_backup_code_executor", lease_seconds=3600)
+    registry.acquire_runtime(
+        "runtime_backup_code_executor", owner_id="backup-executor", lease_seconds=3600
+    )
     registry.disable("agent_local_code_executor")
 
     second_attempt_id = orchestrator.retry_attempt(order.work_order_id)

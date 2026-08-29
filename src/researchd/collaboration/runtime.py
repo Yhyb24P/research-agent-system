@@ -25,9 +25,29 @@ class AgentAdapterCatalog:
             raise ValueError(f"adapter already registered: {kind.value}")
         self._adapters[kind] = adapter
 
-    def resolve(self, runtime_id: str) -> tuple[AgentRuntime, AgentAdapter]:
+    def resolve(
+        self,
+        runtime_id: str,
+        *,
+        require_active_lease: bool = True,
+        now: datetime | None = None,
+    ) -> tuple[AgentRuntime, AgentAdapter]:
+        reference = now or datetime.now(UTC)
         with self.sessions() as session:
-            row = session.scalar(select(AgentRuntimeRecord).join(AgentRecord, AgentRecord.agent_id == AgentRuntimeRecord.agent_id).where(AgentRuntimeRecord.runtime_id == runtime_id, AgentRuntimeRecord.enabled.is_(True), AgentRecord.enabled.is_(True)))
+            query = select(AgentRuntimeRecord).join(
+                AgentRecord,
+                AgentRecord.agent_id == AgentRuntimeRecord.agent_id,
+            ).where(
+                AgentRuntimeRecord.runtime_id == runtime_id,
+                AgentRuntimeRecord.enabled.is_(True),
+                AgentRecord.enabled.is_(True),
+            )
+            if require_active_lease:
+                query = query.where(
+                    AgentRuntimeRecord.runtime_lease_id.is_not(None),
+                    AgentRuntimeRecord.lease_expires_at > reference,
+                )
+            row = session.scalar(query)
             if row is None:
                 raise LookupError(runtime_id)
             runtime = AgentRuntime(runtime_id=AgentRuntimeId(row.runtime_id), agent_id=AgentId(row.agent_id), adapter_kind=AgentAdapterKind(row.adapter_kind), runtime_name=row.runtime_name, endpoint_ref=row.endpoint_ref, framework=row.framework, model_provider=row.model_provider, model_name=row.model_name, protocols=tuple(row.protocols_json), metadata=dict(row.metadata_json))
@@ -37,7 +57,7 @@ class AgentAdapterCatalog:
         return runtime, adapter
 
     async def health(self, runtime_id: str, *, now: datetime | None = None) -> AgentHealth:
-        runtime, adapter = self.resolve(runtime_id)
+        runtime, adapter = self.resolve(runtime_id, require_active_lease=False)
         reference = now or datetime.now(UTC)
         with self.sessions() as session:
             row = session.get(AgentRuntimeRecord, runtime_id)

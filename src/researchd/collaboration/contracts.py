@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Annotated, Literal
 from pydantic import Field, PositiveInt, model_validator
 
@@ -88,6 +89,14 @@ class AgentRuntime(DomainModel):
     metadata: dict[str, str] = Field(default_factory=dict)
 
 
+class AgentRuntimeLease(DomainModel):
+    lease_id: str = Field(min_length=1, max_length=128)
+    runtime_id: AgentRuntimeId
+    owner_id: str = Field(min_length=1, max_length=128)
+    acquired_at: datetime
+    expires_at: datetime
+
+
 class DiscoveredAgentDescriptor(DomainModel):
     """Untrusted discovery result; it cannot grant profile or capabilities."""
 
@@ -139,6 +148,7 @@ class AgentInvocationRequest(DomainModel):
 class AgentInvocationResult(DomainModel):
     invocation_id: InvocationId
     status: InvocationStatus
+    external_invocation_id: str | None = Field(default=None, max_length=256)
     output_type: str | None = None
     output: dict[str, object] | None = None
     reason_code: str | None = None

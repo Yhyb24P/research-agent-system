@@ -120,6 +120,7 @@ def _database(tmp_path: Path) -> tuple[sessionmaker[Session], ArtifactService]:
         adapter_kind=AgentAdapterKind.A2A,
         runtime_name="Workspace runtime",
     ))
+    registry.acquire_runtime("runtime_workspace", owner_id="workspace-test")
     delegations = DelegationService(sessions)
     delegations.create(Delegation(
         delegation_id=DelegationId("del_workspace"),

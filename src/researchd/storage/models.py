@@ -138,6 +138,23 @@ class AgentRuntimeRecord(Base, VersionedTimestamps):
     enabled: Mapped[bool] = mapped_column(nullable=False, default=True)
     last_heartbeat_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     lease_expires_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    runtime_lease_id: Mapped[str | None] = mapped_column(String(128))
+    lease_owner_id: Mapped[str | None] = mapped_column(String(128))
+    lease_acquired_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+
+
+class AgentRuntimeLeaseEventRecord(Base):
+    __tablename__ = "agent_runtime_lease_events"
+    __table_args__ = (
+        Index("ix_runtime_lease_events_runtime", "runtime_id", "observed_at"),
+        Index("ix_runtime_lease_events_type", "event_type"),
+    )
+    event_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    runtime_id: Mapped[str] = mapped_column(ForeignKey("agent_runtimes.runtime_id"), nullable=False)
+    lease_id: Mapped[str | None] = mapped_column(String(128))
+    owner_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    event_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    observed_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
 
 
 class DelegationRecord(Base, VersionedTimestamps):
@@ -234,7 +251,16 @@ class WorkspaceReconciliationRecord(Base):
 
 class AgentInvocationRecord(Base):
     __tablename__ = "agent_invocations"
-    __table_args__ = (Index("ix_agent_invocations_delegation", "delegation_id"), Index("ix_agent_invocations_status", "status"))
+    __table_args__ = (
+        Index("ix_agent_invocations_delegation", "delegation_id"),
+        Index("ix_agent_invocations_status", "status"),
+        Index(
+            "ux_agent_invocations_runtime_external",
+            "runtime_id",
+            "external_invocation_id",
+            unique=True,
+        ),
+    )
     invocation_id: Mapped[str] = mapped_column(String(128), primary_key=True)
     delegation_id: Mapped[str] = mapped_column(ForeignKey("delegations.delegation_id"), nullable=False)
     run_id: Mapped[str] = mapped_column(ForeignKey("research_runs.run_id"), nullable=False)
@@ -251,6 +277,14 @@ class AgentInvocationRecord(Base):
     output_type: Mapped[str | None] = mapped_column(String(128))
     output_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     reason_code: Mapped[str | None] = mapped_column(String(128))
+    runtime_lease_id: Mapped[str | None] = mapped_column(String(128))
+    external_invocation_id: Mapped[str | None] = mapped_column(String(256))
+    dispatched_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    external_started_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    reconciliation_requested_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    last_reconciled_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    cancel_requested_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    deadline_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
     completed_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
 

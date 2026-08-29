@@ -2,10 +2,12 @@
 import json
 from typing import Any, Protocol
 from urllib.parse import urlparse
+from pydantic import ValidationError
 from researchd.adapters.a2a.adapter import A2AAdapter
 from researchd.adapters.a2a.codec import A2ACodecError, decode_executor_result, encode_granted_work_order
 from researchd.collaboration.contracts import AgentHealth, AgentInvocationRequest, AgentInvocationResult, AgentRuntime, EvidenceInvocationInput, ExecuteInvocationInput, PlanInvocationInput, ReviewInvocationInput
 from researchd.domain.enums import InvocationStatus
+from researchd.executor.contracts import ExecutorResult
 
 
 class HttpAgentClient(Protocol):
@@ -56,6 +58,7 @@ class A2ARemoteAgentAdapter:
             return AgentInvocationResult(
                 invocation_id=request.invocation_id,
                 status=status,
+                external_invocation_id=task.id,
                 output_type="A2ATask",
                 output=task.model_dump(mode="json"),
                 reason_code=reason,
@@ -66,6 +69,7 @@ class A2ARemoteAgentAdapter:
             return AgentInvocationResult(
                 invocation_id=request.invocation_id,
                 status=InvocationStatus.FAILED,
+                external_invocation_id=task.id,
                 output_type="A2ATask",
                 output=task.model_dump(mode="json"),
                 reason_code="A2A_EXECUTOR_RESULT_INVALID",
@@ -73,6 +77,7 @@ class A2ARemoteAgentAdapter:
         return AgentInvocationResult(
             invocation_id=request.invocation_id,
             status=InvocationStatus.SUCCEEDED,
+            external_invocation_id=task.id,
             output_type="ExecutorResult",
             output=result.model_dump(mode="json"),
         )
@@ -96,11 +101,12 @@ class A2ARemoteAgentAdapter:
 
 
 class HttpAgentAdapter:
-    def __init__(self, client: HttpAgentClient, *, max_payload_bytes: int = 256_000) -> None:
-        if max_payload_bytes <= 0:
-            raise ValueError("max_payload_bytes must be positive")
+    def __init__(self, client: HttpAgentClient, *, max_payload_bytes: int = 256_000, max_output_bytes: int = 1_000_000) -> None:
+        if max_payload_bytes <= 0 or max_output_bytes <= 0:
+            raise ValueError("HTTP payload and output limits must be positive")
         self.client = client
         self.max_payload_bytes = max_payload_bytes
+        self.max_output_bytes = max_output_bytes
 
     async def health(self, runtime: AgentRuntime) -> AgentHealth:
         if runtime.endpoint_ref is None:
@@ -122,6 +128,18 @@ class HttpAgentAdapter:
         if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
             return AgentInvocationResult(invocation_id=request.invocation_id, status=InvocationStatus.FAILED, reason_code="HTTP_ENDPOINT_UNSAFE")
         response = await self.client.invoke(request.endpoint_ref, payload)
+        try:
+            output_size = len(json.dumps(response, sort_keys=True, separators=(",", ":")).encode())
+        except (TypeError, ValueError):
+            return AgentInvocationResult(invocation_id=request.invocation_id, status=InvocationStatus.FAILED, reason_code="HTTP_OUTPUT_MALFORMED")
+        if output_size > self.max_output_bytes:
+            return AgentInvocationResult(invocation_id=request.invocation_id, status=InvocationStatus.FAILED, reason_code="HTTP_OUTPUT_TOO_LARGE")
+        if isinstance(request.typed_input, ExecuteInvocationInput):
+            try:
+                typed_output = ExecutorResult.model_validate(response)
+            except ValidationError:
+                return AgentInvocationResult(invocation_id=request.invocation_id, status=InvocationStatus.FAILED, reason_code="HTTP_EXECUTOR_RESULT_INVALID")
+            return AgentInvocationResult(invocation_id=request.invocation_id, status=InvocationStatus.SUCCEEDED, output_type="ExecutorResult", output=typed_output.model_dump(mode="json"))
         return AgentInvocationResult(invocation_id=request.invocation_id, status=InvocationStatus.SUCCEEDED, output_type="HttpAgentResult", output=response)
 
     async def cancel(self, invocation_id: str) -> None:
@@ -129,10 +147,13 @@ class HttpAgentAdapter:
 
 
 class LocalProcessAgentAdapter:
-    def __init__(self, runner: ProcessAgentRunner, command: tuple[str, ...]) -> None:
+    def __init__(self, runner: ProcessAgentRunner, command: tuple[str, ...], *, max_output_bytes: int = 1_000_000) -> None:
         if not command or any(not part or "\x00" in part for part in command):
             raise ValueError("process command must contain nonempty NUL-free arguments")
+        if max_output_bytes <= 0:
+            raise ValueError("process output limit must be positive")
         self.runner, self.command = runner, command
+        self.max_output_bytes = max_output_bytes
 
     async def health(self, runtime: AgentRuntime) -> AgentHealth:
         return AgentHealth(healthy=bool(self.command), reason=None if self.command else "process command missing")
@@ -142,6 +163,18 @@ class LocalProcessAgentAdapter:
         if payload is None:
             return AgentInvocationResult(invocation_id=request.invocation_id, status=InvocationStatus.FAILED, reason_code="PROCESS_PAYLOAD_REQUIRED")
         output = await self.runner.invoke(self.command, payload)
+        try:
+            output_size = len(json.dumps(output, sort_keys=True, separators=(",", ":")).encode())
+        except (TypeError, ValueError):
+            return AgentInvocationResult(invocation_id=request.invocation_id, status=InvocationStatus.FAILED, reason_code="PROCESS_OUTPUT_MALFORMED")
+        if output_size > self.max_output_bytes:
+            return AgentInvocationResult(invocation_id=request.invocation_id, status=InvocationStatus.FAILED, reason_code="PROCESS_OUTPUT_TOO_LARGE")
+        if isinstance(request.typed_input, ExecuteInvocationInput):
+            try:
+                typed_output = ExecutorResult.model_validate(output)
+            except ValidationError:
+                return AgentInvocationResult(invocation_id=request.invocation_id, status=InvocationStatus.FAILED, reason_code="PROCESS_EXECUTOR_RESULT_INVALID")
+            return AgentInvocationResult(invocation_id=request.invocation_id, status=InvocationStatus.SUCCEEDED, output_type="ExecutorResult", output=typed_output.model_dump(mode="json"))
         return AgentInvocationResult(invocation_id=request.invocation_id, status=InvocationStatus.SUCCEEDED, output_type="ProcessAgentResult", output=output)
 
     async def cancel(self, invocation_id: str) -> None:

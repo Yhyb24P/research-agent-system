@@ -142,6 +142,12 @@ extra installed:
 uv run pytest -q tests/qualification/test_iq01_real_interoperability.py
 ```
 
+Run the Agent runtime and invocation lifecycle qualification matrix:
+
+```bash
+uv run pytest -q tests/qualification/test_dq02_runtime_lifecycle.py
+```
+
 Integration tests are the executable reference workflow. The repository is a
 library/modular-monolith baseline; it does not yet ship a production daemon or
 browser application bootstrap.
