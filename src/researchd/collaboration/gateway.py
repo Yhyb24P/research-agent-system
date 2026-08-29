@@ -92,7 +92,7 @@ class CollaborationGateway:
         return self.delegations is not None and self.invocations is not None and ((self.agent_id is not None and self.runtime_id is not None) or self.selector is not None)
 
     def _start(self, run_id: str, purpose: DelegationPurpose, *, work_order_id: str | None = None, attempt_id: str | None = None, required_roles: tuple[str, ...] = (), required_skills: tuple[str, ...] = (), existing_delegation_id: str | None = None, typed_input: InvocationInput | None = None) -> tuple[DelegationId, InvocationId] | None:
-        if not self.tracking_enabled:
+        if (self.delegations is None or self.invocations is None) or (not self.tracking_enabled and existing_delegation_id is None):
             return None
         delegation_id = DelegationId(existing_delegation_id) if existing_delegation_id else DelegationId(f"del_{uuid4().hex}")
         invocation_id = InvocationId(f"inv_{uuid4().hex}")

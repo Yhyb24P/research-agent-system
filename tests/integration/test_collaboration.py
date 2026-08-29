@@ -282,6 +282,53 @@ def test_gateway_catalog_routes_plan_to_generic_http_agent(database: tuple[Path,
     assert result.output.proposal_id == "plan_http"
 
 
+def test_gateway_routes_typed_execute_to_generic_http_agent(database: tuple[Path, sessionmaker[Session]]) -> None:
+    path, sessions = database
+    registry = AgentRegistryService(sessions)
+    registry.register_profile(profile(AgentId("agent_remote_executor")))
+    registry.register_runtime(AgentRuntime(
+        runtime_id=AgentRuntimeId("runtime_remote_executor"), agent_id=AgentId("agent_remote_executor"),
+        adapter_kind=AgentAdapterKind.HTTP, runtime_name="Remote executor", endpoint_ref="http://127.0.0.1/execute",
+    ))
+    now = datetime.now(UTC)
+    with sessions.begin() as session:
+        session.add(WorkOrderRecord(
+            work_order_id="wo_remote", run_id="run_test", parent_work_order_id=None,
+            objective="run remote check", state="EXECUTING", idempotency_key="wo-remote-execute",
+            contract={"requested_capabilities": ["test.run"], "constraints": {"network": "none"}},
+            revision_reason=None, approval_id=None, approval_grant_id=None, version=1,
+            created_at=now, updated_at=now,
+        ))
+    delegations = DelegationService(sessions)
+    delegations.create(Delegation(delegation_id=DelegationId("del_remote"), run_id="run_test", work_order_id="wo_remote", purpose=DelegationPurpose.EXECUTE, idempotency_key="del-remote-execute"))
+    delegations.assign("del_remote", agent_id="agent_remote_executor", runtime_id="runtime_remote_executor")
+    with sessions.begin() as session:
+        session.add(AttemptRecord(
+            attempt_id="att_remote", work_order_id="wo_remote", delegation_id="del_remote",
+            state="RUNNING", terminal_at=None, version=1, created_at=now, updated_at=now,
+        ))
+
+    class Client:
+        async def invoke(self, endpoint: str, payload: dict[str, object]) -> dict[str, object]:
+            assert endpoint.endswith("/execute")
+            assert payload["attempt_id"] == "att_remote"
+            return {"attempt_id": "att_remote", "status": "execution_complete", "capability_results": [], "reported_claims": ["remote ok"], "errors": []}
+
+    catalog = AgentAdapterCatalog(sessions)
+    catalog.register(AgentAdapterKind.HTTP, HttpAgentAdapter(Client()))
+    gateway = CollaborationGateway(
+        delegations=delegations, invocations=InvocationService(sessions), catalog=catalog,
+    )
+    work_order = sessions().get(WorkOrderRecord, "wo_remote")
+    attempt = sessions().get(AttemptRecord, "att_remote")
+    assert work_order is not None and attempt is not None
+    result = asyncio.run(gateway.execute(work_order, attempt))
+    assert result.status == "execution_complete" and result.reported_claims == ("remote ok",)
+    with sessions() as session:
+        invocation = session.query(AgentInvocationRecord).filter_by(attempt_id="att_remote").one()
+        assert invocation.status == InvocationStatus.SUCCEEDED.value
+
+
 def test_delegation_constraints_and_terminal_state_are_enforced(database: tuple[Path, sessionmaker[Session]]) -> None:
     _, sessions = database
     registry = AgentRegistryService(sessions)
