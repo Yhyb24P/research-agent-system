@@ -60,6 +60,13 @@ def profile(agent_id: AgentId = AgentId("agent_executor")) -> AgentProfile:
     )
 
 
+def typed_execute(*, attempt_id: str = "att_typed", objective: str = "typed execution") -> ExecuteInvocationInput:
+    return ExecuteInvocationInput(work_order=GrantedWorkOrder(
+        attempt_id=attempt_id, objective=objective, granted_capabilities=frozenset(),
+        sandbox=SandboxSpec(attempt_id=attempt_id, workspace="/workspace"),
+    ))
+
+
 def test_registry_rejects_duplicate_profile(database: tuple[Path, sessionmaker[Session]]) -> None:
     _, sessions = database
     registry = AgentRegistryService(sessions)
@@ -155,6 +162,11 @@ def test_invocation_input_uses_purpose_discriminator() -> None:
     assert request.typed_input is not None and request.typed_input.kind == "PLAN"
     with pytest.raises(ValueError, match="kind must match purpose"):
         AgentInvocationRequest.model_validate({**request.model_dump(mode="json"), "purpose": "REVIEW"})
+    legacy = request.model_dump(mode="json")
+    legacy.pop("typed_input")
+    legacy["payload"] = {"objective": "opaque input is forbidden"}
+    with pytest.raises(ValueError, match="typed_input"):
+        AgentInvocationRequest.model_validate(legacy)
 
 
 def test_assignment_freezes_profile_and_invocation_is_structured(database: tuple[Path, sessionmaker[Session]]) -> None:
@@ -167,7 +179,7 @@ def test_assignment_freezes_profile_and_invocation_is_structured(database: tuple
     delegations.create(delegation)
     digest = delegations.assign("del_execute", agent_id="agent_executor", runtime_id="runtime_qwen")
     assert len(digest) == 64
-    request = AgentInvocationRequest(invocation_id=InvocationId("inv_execute"), delegation_id=DelegationId("del_execute"), run_id="run_test", agent_id=AgentId("agent_executor"), runtime_id=AgentRuntimeId("runtime_qwen"), purpose=DelegationPurpose.EXECUTE, input_sha256="a" * 64)
+    request = AgentInvocationRequest(invocation_id=InvocationId("inv_execute"), delegation_id=DelegationId("del_execute"), run_id="run_test", agent_id=AgentId("agent_executor"), runtime_id=AgentRuntimeId("runtime_qwen"), purpose=DelegationPurpose.EXECUTE, input_sha256="a" * 64, typed_input=typed_execute())
     invocations = InvocationService(sessions)
     invocations.start(request)
     invocations.complete(AgentInvocationResult(invocation_id=InvocationId("inv_execute"), status=InvocationStatus.SUCCEEDED, output_type="ExecutorResult", output={"ok": True}))
@@ -188,7 +200,7 @@ def test_invocation_recovery_fails_closed_after_controller_restart(database: tup
     invocations.start(AgentInvocationRequest(
         invocation_id=InvocationId("inv_recovery"), delegation_id=DelegationId("del_recovery"), run_id="run_test",
         agent_id=AgentId("agent_executor"), runtime_id=AgentRuntimeId("runtime_recovery"), purpose=DelegationPurpose.EXECUTE,
-        input_sha256="1" * 64,
+        input_sha256="1" * 64, typed_input=typed_execute(attempt_id="att_recovery"),
     ))
     assert invocations.recover_run("run_test") == ("inv_recovery",)
     with sessions() as session:
@@ -236,10 +248,7 @@ def test_invocation_persists_target_context_snapshot(database: tuple[Path, sessi
 def test_canonical_adapters_expose_health_and_preserve_boundaries() -> None:
     runtime = AgentRuntime(runtime_id=AgentRuntimeId("runtime_qwen"), agent_id=AgentId("agent_executor"), adapter_kind=AgentAdapterKind.HTTP, runtime_name="Qwen")
     assert asyncio.run(CloudLeadAgentAdapter(cast(CloudLeadAdapter, None)).health(runtime)).healthy
-    adapter = LocalExecutorAgentAdapter(cast(LocalExecutorWorker, None))
-    request = AgentInvocationRequest(invocation_id=InvocationId("inv_invalid"), delegation_id=DelegationId("del_execute"), run_id="run_test", agent_id=AgentId("agent_executor"), runtime_id=AgentRuntimeId("runtime_qwen"), purpose=DelegationPurpose.EXECUTE, input_sha256="b" * 64)
-    result = asyncio.run(adapter.invoke(request))
-    assert result.status == InvocationStatus.FAILED and result.reason_code == "GRANTED_WORK_ORDER_REQUIRED"
+    assert asyncio.run(LocalExecutorAgentAdapter(cast(LocalExecutorWorker, None)).health(runtime)).healthy
 
 
 def test_gateway_tracking_creates_delegation_and_invocation(database: tuple[Path, sessionmaker[Session]]) -> None:
@@ -252,7 +261,7 @@ def test_gateway_tracking_creates_delegation_and_invocation(database: tuple[Path
         delegations=DelegationService(sessions), invocations=InvocationService(sessions),
         agent_id=AgentId("agent_executor"), runtime_id=AgentRuntimeId("runtime_qwen"),
     )
-    tracking = gateway._start("run_test", DelegationPurpose.EXECUTE)
+    tracking = gateway._start("run_test", DelegationPurpose.EXECUTE, typed_input=typed_execute())
     assert tracking is not None
     gateway._finish(tracking[1], success=True, output_type="ExecutorResult", output={"ok": True})
     with sessions() as session:
@@ -268,7 +277,7 @@ def test_gateway_cancellation_preserves_cancelled_terminal_state(database: tuple
     registry.register_profile(profile())
     registry.register_runtime(AgentRuntime(runtime_id=AgentRuntimeId("runtime_qwen"), agent_id=AgentId("agent_executor"), adapter_kind=AgentAdapterKind.HTTP, runtime_name="Qwen"))
     gateway = CollaborationGateway(cast(CloudLeadAgentAdapter, None), cast(LocalExecutorAgentAdapter, None), delegations=DelegationService(sessions), invocations=InvocationService(sessions), agent_id=AgentId("agent_executor"), runtime_id=AgentRuntimeId("runtime_qwen"))
-    tracking = gateway._start("run_test", DelegationPurpose.EXECUTE)
+    tracking = gateway._start("run_test", DelegationPurpose.EXECUTE, typed_input=typed_execute())
     assert tracking is not None
     gateway._finish(tracking[1], success=False, reason="CANCELLED")
     with sessions() as session:
@@ -357,11 +366,11 @@ def test_delegation_constraints_and_terminal_state_are_enforced(database: tuple[
     service.create(done)
     service.assign("del_terminal", agent_id="agent_executor", runtime_id="runtime_qwen")
     invocations = InvocationService(sessions)
-    request = AgentInvocationRequest(invocation_id=InvocationId("inv_terminal"), delegation_id=DelegationId("del_terminal"), run_id="run_test", agent_id=AgentId("agent_executor"), runtime_id=AgentRuntimeId("runtime_qwen"), purpose=DelegationPurpose.EXECUTE, input_sha256="c" * 64)
+    request = AgentInvocationRequest(invocation_id=InvocationId("inv_terminal"), delegation_id=DelegationId("del_terminal"), run_id="run_test", agent_id=AgentId("agent_executor"), runtime_id=AgentRuntimeId("runtime_qwen"), purpose=DelegationPurpose.EXECUTE, input_sha256="c" * 64, typed_input=typed_execute())
     invocations.start(request)
     invocations.complete(AgentInvocationResult(invocation_id=InvocationId("inv_terminal"), status=InvocationStatus.SUCCEEDED))
     with pytest.raises(ValueError, match="terminal"):
-        invocations.start(AgentInvocationRequest(invocation_id=InvocationId("inv_reopen"), delegation_id=DelegationId("del_terminal"), run_id="run_test", agent_id=AgentId("agent_executor"), runtime_id=AgentRuntimeId("runtime_qwen"), purpose=DelegationPurpose.EXECUTE, input_sha256="d" * 64))
+        invocations.start(AgentInvocationRequest(invocation_id=InvocationId("inv_reopen"), delegation_id=DelegationId("del_terminal"), run_id="run_test", agent_id=AgentId("agent_executor"), runtime_id=AgentRuntimeId("runtime_qwen"), purpose=DelegationPurpose.EXECUTE, input_sha256="d" * 64, typed_input=typed_execute()))
 
 
 def test_selector_is_deterministic_and_requires_healthy_runtime(database: tuple[Path, sessionmaker[Session]]) -> None:
@@ -451,12 +460,10 @@ def test_human_directive_is_append_only_and_has_no_control_effect(database: tupl
 
 def test_heterogeneous_adapters_keep_invocation_scope() -> None:
     runtime = AgentRuntime(runtime_id=AgentRuntimeId("runtime_http"), agent_id=AgentId("agent_executor"), adapter_kind=AgentAdapterKind.HTTP, runtime_name="HTTP", endpoint_ref="http://127.0.0.1")
-    request = AgentInvocationRequest(invocation_id=InvocationId("inv_heterogeneous"), delegation_id=DelegationId("del_execute"), run_id="run_test", agent_id=AgentId("agent_executor"), runtime_id=AgentRuntimeId("runtime_http"), purpose=DelegationPurpose.EXECUTE, input_sha256="c" * 64)
+    request = AgentInvocationRequest(invocation_id=InvocationId("inv_heterogeneous"), delegation_id=DelegationId("del_execute"), run_id="run_test", agent_id=AgentId("agent_executor"), runtime_id=AgentRuntimeId("runtime_http"), purpose=DelegationPurpose.EXECUTE, input_sha256="c" * 64, typed_input=typed_execute())
     http_result = asyncio.run(HttpAgentAdapter(cast(HttpAgentClient, None)).invoke(request))
-    process_result = asyncio.run(LocalProcessAgentAdapter(cast(ProcessAgentRunner, None), ("agent",)).invoke(request))
     a2a_result = asyncio.run(A2ARemoteAgentAdapter(cast(A2AAdapter, None)).invoke(request))
-    assert http_result.reason_code == "HTTP_PAYLOAD_REQUIRED"
-    assert process_result.reason_code == "PROCESS_PAYLOAD_REQUIRED"
+    assert http_result.reason_code == "HTTP_ENDPOINT_REQUIRED"
     assert a2a_result.reason_code == "A2A_SCOPE_REQUIRED"
 
 
@@ -549,7 +556,7 @@ def test_http_and_process_adapters_reject_unsafe_or_oversized_inputs() -> None:
     assert not asyncio.run(HttpAgentAdapter(cast(HttpAgentClient, None)).health(runtime)).healthy
     with pytest.raises(ValueError, match="NUL-free"):
         LocalProcessAgentAdapter(cast(ProcessAgentRunner, None), ("agent\x00",))
-    request = AgentInvocationRequest(invocation_id=InvocationId("inv_large"), delegation_id=DelegationId("del_execute"), run_id="run_test", agent_id=AgentId("agent_executor"), runtime_id=AgentRuntimeId("runtime_http"), purpose=DelegationPurpose.EXECUTE, input_sha256="d" * 64, payload={"blob": "x" * 100})
+    request = AgentInvocationRequest(invocation_id=InvocationId("inv_large"), delegation_id=DelegationId("del_execute"), run_id="run_test", agent_id=AgentId("agent_executor"), runtime_id=AgentRuntimeId("runtime_http"), purpose=DelegationPurpose.EXECUTE, input_sha256="d" * 64, typed_input=typed_execute(objective="x" * 100))
     result = asyncio.run(HttpAgentAdapter(cast(HttpAgentClient, None), max_payload_bytes=16).invoke(request))
     assert result.reason_code == "HTTP_PAYLOAD_TOO_LARGE"
 

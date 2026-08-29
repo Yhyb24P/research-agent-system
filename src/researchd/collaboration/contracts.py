@@ -99,14 +99,11 @@ class AgentInvocationRequest(DomainModel):
     input_sha256: str
     endpoint_ref: str | None = None
     context_bundle: AgentContextBundle | None = None
-    typed_input: InvocationInput | None = None
-    # Deprecated compatibility escape hatch for pre-ACP adapters. New gateway
-    # calls must use typed_input so purpose and payload cannot drift apart.
-    payload: object | None = None
+    typed_input: InvocationInput
 
     @model_validator(mode="after")
     def typed_input_matches_purpose(self) -> "AgentInvocationRequest":
-        if self.typed_input is not None and self.typed_input.kind != self.purpose.value:
+        if self.typed_input.kind != self.purpose.value:
             raise ValueError("typed invocation input kind must match purpose")
         return self
 

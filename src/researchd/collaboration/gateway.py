@@ -74,17 +74,17 @@ class CollaborationGateway:
         )
 
     @staticmethod
-    def _typed_execute_input(work_order: WorkOrderRecord, attempt: AttemptRecord) -> ExecuteInvocationInput:
+    def _typed_execute_input(work_order: WorkOrderRecord, attempt_id: str) -> ExecuteInvocationInput:
         """Build a host-path-free execution contract from the trusted WorkOrder."""
         contract = work_order.contract
         constraints = contract.get("constraints", {})
         network = NetworkMode(constraints.get("network", NetworkMode.NONE.value))
         requested = frozenset(Capability(value) for value in contract.get("requested_capabilities", ()))
         return ExecuteInvocationInput(work_order=GrantedWorkOrder(
-            attempt_id=attempt.attempt_id,
+            attempt_id=attempt_id,
             objective=work_order.objective,
             granted_capabilities=requested,
-            sandbox=SandboxSpec(attempt_id=attempt.attempt_id, workspace="/workspace", network=network),
+            sandbox=SandboxSpec(attempt_id=attempt_id, workspace="/workspace", network=network),
         ))
 
     @property
@@ -92,6 +92,8 @@ class CollaborationGateway:
         return self.delegations is not None and self.invocations is not None and ((self.agent_id is not None and self.runtime_id is not None) or self.selector is not None)
 
     def _start(self, run_id: str, purpose: DelegationPurpose, *, work_order_id: str | None = None, attempt_id: str | None = None, required_roles: tuple[str, ...] = (), required_skills: tuple[str, ...] = (), existing_delegation_id: str | None = None, typed_input: InvocationInput | None = None) -> tuple[DelegationId, InvocationId] | None:
+        if typed_input is None:
+            raise ValueError("typed invocation input is required")
         if (self.delegations is None or self.invocations is None) or (not self.tracking_enabled and existing_delegation_id is None):
             return None
         delegation_id = DelegationId(existing_delegation_id) if existing_delegation_id else DelegationId(f"del_{uuid4().hex}")
@@ -135,17 +137,25 @@ class CollaborationGateway:
         return delegation_id, invocation_id
 
     def prepare_execution(self, work_order: WorkOrderRecord) -> str | None:
-        tracking = self._start(work_order.run_id, DelegationPurpose.EXECUTE, work_order_id=work_order.work_order_id, required_roles=("executor",))
-        if tracking is None:
+        """Assign execution ownership before the immutable Attempt is created."""
+        if not self.tracking_enabled or self.delegations is None:
             return None
-        assert self.invocations is not None
-        # Preparation must not leave a synthetic Invocation running; remove the
-        # provisional record and let execute() create the real invocation.
-        with self.invocations.sessions.begin() as session:
-            row = session.get(AgentInvocationRecord, str(tracking[1]))
-            if row is not None:
-                session.delete(row)
-        return str(tracking[0])
+        if self.selector is not None and (self.agent_id is None or self.runtime_id is None):
+            selected = self.selector.select(required_roles=("executor",))
+            if selected is None:
+                raise ValueError("no eligible Agent runtime for delegation")
+            agent_id, runtime_id = selected.agent_id, selected.runtime_id
+        else:
+            assert self.agent_id is not None and self.runtime_id is not None
+            agent_id, runtime_id = self.agent_id, self.runtime_id
+        delegation_id = DelegationId(f"del_{uuid4().hex}")
+        self.delegations.create(Delegation(
+            delegation_id=delegation_id, run_id=work_order.run_id,
+            work_order_id=work_order.work_order_id, purpose=DelegationPurpose.EXECUTE,
+            required_roles=("executor",), idempotency_key=f"{delegation_id}-orchestration",
+        ))
+        self.delegations.assign(str(delegation_id), agent_id=str(agent_id), runtime_id=str(runtime_id))
+        return str(delegation_id)
 
     def _finish(self, invocation_id: InvocationId | None, *, success: bool, output_type: str | None = None, output: dict[str, object] | None = None, reason: str | None = None) -> None:
         if invocation_id is not None:
@@ -208,7 +218,7 @@ class CollaborationGateway:
         return result
 
     async def execute(self, work_order: WorkOrderRecord, attempt: AttemptRecord) -> ExecutorResult:
-        typed_input = self._typed_execute_input(work_order, attempt)
+        typed_input = self._typed_execute_input(work_order, attempt.attempt_id)
         tracking = self._start(work_order.run_id, DelegationPurpose.EXECUTE, work_order_id=work_order.work_order_id, attempt_id=attempt.attempt_id, required_roles=("executor",), existing_delegation_id=attempt.delegation_id, typed_input=typed_input)
         try:
             adapter = self._tracked_adapter(tracking)

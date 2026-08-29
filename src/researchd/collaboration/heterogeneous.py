@@ -3,7 +3,7 @@ import json
 from typing import Any, Protocol
 from urllib.parse import urlparse
 from researchd.adapters.a2a.adapter import A2AAdapter
-from researchd.collaboration.contracts import AgentHealth, AgentInvocationRequest, AgentInvocationResult, AgentRuntime, ExecuteInvocationInput, PlanInvocationInput, ReviewInvocationInput
+from researchd.collaboration.contracts import AgentHealth, AgentInvocationRequest, AgentInvocationResult, AgentRuntime, EvidenceInvocationInput, ExecuteInvocationInput, PlanInvocationInput, ReviewInvocationInput
 from researchd.domain.enums import InvocationStatus
 
 
@@ -19,10 +19,10 @@ def _request_payload(request: AgentInvocationRequest) -> dict[str, Any] | None:
     payload: dict[str, Any] | None
     if isinstance(request.typed_input, ExecuteInvocationInput):
         payload = request.typed_input.work_order.model_dump(mode="json")
-    elif isinstance(request.typed_input, (PlanInvocationInput, ReviewInvocationInput)):
+    elif isinstance(request.typed_input, (PlanInvocationInput, ReviewInvocationInput, EvidenceInvocationInput)):
         payload = request.typed_input.context.model_dump(mode="json")
     else:
-        payload = request.payload if isinstance(request.payload, dict) else None
+        payload = None
     if payload is not None and request.context_bundle is not None:
         payload = {**payload, "agent_context": request.context_bundle.model_dump(mode="json")}
     return payload

@@ -22,7 +22,7 @@ class CloudLeadAgentAdapter:
 
     async def invoke(self, request: AgentInvocationRequest) -> AgentInvocationResult:
         typed = request.typed_input
-        selection = typed.context if isinstance(typed, (PlanInvocationInput, ReviewInvocationInput)) else request.payload
+        selection = typed.context if isinstance(typed, (PlanInvocationInput, ReviewInvocationInput)) else None
         if not isinstance(selection, CloudContextSelection):
             return AgentInvocationResult(invocation_id=request.invocation_id, status=InvocationStatus.FAILED, reason_code="CONTEXT_SELECTION_REQUIRED")
         if request.purpose.value == "PLAN":
@@ -69,7 +69,7 @@ class LocalExecutorAgentAdapter:
 
     async def invoke(self, request: AgentInvocationRequest) -> AgentInvocationResult:
         typed = request.typed_input
-        work_order = typed.work_order if isinstance(typed, ExecuteInvocationInput) else request.payload
+        work_order = typed.work_order if isinstance(typed, ExecuteInvocationInput) else None
         if not isinstance(work_order, GrantedWorkOrder):
             return AgentInvocationResult(invocation_id=request.invocation_id, status=InvocationStatus.FAILED, reason_code="GRANTED_WORK_ORDER_REQUIRED")
         result: ExecutorResult = await self.delegate.execute(work_order)
