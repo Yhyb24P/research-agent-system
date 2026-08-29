@@ -4,6 +4,7 @@ import asyncio
 from typing import cast
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from researchd.collaboration.contracts import AgentProfile, AgentRuntime, AgentInvocationRequest, DiscoveredAgentDescriptor, HumanDirective, PlanInvocationInput
@@ -29,7 +30,7 @@ from researchd.executor.worker import LocalExecutorWorker
 from researchd.collaboration.contracts import AgentInvocationResult, Delegation
 from researchd.domain.enums import AgentAdapterKind, AgentTrustZone, DataClassification, DelegationPurpose, InvocationStatus, ResearchRunState
 from researchd.domain.ids import DelegationId, InvocationId, MessageId
-from researchd.storage.models import AgentRecord, AgentRuntimeRecord, CollaborationMessageRecord, WorkspaceRecord, ResearchRunRecord
+from researchd.storage.models import AgentRecord, AgentRuntimeRecord, AttemptRecord, AuditEventRecord, CollaborationMessageRecord, WorkspaceRecord, ResearchRunRecord, WorkOrderRecord
 from researchd.storage.models import DelegationRecord, AgentInvocationRecord
 from researchd.storage.db import create_sqlite_engine, session_factory
 from researchd.domain.ids import AgentId, AgentRuntimeId
@@ -376,3 +377,47 @@ def test_web_and_tui_clients_share_local_control_resources(tmp_path: Path) -> No
         server.server_close()
     with pytest.raises(ValueError, match="loopback"):
         serve_local_control(api, host="0.0.0.0", port=0)
+
+
+def test_collaboration_only_reference_workflow_records_agent_chain(tmp_path: Path) -> None:
+    from test_orchestrator import FakeVerifier, _proposal, _review, make_orchestrator
+    from researchd.collaboration.adapters import CloudLeadAgentAdapter, LocalExecutorAgentAdapter
+    from researchd.collaboration.gateway import CollaborationGateway
+    from researchd.orchestrator.engine import OrchestrationLimits, ResearchOrchestrator
+    from researchd.policy.engine import DeterministicPolicyEngine, RecordingPolicyEngine
+    sessions, legacy, _, _ = make_orchestrator(tmp_path, cloud_responses=[_proposal(), _review()])
+    registry = AgentRegistryService(sessions)
+    for agent_id, role, skill, runtime_id in (
+        ("agent_planner", "planner", "research.plan", "runtime_planner"),
+        ("agent_executor", "executor", "code.modify", "runtime_executor"),
+        ("agent_reviewer", "reviewer", "research.review", "runtime_reviewer"),
+    ):
+        registry.register_profile(AgentProfile(agent_id=AgentId(agent_id), display_name=agent_id, roles=(role,), skills=(skill,), trust_zone=AgentTrustZone.LOCAL_PRIVATE))
+        registry.register_runtime(AgentRuntime(runtime_id=AgentRuntimeId(runtime_id), agent_id=AgentId(agent_id), adapter_kind=AgentAdapterKind.INTERNAL, runtime_name=runtime_id))
+        registry.heartbeat(runtime_id)
+
+    from researchd.executor.contracts import ExecutorResult
+
+    class OneArgExecutor:
+        async def execute(self, work_order: object) -> ExecutorResult:
+            return ExecutorResult(attempt_id="gateway-result", status="execution_complete", capability_results=(), reported_claims=("delegated",), errors=())
+
+    gateway = CollaborationGateway(
+        CloudLeadAgentAdapter(cast(CloudLeadAdapter, legacy.cloud)),
+        LocalExecutorAgentAdapter(cast(LocalExecutorWorker, OneArgExecutor())),
+        delegations=DelegationService(sessions), invocations=InvocationService(sessions),
+        selector=AgentSelector(sessions),
+    )
+    policy = RecordingPolicyEngine(DeterministicPolicyEngine(), sessions)
+    controller = ResearchOrchestrator(sessions, policy=policy, verifier=FakeVerifier(sessions), collaboration=gateway, limits=OrchestrationLimits(max_iterations=8, max_cloud_calls=8))
+    run_id = controller.create_run(workspace_id="ws_e2e", objective="collaboration e2e")
+    assert asyncio.run(controller.run(run_id, max_steps=30)).state is ResearchRunState.COMPLETED
+    with sessions() as session:
+        purposes = set(session.scalars(select(DelegationRecord.purpose).where(DelegationRecord.run_id == run_id)).all())
+        assert purposes == {"PLAN", "EXECUTE", "REVIEW"}
+        invocations = session.scalars(select(AgentInvocationRecord).where(AgentInvocationRecord.run_id == run_id)).all()
+        assert len(invocations) == 3 and {item.status for item in invocations} == {"SUCCEEDED"}
+        attempt = session.scalar(select(AttemptRecord).where(AttemptRecord.work_order_id.in_(select(WorkOrderRecord.work_order_id).where(WorkOrderRecord.run_id == run_id))))
+        assert attempt is not None and attempt.delegation_id is not None
+        plan_event = session.scalar(select(AuditEventRecord).where(AuditEventRecord.run_id == run_id, AuditEventRecord.event_type == "PLAN_CREATED"))
+        assert plan_event is not None and plan_event.actor_type == "agent" and plan_event.actor_id == "agent_planner"
