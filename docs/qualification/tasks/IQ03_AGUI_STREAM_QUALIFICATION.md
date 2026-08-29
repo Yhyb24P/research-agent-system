@@ -23,6 +23,11 @@ Prove that the presentation event plane is resumable, read-only, ordered and non
 
 Use a deterministic fixture Run containing workflow, approval, workspace, verification and human-message events. Compare the canonical audit stream to the client-visible projected sequence. Client-side reconnect tests must start from recorded stream offsets rather than wall-clock timestamps.
 
+The current intended-client load profile is 2,000 durable events in one replay:
+offsets must be exactly contiguous and unique, and the serialized SSE payload
+must remain below 2 MB. Simultaneous approval commands must exercise the real
+one-shot approval authority; exactly one command may consume the grant.
+
 ## Evidence
 
 Store canonical audit offsets, projected event types, reconnect cursor, duplicate/missing count, redaction assertions and command-response status codes.
