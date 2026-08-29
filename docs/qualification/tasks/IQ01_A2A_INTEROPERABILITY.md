@@ -37,6 +37,30 @@ Only compatibility fixes, codecs, adapter guards, tests, fixtures and qualificat
 
 Capture independent implementation identity/version, Agent Card, sanitized protocol traces, researchd invocation/task mapping, audit offsets, final Attempt state, result artifact hash and all negative-test rejections.
 
+The executable boundary is `tests/qualification/independent_a2a_agent.py`. It
+runs as a separate process using the official A2A server SDK and does not import
+`researchd`. The controller side uses `OfficialA2AClient`; therefore the test
+crosses Agent Card discovery, HTTP/JSON-RPC transport, streaming, task storage,
+tenant isolation, cancellation and controller reconciliation rather than
+calling an in-process fake.
+
+Run the matrix twice from clean Agent and controller state, retain the
+sanitized report outside the source repository, and capture JUnit separately:
+
+```bash
+mkdir -p <evidence-root>/IQ01
+IQ01_REPORT=<evidence-root>/IQ01/interoperability-report.json \
+  uv run pytest -q tests/qualification/test_iq01_real_interoperability.py \
+  --junitxml=<evidence-root>/IQ01/interoperability-junit.xml
+```
+
+The report contains no request body beyond the bounded qualification fixture.
+It records both cycle summaries, Agent Cards, official SDK version, server
+script hash, sanitized stream/server traces, authoritative mapping, audit
+offsets, post-reconciliation Attempt state and result hash. A test pass is an
+observation only: the report still needs an evidence envelope bound to the
+exact candidate and independent acceptance under `GATE_POLICY.md`.
+
 ## Exit criteria
 
 All HARD checks pass against at least one independent implementation. The same scenario suite must pass twice from a clean controller state with no unexplained authoritative state differences.

@@ -135,6 +135,13 @@ uv run pytest -q \
   tests/integration/test_langgraph_runtime.py
 ```
 
+Run the real-process A2A interoperability qualification matrix with the `a2a`
+extra installed:
+
+```bash
+uv run pytest -q tests/qualification/test_iq01_real_interoperability.py
+```
+
 Integration tests are the executable reference workflow. The repository is a
 library/modular-monolith baseline; it does not yet ship a production daemon or
 browser application bootstrap.

@@ -1,5 +1,6 @@
 """Optional official A2A SDK client isolated from the trusted core."""
 
+from collections.abc import Callable
 from typing import Any
 
 from researchd.adapters.a2a.adapter import A2AAdapterError
@@ -8,14 +9,25 @@ from researchd.adapters.a2a.adapter import A2AAdapterError
 class OfficialA2AClient:
     """Use a2a-sdk for discovery, transport, streaming, tenancy, and cancellation."""
 
-    def __init__(self, endpoint: str) -> None:
+    def __init__(
+        self,
+        endpoint: str,
+        *,
+        event_observer: Callable[[dict[str, str]], None] | None = None,
+    ) -> None:
         if not endpoint:
             raise ValueError("A2A endpoint is required")
         self.endpoint = endpoint
+        self.event_observer = event_observer
 
-    async def send(self, payload: dict[str, Any]) -> dict[str, Any]:
+    async def send(
+        self,
+        payload: dict[str, Any],
+        *,
+        on_task: Callable[[dict[str, Any]], None] | None = None,
+    ) -> dict[str, Any]:
         from a2a.client import create_client
-        from a2a.types import Message, SendMessageRequest, Task
+        from a2a.types import Message, SendMessageRequest, Task, TaskState
         from google.protobuf.json_format import MessageToDict, ParseDict
 
         request = SendMessageRequest()
@@ -27,6 +39,14 @@ class OfficialA2AClient:
                 if response.HasField("task"):
                     task = Task()
                     task.CopyFrom(response.task)
+                    self._observe({
+                        "kind": "task",
+                        "task_id": task.id,
+                        "context_id": task.context_id,
+                        "state": TaskState.Name(task.status.state),
+                    })
+                    if on_task is not None:
+                        on_task(MessageToDict(task, preserving_proto_field_name=False))
                 elif response.HasField("status_update"):
                     if task is None:
                         raise A2AAdapterError("A2A stream emitted a status update before its Task")
@@ -34,6 +54,12 @@ class OfficialA2AClient:
                     self._require_stream_scope(
                         task.id, task.context_id, status_update.task_id, status_update.context_id
                     )
+                    self._observe({
+                        "kind": "status",
+                        "task_id": status_update.task_id,
+                        "context_id": status_update.context_id,
+                        "state": TaskState.Name(status_update.status.state),
+                    })
                     task.status.CopyFrom(status_update.status)
                 elif response.HasField("artifact_update"):
                     if task is None:
@@ -42,6 +68,12 @@ class OfficialA2AClient:
                     self._require_stream_scope(
                         task.id, task.context_id, artifact_update.task_id, artifact_update.context_id
                     )
+                    self._observe({
+                        "kind": "artifact",
+                        "task_id": artifact_update.task_id,
+                        "context_id": artifact_update.context_id,
+                        "artifact_id": artifact_update.artifact.artifact_id,
+                    })
                     self._apply_artifact_update(task, artifact_update)
                 elif response.HasField("message"):
                     message: Message = response.message
@@ -51,6 +83,10 @@ class OfficialA2AClient:
         if task is None:
             raise A2AAdapterError("A2A response stream did not contain a Task")
         return MessageToDict(task, preserving_proto_field_name=False)
+
+    def _observe(self, event: dict[str, str]) -> None:
+        if self.event_observer is not None:
+            self.event_observer(event)
 
     async def cancel(self, *, task_id: str, tenant: str | None = None) -> dict[str, Any]:
         from a2a.client import create_client
@@ -83,6 +119,28 @@ class OfficialA2AClient:
         finally:
             await client.close()
         return MessageToDict(response, preserving_proto_field_name=False)
+
+    async def get_task(
+        self,
+        *,
+        task_id: str,
+        tenant: str | None = None,
+        history_length: int = 0,
+    ) -> dict[str, Any]:
+        from a2a.client import create_client
+        from a2a.types import GetTaskRequest
+        from google.protobuf.json_format import MessageToDict
+
+        client = await create_client(self.endpoint)
+        try:
+            task = await client.get_task(GetTaskRequest(
+                id=task_id,
+                tenant=tenant or "",
+                history_length=history_length,
+            ))
+        finally:
+            await client.close()
+        return MessageToDict(task, preserving_proto_field_name=False)
 
     @staticmethod
     def _require_stream_scope(task_id: str, context_id: str, update_task_id: str, update_context_id: str) -> None:
