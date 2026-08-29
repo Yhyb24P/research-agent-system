@@ -13,6 +13,10 @@ jobs:
     # Bubblewrap security tests require the user/network namespace behavior
     # available on this runner image; do not silently skip those tests.
     runs-on: ubuntu-22.04
+    env:
+      # The sandbox mounts the project venv at /runtime. Copy the interpreter
+      # instead of leaving a host-absolute symlink that cannot resolve there.
+      UV_LINK_MODE: copy
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
