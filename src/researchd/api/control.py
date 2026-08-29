@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from researchd.orchestrator.engine import ResearchOrchestrator, RunSnapshot
-from researchd.storage.models import AgentRecord, AgentRuntimeRecord, ArtifactRecord, ApprovalRequestRecord, AuditEventRecord, DelegationRecord, AgentInvocationRecord, AttemptRecord, ResearchRunRecord, WorkOrderRecord
+from researchd.storage.models import AgentRecord, AgentRuntimeRecord, ArtifactRecord, ApprovalRequestRecord, AuditEventRecord, DelegationRecord, AgentInvocationRecord, AttemptRecord, PlanRecord, ResearchRunRecord, WorkOrderRecord
 
 
 class LocalControlAPI:
@@ -128,6 +128,15 @@ class LocalControlAPI:
             items.append({"kind": "approval", "entity_id": approval["approval_id"], "timestamp": approval["created_at"], **approval})
         for artifact in self.artifacts(run_id):
             items.append({"kind": "artifact", "entity_id": artifact["artifact_id"], "timestamp": artifact["created_at"], **artifact})
+        with self.sessions() as session:
+            plans = session.scalars(select(PlanRecord).where(PlanRecord.run_id == run_id).order_by(PlanRecord.created_at, PlanRecord.plan_id)).all()
+            orders = session.scalars(select(WorkOrderRecord).where(WorkOrderRecord.run_id == run_id).order_by(WorkOrderRecord.created_at, WorkOrderRecord.work_order_id)).all()
+            attempts = session.scalars(select(AttemptRecord).join(WorkOrderRecord).where(WorkOrderRecord.run_id == run_id).order_by(AttemptRecord.created_at, AttemptRecord.attempt_id)).all()
+            invocations = session.scalars(select(AgentInvocationRecord).where(AgentInvocationRecord.run_id == run_id).order_by(AgentInvocationRecord.created_at, AgentInvocationRecord.invocation_id)).all()
+            items.extend({"kind": "plan", "entity_id": item.plan_id, "timestamp": item.created_at.isoformat(), "plan_id": item.plan_id, "run_id": item.run_id} for item in plans)
+            items.extend({"kind": "work_order", "entity_id": item.work_order_id, "timestamp": item.created_at.isoformat(), "work_order_id": item.work_order_id, "state": item.state, "objective": item.objective} for item in orders)
+            items.extend({"kind": "attempt", "entity_id": item.attempt_id, "timestamp": item.created_at.isoformat(), "attempt_id": item.attempt_id, "work_order_id": item.work_order_id, "delegation_id": item.delegation_id, "state": item.state} for item in attempts)
+            items.extend({"kind": "invocation", "entity_id": item.invocation_id, "timestamp": item.created_at.isoformat(), "invocation_id": item.invocation_id, "delegation_id": item.delegation_id, "purpose": item.purpose, "agent_id": item.agent_id, "runtime_id": item.runtime_id, "status": item.status} for item in invocations)
         return sorted(items, key=lambda item: (item["timestamp"], item["kind"], item["entity_id"]))
 
     async def cancel_run(self, run_id: str) -> dict[str, Any]:

@@ -572,6 +572,9 @@ def test_web_and_tui_clients_share_local_control_resources(tmp_path: Path) -> No
         assert isinstance(tail_payload, dict)
         assert [item["event_id"] for item in tail_payload["events"]] == [item["event_id"] for item in events[1:]]
     assert router.get("/api/timeline/" + run_id)[0] == 200
+    timeline_status, timeline_payload = router.get("/api/timeline/" + run_id)
+    assert timeline_status == 200 and isinstance(timeline_payload, list)
+    assert {item["kind"] for item in timeline_payload} >= {"event"}
     assert router.get("/api/approvals?run=" + run_id)[0] == 200
     assert router.get("/api/artifacts?run=" + run_id)[0] == 200
     assert "Agents" in render_tui(api, run_id=run_id)
@@ -630,5 +633,7 @@ def test_collaboration_only_reference_workflow_records_agent_chain(tmp_path: Pat
         plan_event = session.scalar(select(AuditEventRecord).where(AuditEventRecord.run_id == run_id, AuditEventRecord.event_type == "PLAN_CREATED"))
         assert plan_event is not None and plan_event.actor_type == "agent" and plan_event.actor_id == "agent_planner"
     rendered = render_tui(LocalControlAPI(sessions, controller), run_id=run_id)
+    timeline = LocalControlAPI(sessions, controller).timeline(run_id)
+    assert {item["kind"] for item in timeline} >= {"event", "plan", "work_order", "attempt", "delegation", "invocation"}
     assert "Runtime runtime_planner" in rendered
     assert "Delegations" in rendered and "Approvals" in rendered and "Artifacts" in rendered and "System" in rendered
