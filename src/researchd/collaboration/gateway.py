@@ -251,8 +251,15 @@ class CollaborationGateway:
             await self.executor.cancel(attempt_id)
         if self.invocations is not None:
             with self.invocations.sessions() as session:
-                invocation_ids = session.scalars(select(AgentInvocationRecord.invocation_id).where(AgentInvocationRecord.attempt_id == attempt_id, AgentInvocationRecord.status == InvocationStatus.RUNNING.value)).all()
-            for invocation_id in invocation_ids:
+                invocations = session.scalars(select(AgentInvocationRecord).where(
+                    AgentInvocationRecord.attempt_id == attempt_id,
+                    AgentInvocationRecord.status == InvocationStatus.RUNNING.value,
+                )).all()
+            for invocation in invocations:
+                if self.catalog is not None:
+                    _, adapter = self.catalog.resolve(invocation.runtime_id)
+                    await adapter.cancel(invocation.invocation_id)
+                invocation_id = invocation.invocation_id
                 self._finish(InvocationId(invocation_id), success=False, reason="CANCELLED")
 
     def assigned_agent_for(self, work_order_id: str) -> str | None:

@@ -3,6 +3,7 @@ import json
 from typing import Any, Protocol
 from urllib.parse import urlparse
 from researchd.adapters.a2a.adapter import A2AAdapter
+from researchd.adapters.a2a.codec import A2ACodecError, decode_executor_result, encode_granted_work_order
 from researchd.collaboration.contracts import AgentHealth, AgentInvocationRequest, AgentInvocationResult, AgentRuntime, EvidenceInvocationInput, ExecuteInvocationInput, PlanInvocationInput, ReviewInvocationInput
 from researchd.domain.enums import InvocationStatus
 
@@ -37,25 +38,61 @@ class A2ARemoteAgentAdapter:
         return AgentHealth(healthy=bool(runtime.endpoint_ref), reason=None if runtime.endpoint_ref else "endpoint_ref missing")
 
     async def invoke(self, request: AgentInvocationRequest) -> AgentInvocationResult:
-        payload = _request_payload(request)
-        if request.work_order_id is None or request.attempt_id is None or payload is None:
+        if (
+            request.work_order_id is None
+            or request.attempt_id is None
+            or not isinstance(request.typed_input, ExecuteInvocationInput)
+        ):
             return AgentInvocationResult(invocation_id=request.invocation_id, status=InvocationStatus.FAILED, reason_code="A2A_SCOPE_REQUIRED")
-        task = await self.delegate.dispatch(work_order_id=request.work_order_id, attempt_id=request.attempt_id, payload=payload, invocation_id=str(request.invocation_id))
+        message = encode_granted_work_order(request.typed_input.work_order)
+        task = await self.delegate.dispatch(
+            work_order_id=request.work_order_id,
+            attempt_id=request.attempt_id,
+            message=message,
+            invocation_id=str(request.invocation_id),
+        )
         status, reason = self._map_task_status(task.status.state)
-        return AgentInvocationResult(invocation_id=request.invocation_id, status=status, output_type="A2ATask", output=task.model_dump(mode="json"), reason_code=reason)
+        if status is not InvocationStatus.SUCCEEDED:
+            return AgentInvocationResult(
+                invocation_id=request.invocation_id,
+                status=status,
+                output_type="A2ATask",
+                output=task.model_dump(mode="json"),
+                reason_code=reason,
+            )
+        try:
+            result = decode_executor_result(task, expected_attempt_id=request.attempt_id)
+        except A2ACodecError:
+            return AgentInvocationResult(
+                invocation_id=request.invocation_id,
+                status=InvocationStatus.FAILED,
+                output_type="A2ATask",
+                output=task.model_dump(mode="json"),
+                reason_code="A2A_EXECUTOR_RESULT_INVALID",
+            )
+        return AgentInvocationResult(
+            invocation_id=request.invocation_id,
+            status=InvocationStatus.SUCCEEDED,
+            output_type="ExecutorResult",
+            output=result.model_dump(mode="json"),
+        )
 
     @staticmethod
     def _map_task_status(state: str) -> tuple[InvocationStatus, str | None]:
-        if state == "completed":
+        if state == "TASK_STATE_COMPLETED":
             return InvocationStatus.SUCCEEDED, None
-        if state == "canceled":
+        if state == "TASK_STATE_CANCELED":
             return InvocationStatus.CANCELLED, "A2A_TASK_CANCELLED"
-        if state in {"failed", "rejected"}:
-            return InvocationStatus.FAILED, f"A2A_TASK_{state.upper()}"
+        if state in {"TASK_STATE_FAILED", "TASK_STATE_REJECTED"}:
+            return InvocationStatus.FAILED, f"A2A_TASK_{state.removeprefix('TASK_STATE_')}"
+        if state == "TASK_STATE_AUTH_REQUIRED":
+            return InvocationStatus.RUNNING, "A2A_TASK_AUTH_REQUIRED"
+        if state == "TASK_STATE_INPUT_REQUIRED":
+            return InvocationStatus.RUNNING, "A2A_TASK_INPUT_REQUIRED"
         return InvocationStatus.RUNNING, "A2A_TASK_NONTERMINAL"
 
     async def cancel(self, invocation_id: str) -> None:
-        del invocation_id
+        await self.delegate.cancel(invocation_id)
 
 
 class HttpAgentAdapter:

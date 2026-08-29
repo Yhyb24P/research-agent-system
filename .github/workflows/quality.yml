@@ -32,7 +32,7 @@ jobs:
           test "$(stat -c '%A' /usr/bin/bwrap | cut -c4)" != "s"
           test -z "$(getcap /usr/bin/bwrap)"
       - name: Install from committed lock
-        run: uv sync --frozen
+        run: uv sync --frozen --extra a2a
       - name: Generate lock-derived SBOM
         run: |
           uv run python scripts/lock_sbom.py --output /tmp/dq00-python-sbom.json

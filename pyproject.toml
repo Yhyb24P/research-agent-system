@@ -11,6 +11,11 @@ dependencies = [
   "sqlalchemy>=2.0,<3",
 ]
 
+[project.optional-dependencies]
+a2a = [
+  "a2a-sdk>=1.0,<2",
+]
+
 [project.scripts]
 researchctl = "researchd.cli.main:entrypoint"
 
@@ -19,6 +24,7 @@ dev = [
   "jsonschema>=4.23,<5",
   "mypy>=1.17,<2",
   "pytest>=8.4,<9",
+  "types-protobuf>=6.30,<7",
 ]
 
 [build-system]
