@@ -139,6 +139,11 @@ Integration tests are the executable reference workflow. The repository is a
 library/modular-monolith baseline; it does not yet ship a production daemon or
 browser application bootstrap.
 
+An embedding controller must register its workspace transports and call
+`WorkspaceDelegationService.recover_incomplete()` during startup, before it
+accepts new work. This closes interrupted provisioning/reconciliation windows
+using the transport handle persisted before the external side effect.
+
 ## Inspect the control plane
 
 `researchctl` opens an existing database without constructing an orchestrator:

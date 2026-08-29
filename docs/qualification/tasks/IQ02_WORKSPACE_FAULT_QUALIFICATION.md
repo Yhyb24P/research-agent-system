@@ -27,6 +27,12 @@ Prove that bounded Workspace Delegation remains contained under transport failur
 
 Every failure must leave authoritative source data unchanged, preserve an auditable terminal/intermediate state, and prevent expired/invalid transport handles from silently continuing.
 
+The controller bootstrap must call `WorkspaceDelegationService.recover_incomplete()`
+after registering the deployment transports and before accepting new work. A
+planned transport handle is persisted before the external side effect; recovery
+claims interrupted rows as `RECOVERING`, cleans the durable handle, and records
+the terminal cleanup outcome.
+
 ## Evidence
 
 Record source and result manifests, workspace grant/lease state, transport handle hashes or identifiers, injected fault timing, artifact reconciliation hash, cleanup state and authoritative source-tree hash before/after each fault.

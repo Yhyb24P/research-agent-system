@@ -144,6 +144,7 @@ class WorkspaceDelegationService:
             raise WorkspaceDelegationError("workspace manifest does not match the grant")
         snapshot_id = f"wss_{uuid4().hex}"
         transport_id = f"wst_{uuid4().hex}"
+        planned = transport.plan(grant, source_root, snapshot)
         now = datetime.now(UTC)
         with self.sessions.begin() as session:
             row = self._locked_grant(session, grant_id, WorkspaceGrantState.PENDING)
@@ -166,15 +167,23 @@ class WorkspaceDelegationService:
                 workspace_transport_id=transport_id,
                 workspace_grant_id=grant_id,
                 transport_kind=grant.transport_kind.value,
-                transport_handle={"state": "pending"},
-                remote_workspace_handle="pending",
+                transport_handle=planned.transport_handle,
+                remote_workspace_handle=planned.remote_workspace_handle,
                 state="PROVISIONING",
                 created_at=now,
                 closed_at=None,
             ))
         try:
-            provisioned = transport.provision(grant, source_root, snapshot)
+            provisioned = transport.provision(grant, source_root, snapshot, planned)
+            if provisioned != planned:
+                raise WorkspaceDelegationError("workspace transport returned a handle different from its durable plan")
         except Exception:
+            try:
+                transport.cleanup(grant, planned)
+            except Exception:
+                self._set_cleanup_state(grant_id, CleanupState.FAILED)
+            else:
+                self._set_cleanup_state(grant_id, CleanupState.CLEANED)
             self._fail(grant_id, "WORKSPACE_PROVISION_FAILED")
             raise
         started = datetime.now(UTC)
@@ -329,6 +338,72 @@ class WorkspaceDelegationService:
                 expired.append(row.workspace_grant_id)
         return tuple(expired)
 
+    def recover_incomplete(self) -> tuple[str, ...]:
+        """Fail closed and clean durable transport handles left by a crash window."""
+
+        with self.sessions() as session:
+            rows = session.scalars(select(WorkspaceGrantRecord).where(
+                WorkspaceGrantRecord.state.in_((
+                    WorkspaceGrantState.PROVISIONING.value,
+                    WorkspaceGrantState.RECONCILING.value,
+                    WorkspaceGrantState.RECOVERING.value,
+                ))
+            ).order_by(WorkspaceGrantRecord.created_at, WorkspaceGrantRecord.workspace_grant_id)).all()
+            pending = tuple((row.workspace_grant_id, row.state) for row in rows)
+        recovered: list[str] = []
+        for grant_id, interrupted_state in pending:
+            with self.sessions.begin() as session:
+                row = session.get(WorkspaceGrantRecord, grant_id)
+                if row is None or row.state != interrupted_state:
+                    continue
+                row.state = WorkspaceGrantState.RECOVERING.value
+                row.updated_at = datetime.now(UTC)
+                row.version += 1
+            grant = self._contract(grant_id)
+            transport = self.transports[grant.transport_kind]
+            provisioned, transport_id, _ = self._latest_transport(grant_id)
+            cleanup_state = CleanupState.CLEANED
+            try:
+                transport.cleanup(grant, provisioned)
+            except Exception:
+                cleanup_state = CleanupState.FAILED
+            now = datetime.now(UTC)
+            with self.sessions.begin() as session:
+                row = session.get(WorkspaceGrantRecord, grant_id)
+                transport_row = session.get(WorkspaceTransportRecord, transport_id)
+                if (
+                    row is None
+                    or transport_row is None
+                    or row.state != WorkspaceGrantState.RECOVERING.value
+                ):
+                    continue
+                row.state = WorkspaceGrantState.FAILED.value
+                row.cleanup_state = cleanup_state.value
+                row.updated_at = now
+                row.version += 1
+                transport_row.state = "CLOSED" if cleanup_state is CleanupState.CLEANED else "CLEANUP_FAILED"
+                transport_row.closed_at = now if cleanup_state is CleanupState.CLEANED else None
+                delegation = session.get(DelegationRecord, row.delegation_id)
+                assert delegation is not None
+                self._event(
+                    session,
+                    run_id=delegation.run_id,
+                    event_type="WORKSPACE_CRASH_RECOVERED",
+                    grant_id=grant_id,
+                    correlation_id=row.delegation_id,
+                    metadata={"interrupted_state": interrupted_state, "cleanup_state": cleanup_state.value},
+                )
+            recovered.append(grant_id)
+        return tuple(recovered)
+
+    def _set_cleanup_state(self, grant_id: str, state: CleanupState) -> None:
+        with self.sessions.begin() as session:
+            row = session.get(WorkspaceGrantRecord, grant_id)
+            if row is not None:
+                row.cleanup_state = state.value
+                row.updated_at = datetime.now(UTC)
+                row.version += 1
+
     def _contract(self, grant_id: str) -> WorkspaceGrant:
         with self.sessions() as session:
             row = session.get(WorkspaceGrantRecord, grant_id)
@@ -366,7 +441,6 @@ class WorkspaceDelegationService:
         with self.sessions() as session:
             transport = session.scalar(select(WorkspaceTransportRecord).where(
                 WorkspaceTransportRecord.workspace_grant_id == grant_id,
-                WorkspaceTransportRecord.state.in_(("ACTIVE", "CLOSED")),
             ).order_by(WorkspaceTransportRecord.created_at.desc()).limit(1))
             snapshot = session.scalar(select(WorkspaceSnapshotRecord).where(
                 WorkspaceSnapshotRecord.workspace_grant_id == grant_id
