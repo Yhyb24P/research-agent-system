@@ -81,7 +81,8 @@ class CollaborationGateway:
     def _finish(self, invocation_id: InvocationId | None, *, success: bool, output_type: str | None = None, output: dict[str, object] | None = None, reason: str | None = None) -> None:
         if invocation_id is not None:
             assert self.invocations is not None
-            self.invocations.complete(AgentInvocationResult(invocation_id=invocation_id, status=InvocationStatus.SUCCEEDED if success else InvocationStatus.FAILED, output_type=output_type, output=output, reason_code=reason))
+            status = InvocationStatus.SUCCEEDED if success else (InvocationStatus.CANCELLED if reason == "CANCELLED" else InvocationStatus.FAILED)
+            self.invocations.complete(AgentInvocationResult(invocation_id=invocation_id, status=status, output_type=output_type, output=output, reason_code=reason))
 
     def _tracked_adapter(self, tracking: tuple[DelegationId, InvocationId] | None) -> AgentAdapter | None:
         if tracking is None or self.catalog is None or self.invocations is None:

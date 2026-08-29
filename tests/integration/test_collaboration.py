@@ -204,6 +204,22 @@ def test_gateway_tracking_creates_delegation_and_invocation(database: tuple[Path
         assert invocation is not None and invocation.status == InvocationStatus.SUCCEEDED.value
 
 
+def test_gateway_cancellation_preserves_cancelled_terminal_state(database: tuple[Path, sessionmaker[Session]]) -> None:
+    _, sessions = database
+    registry = AgentRegistryService(sessions)
+    registry.register_profile(profile())
+    registry.register_runtime(AgentRuntime(runtime_id=AgentRuntimeId("runtime_qwen"), agent_id=AgentId("agent_executor"), adapter_kind=AgentAdapterKind.HTTP, runtime_name="Qwen"))
+    gateway = CollaborationGateway(cast(CloudLeadAgentAdapter, None), cast(LocalExecutorAgentAdapter, None), delegations=DelegationService(sessions), invocations=InvocationService(sessions), agent_id=AgentId("agent_executor"), runtime_id=AgentRuntimeId("runtime_qwen"))
+    tracking = gateway._start("run_test", DelegationPurpose.EXECUTE)
+    assert tracking is not None
+    gateway._finish(tracking[1], success=False, reason="CANCELLED")
+    with sessions() as session:
+        delegation = session.get(DelegationRecord, str(tracking[0]))
+        invocation = session.get(AgentInvocationRecord, str(tracking[1]))
+        assert delegation is not None and delegation.state == "CANCELLED"
+        assert invocation is not None and invocation.status == InvocationStatus.CANCELLED.value
+
+
 def test_gateway_catalog_prevents_wrong_runtime_purpose_dispatch(database: tuple[Path, sessionmaker[Session]]) -> None:
     _, sessions = database
     registry = AgentRegistryService(sessions)
