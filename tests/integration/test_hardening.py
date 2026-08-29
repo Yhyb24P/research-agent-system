@@ -9,8 +9,6 @@ from typing import Any
 
 import pytest
 import httpx
-from alembic import command
-from alembic.config import Config
 from sqlalchemy import select
 
 from researchd.backup import BackupError, backup_snapshot, check_restored_snapshot, restore_snapshot
@@ -41,6 +39,29 @@ from tests.integration.test_orchestrator import _proposal, _review, make_orchest
 from tests.integration.test_executor import FixingFakeLocalModel, fixture_repository, limits, sandbox_for
 
 ROOT = Path(__file__).parents[2]
+
+CANDIDATE_COMMIT = "0000000000000000000000000000000000000000"
+CANDIDATE_TAG = "v0.0.0-rc.backup-test"
+
+
+def _backup(database: Path, artifacts: Path, destination: Path) -> Any:
+    return backup_snapshot(
+        database,
+        artifacts,
+        destination,
+        candidate_commit=CANDIDATE_COMMIT,
+        candidate_tag=CANDIDATE_TAG,
+    )
+
+
+def _restore(snapshot: Path, database: Path, artifacts: Path) -> Any:
+    return restore_snapshot(
+        snapshot,
+        database,
+        artifacts,
+        expected_candidate_commit=CANDIDATE_COMMIT,
+        expected_candidate_tag=CANDIDATE_TAG,
+    )
 
 
 def test_metrics_snapshot_covers_cloud_and_workflow_records(tmp_path: Path) -> None:
@@ -93,15 +114,17 @@ def test_sqlite_and_artifact_backup_restore_validates_checksums(tmp_path: Path) 
     orphan.parent.mkdir(parents=True)
     orphan.write_bytes(b"unreferenced CAS residue")
     backup_dir = tmp_path / "backup"
-    manifest = backup_snapshot(tmp_path / "orchestrator.db", tmp_path / "artifacts", backup_dir)
+    manifest = _backup(tmp_path / "orchestrator.db", tmp_path / "artifacts", backup_dir)
     assert "sha256/ff/" + "f" * 64 not in manifest.artifact_files
+    assert manifest.orphan_artifact_digests == ("f" * 64,)
     restored_db = tmp_path / "restored.db"
     restored_artifacts = tmp_path / "restored-artifacts"
-    assert restore_snapshot(backup_dir, restored_db, restored_artifacts) == manifest
+    assert _restore(backup_dir, restored_db, restored_artifacts) == manifest
     health = check_restored_snapshot(restored_db, restored_artifacts)
     assert health.healthy and health.schema_revision == "0019" and health.artifacts_verified == 1
+    assert health.missing_count == health.corrupt_count == health.orphan_count == 0
     with pytest.raises(BackupError, match="already exist"):
-        restore_snapshot(backup_dir, restored_db, tmp_path / "other-artifacts")
+        _restore(backup_dir, restored_db, tmp_path / "other-artifacts")
     assert restored_db.is_file() and restored_artifacts.is_dir()
     # The restored DB remains readable without reconstructing state from model output.
     with sqlite3.connect(restored_db) as connection:
@@ -114,7 +137,8 @@ def test_sqlite_and_artifact_backup_restore_validates_checksums(tmp_path: Path) 
     missing_path = tmp_path / "artifacts" / "sha256" / missing.sha256[:2] / missing.sha256
     missing_path.unlink()
     with pytest.raises(BackupError, match="missing or unsafe"):
-        backup_snapshot(tmp_path / "orchestrator.db", tmp_path / "artifacts", tmp_path / "missing-backup")
+        _backup(tmp_path / "orchestrator.db", tmp_path / "artifacts", tmp_path / "missing-backup")
+    assert not (tmp_path / "missing-backup").exists()
 
     tampered = tmp_path / "tampered-backup"
     shutil.copytree(backup_dir, tampered)
@@ -131,27 +155,20 @@ def test_sqlite_and_artifact_backup_restore_validates_checksums(tmp_path: Path) 
     tampered_manifest["database_sha256"] = digest
     (tampered / "manifest.json").write_text(json.dumps(tampered_manifest, sort_keys=True) + "\n")
     with pytest.raises(BackupError, match="reference mismatch"):
-        restore_snapshot(tampered, tmp_path / "tampered.db", tmp_path / "tampered-artifacts")
+        _restore(tampered, tmp_path / "tampered.db", tmp_path / "tampered-artifacts")
 
 
-def test_legacy_backup_restore_then_upgrade_to_head(tmp_path: Path) -> None:
-    legacy_db = tmp_path / "legacy.db"
-    legacy_artifacts = tmp_path / "legacy-artifacts"
-    legacy_artifacts.mkdir()
-    config = Config(str(ROOT / "alembic.ini"))
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{legacy_db}")
-    command.upgrade(config, "0008")
-    snapshot = backup_snapshot(legacy_db, legacy_artifacts, tmp_path / "legacy-backup")
-    assert snapshot.schema_revision == "0008"
-    restored_db = tmp_path / "restored-legacy.db"
-    restored_artifacts = tmp_path / "restored-legacy-artifacts"
-    restore_snapshot(tmp_path / "legacy-backup", restored_db, restored_artifacts)
-    restored_config = Config(str(ROOT / "alembic.ini"))
-    restored_config.set_main_option("sqlalchemy.url", f"sqlite:///{restored_db}")
-    command.upgrade(restored_config, "head")
-    with sqlite3.connect(restored_db) as connection:
-        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == ("0019",)
-    assert check_restored_snapshot(restored_db, restored_artifacts).healthy
+def test_backup_rejects_previous_format_instead_of_upgrading_it(tmp_path: Path) -> None:
+    sessions, orchestrator, _, _ = make_orchestrator(tmp_path, cloud_responses=[_proposal(), _review()])
+    orchestrator.create_run(workspace_id="ws_e2e", objective="current format only")
+    snapshot = tmp_path / "snapshot"
+    _backup(tmp_path / "orchestrator.db", tmp_path / "artifacts", snapshot)
+    manifest_path = snapshot / "manifest.json"
+    raw = json.loads(manifest_path.read_text())
+    raw["format_version"] = 2
+    manifest_path.write_text(json.dumps(raw, sort_keys=True) + "\n")
+    with pytest.raises(BackupError, match="manifest is invalid"):
+        _restore(snapshot, tmp_path / "old.db", tmp_path / "old-artifacts")
 
 
 def test_storage_metrics_report_cas_and_backup_freshness(tmp_path: Path) -> None:
@@ -163,7 +180,7 @@ def test_storage_metrics_report_cas_and_backup_freshness(tmp_path: Path) -> None
         classification=DataClassification.PUBLIC, producer_type="test", producer_id="storage-test",
     )
     backup_dir = tmp_path / "storage-backup"
-    backup_snapshot(tmp_path / "orchestrator.db", tmp_path / "artifacts", backup_dir)
+    _backup(tmp_path / "orchestrator.db", tmp_path / "artifacts", backup_dir)
     metrics = collect_storage_metrics(tmp_path / "orchestrator.db", tmp_path / "artifacts", backup_dir)
     assert metrics.database_size_bytes > 0
     assert metrics.cas_file_count == 1 and metrics.cas_size_bytes > 0

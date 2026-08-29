@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://researchd.local/schemas/dq04_offhost_protection.schema.json",
+  "title": "DQ04OffHostProtectionRecord",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "record_version",
+    "candidate_commit",
+    "candidate_tag",
+    "environment_fingerprint",
+    "captured_at",
+    "storage_backend",
+    "access_control",
+    "encryption_at_rest",
+    "transport_encryption",
+    "restore_authorization",
+    "retention",
+    "deletion",
+    "contains_secrets"
+  ],
+  "properties": {
+    "record_version": {"const": 1},
+    "candidate_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "candidate_tag": {"type": "string", "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+-rc\\.[0-9A-Za-z.-]+$"},
+    "environment_fingerprint": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "captured_at": {"type": "string", "format": "date-time"},
+    "storage_backend": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "location_class", "account_or_project_reference"],
+      "properties": {
+        "kind": {"type": "string", "minLength": 1},
+        "location_class": {"type": "string", "minLength": 1},
+        "account_or_project_reference": {"type": "string", "minLength": 1}
+      }
+    },
+    "access_control": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mechanism", "least_privilege_reviewed", "authorized_roles"],
+      "properties": {
+        "mechanism": {"type": "string", "minLength": 1},
+        "least_privilege_reviewed": {"const": true},
+        "authorized_roles": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1}}
+      }
+    },
+    "encryption_at_rest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "mechanism", "key_owner", "non_secret_key_reference"],
+      "properties": {
+        "enabled": {"const": true},
+        "mechanism": {"type": "string", "minLength": 1},
+        "key_owner": {"type": "string", "minLength": 1},
+        "non_secret_key_reference": {"type": "string", "minLength": 1}
+      }
+    },
+    "transport_encryption": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "protocol"],
+      "properties": {
+        "enabled": {"const": true},
+        "protocol": {"type": "string", "minLength": 1}
+      }
+    },
+    "restore_authorization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["required", "approver_roles", "procedure"],
+      "properties": {
+        "required": {"const": true},
+        "approver_roles": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+        "procedure": {"type": "string", "minLength": 1}
+      }
+    },
+    "retention": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["retention_days", "protected_snapshot_rule"],
+      "properties": {
+        "retention_days": {"type": "integer", "minimum": 1},
+        "protected_snapshot_rule": {"type": "string", "minLength": 1}
+      }
+    },
+    "deletion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["procedure", "exercised_at", "evidence_reference"],
+      "properties": {
+        "procedure": {"type": "string", "minLength": 1},
+        "exercised_at": {"type": "string", "format": "date-time"},
+        "evidence_reference": {"type": "string", "minLength": 1}
+      }
+    },
+    "contains_secrets": {"const": false}
+  }
+}
