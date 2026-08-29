@@ -143,6 +143,17 @@ An embedding controller must register its workspace transports and call
 `WorkspaceDelegationService.recover_incomplete()` during startup, before it
 accepts new work. This closes interrupted provisioning/reconciliation windows
 using the transport handle persisted before the external side effect.
+It must likewise construct `WorktreeManager` with durable sessions and call
+`recover_incomplete(repository_mapping)` before creating attempt worktrees.
+This closes interrupted create/remove windows from their persisted lifecycle
+state.
+
+Qualify the actual deployment filesystem rather than a temporary substitute:
+
+```bash
+uv run python scripts/dq01_preflight.py --strict --target <deployment-root>
+uv run python scripts/dq01_filesystem_probe.py --root <deployment-root>
+```
 
 ## Inspect the control plane
 

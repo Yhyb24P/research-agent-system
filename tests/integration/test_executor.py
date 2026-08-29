@@ -32,7 +32,7 @@ from researchd.executor.jobs import JobManager, LocalDurableJobBackend
 from researchd.executor.gpu import GpuAdmissionController, GpuAdmissionError
 from researchd.executor.sandbox import BubblewrapBackend
 from researchd.executor.worker import LocalExecutorWorker
-from researchd.executor.worktree import WorktreeError, WorktreeManager
+from researchd.executor.worktree import WorktreeError, WorktreeManager, WorktreeState
 from researchd.models.base import LocalModelUnavailable
 from researchd.models.vllm import VLLMLocalModel
 from researchd.storage.db import create_sqlite_engine, session_factory
@@ -165,6 +165,94 @@ def test_dirty_worktree_is_never_reused_between_attempts(tmp_path: Path) -> None
     with pytest.raises(WorktreeError, match="never reused"):
         manager.create(repository, repository_id="repo", attempt_id="att_one")
 
+
+class _SimulatedWorktreeCrash(BaseException):
+    pass
+
+
+class _CrashAfterWorktreeAdd(WorktreeManager):
+    def _add_worktree(self, source: Path, target: Path, commit: str) -> None:
+        super()._add_worktree(source, target, commit)
+        raise _SimulatedWorktreeCrash
+
+
+class _CrashAfterWorktreeRemove(WorktreeManager):
+    def _remove_worktree(self, source: Path, target: Path) -> None:
+        super()._remove_worktree(source, target)
+        raise _SimulatedWorktreeCrash
+
+
+def test_worktree_create_and_remove_crashes_recover_from_durable_state(tmp_path: Path) -> None:
+    repository = fixture_repository(tmp_path / "repo")
+    sessions = seed_database(tmp_path / "worktree-crash.db")
+    root = tmp_path / "worktrees"
+    crashing_create = _CrashAfterWorktreeAdd(root, sessions)
+    with pytest.raises(_SimulatedWorktreeCrash):
+        crashing_create.create(repository, repository_id="repo", attempt_id="att_exec")
+    orphan = root / "att_exec"
+    assert orphan.is_dir()
+    with sessions() as session:
+        row = session.get(AttemptWorktreeRecord, "att_exec")
+        assert row is not None and row.state == WorktreeState.PROVISIONING
+
+    restarted = WorktreeManager(root, sessions)
+    assert restarted.recover_incomplete({}) == ()
+    assert orphan.is_dir()
+    with sessions() as session:
+        row = session.get(AttemptWorktreeRecord, "att_exec")
+        assert row is not None and row.state == WorktreeState.CLEANUP_FAILED
+    assert restarted.recover_incomplete({"repo": repository}) == ("att_exec",)
+    assert not orphan.exists()
+    with sessions() as session:
+        row = session.get(AttemptWorktreeRecord, "att_exec")
+        assert row is not None and row.state == WorktreeState.CLEANED
+
+    sessions = seed_database(tmp_path / "worktree-remove-crash.db")
+    active = WorktreeManager(root, sessions).create(
+        repository, repository_id="repo", attempt_id="att_exec"
+    )
+    crashing_remove = _CrashAfterWorktreeRemove(root, sessions)
+    with pytest.raises(_SimulatedWorktreeCrash):
+        crashing_remove.remove_clean(repository, active)
+    assert not active.path.exists()
+    with sessions() as session:
+        row = session.get(AttemptWorktreeRecord, "att_exec")
+        assert row is not None and row.state == WorktreeState.REMOVING
+    assert WorktreeManager(root, sessions).recover_incomplete({"repo": repository}) == ("att_exec",)
+    with sessions() as session:
+        row = session.get(AttemptWorktreeRecord, "att_exec")
+        assert row is not None and row.state == WorktreeState.CLEANED
+
+
+def test_worktree_recovery_rejects_tampered_path_and_untrusted_attempt_id(tmp_path: Path) -> None:
+    repository = fixture_repository(tmp_path / "repo")
+    sessions = seed_database(tmp_path / "worktree-tamper.db")
+    root = tmp_path / "worktrees"
+    manager = WorktreeManager(root, sessions)
+    with pytest.raises(WorktreeError, match="one path segment"):
+        manager.create(repository, repository_id="repo", attempt_id="../att_exec")
+
+    now = datetime.now(UTC)
+    outside = tmp_path / "outside-must-survive"
+    outside.mkdir()
+    (outside / "marker").write_text("authoritative\n")
+    with sessions.begin() as session:
+        session.add(AttemptWorktreeRecord(
+            attempt_id="att_exec",
+            repository_id="repo",
+            base_commit=git(repository, "rev-parse", "HEAD").strip(),
+            worktree_path=str(outside),
+            environment_digest="0" * 64,
+            sandbox_backend="bubblewrap-v1",
+            state=WorktreeState.PROVISIONING,
+            created_at=now,
+            updated_at=now,
+        ))
+    assert manager.recover_incomplete({"repo": repository}) == ()
+    assert (outside / "marker").read_text() == "authoritative\n"
+    with sessions() as session:
+        row = session.get(AttemptWorktreeRecord, "att_exec")
+        assert row is not None and row.state == WorktreeState.CLEANUP_FAILED
 
 def test_capability_broker_blocks_traversal_symlink_and_reuses_step_result(tmp_path: Path) -> None:
     repository = fixture_repository(tmp_path / "repo")

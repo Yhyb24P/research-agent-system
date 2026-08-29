@@ -415,13 +415,16 @@ class ExecutorDispatchRecord(Base):
 
 class AttemptWorktreeRecord(Base):
     __tablename__ = "attempt_worktrees"
+    __table_args__ = (Index("ix_attempt_worktrees_state", "state"),)
     attempt_id: Mapped[str] = mapped_column(ForeignKey("attempts.attempt_id"), primary_key=True)
     repository_id: Mapped[str] = mapped_column(String(128), nullable=False)
     base_commit: Mapped[str] = mapped_column(String(64), nullable=False)
     worktree_path: Mapped[str] = mapped_column(Text, nullable=False)
     environment_digest: Mapped[str] = mapped_column(String(64), nullable=False)
     sandbox_backend: Mapped[str] = mapped_column(String(64), nullable=False)
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
 
 
 class ObservationRecord(Base):

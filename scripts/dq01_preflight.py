@@ -10,8 +10,12 @@ import platform
 import shutil
 import stat
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
+
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def command_output(*argv: str) -> str | None:
@@ -22,10 +26,11 @@ def command_output(*argv: str) -> str | None:
 
 
 def source_commit() -> str | None:
-    return command_output("git", "rev-parse", "HEAD")
+    return command_output("git", "-C", str(ROOT), "rev-parse", "HEAD")
 
 
-def collect() -> dict[str, Any]:
+def collect(*, target: Path | None = None) -> dict[str, Any]:
+    inspected = (target or Path.cwd()).resolve(strict=True)
     executable = shutil.which("bwrap")
     mode: str | None = None
     file_capabilities: str | None = None
@@ -35,12 +40,32 @@ def collect() -> dict[str, Any]:
     userns_path = Path("/proc/sys/user/max_user_namespaces")
     userns_value = userns_path.read_text().strip() if userns_path.is_file() else None
     cgroup = command_output("stat", "-fc", "%T", "/sys/fs/cgroup")
+    mount = command_output(
+        "findmnt", "-n", "-T", str(inspected), "-o", "TARGET,SOURCE,FSTYPE,OPTIONS"
+    )
+    release = platform.release().lower()
+    proc_version = Path("/proc/version").read_text(encoding="utf-8").lower()
+    container = (
+        "docker" if Path("/.dockerenv").exists()
+        else "podman" if Path("/run/.containerenv").exists()
+        else None
+    )
     return {
         "release_commit": source_commit(),
         "host": {
             "os": platform.platform(),
             "kernel": platform.release(),
             "architecture": platform.machine(),
+            "python": platform.python_version(),
+            "python_executable": sys.executable,
+            "git": command_output("git", "--version"),
+            "topology": "wsl" if "microsoft" in release or "microsoft" in proc_version else "linux",
+            "container": container,
+        },
+        "filesystem": {
+            "target": str(inspected),
+            "findmnt": mount,
+            "stat_type": command_output("stat", "-fc", "%T", str(inspected)),
         },
         "bubblewrap": {
             "path": executable,
@@ -79,9 +104,10 @@ def failures(report: dict[str, Any]) -> list[str]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--strict", action="store_true", help="exit non-zero when a required preflight check fails")
+    parser.add_argument("--target", type=Path, help="deployment filesystem path to fingerprint")
     parser.add_argument("--output", type=Path, help="also write the JSON report to this path")
     args = parser.parse_args()
-    report = collect()
+    report = collect(target=args.target)
     report["failures"] = failures(report)
     rendered = json.dumps(report, ensure_ascii=False, indent=2) + "\n"
     print(rendered, end="")

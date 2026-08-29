@@ -11,8 +11,8 @@ from researchd.executor.contracts import CommandLimits, CommandResult, CommandSp
 from researchd.executor.sandbox import BubblewrapBackend
 
 
-def sandbox(path: Path) -> SandboxSpec:
-    return SandboxSpec(attempt_id="att_sandbox", workspace=str(path), network=NetworkMode.NONE)
+def sandbox(path: Path, *, attempt_id: str = "att_sandbox") -> SandboxSpec:
+    return SandboxSpec(attempt_id=attempt_id, workspace=str(path), network=NetworkMode.NONE)
 
 
 def limits(*, wall: float = 3, output: int = 32_000) -> CommandLimits:
@@ -144,3 +144,47 @@ def test_explicit_cancellation_terminates_short_command(tmp_path: Path) -> None:
     thread.join(timeout=3)
     assert not thread.is_alive()
     assert result_holder and result_holder[0].cancelled
+
+
+def test_concurrent_attempts_cannot_read_or_write_each_others_workspace(tmp_path: Path) -> None:
+    workspaces = (tmp_path / "attempt-a", tmp_path / "attempt-b")
+    for workspace in workspaces:
+        workspace.mkdir()
+        (workspace / "private.txt").write_text(f"private:{workspace.name}\n")
+    barrier = threading.Barrier(2)
+    results: dict[str, CommandResult] = {}
+
+    def attack(name: str, own: Path, other: Path) -> None:
+        barrier.wait(timeout=2)
+        results[name] = BubblewrapBackend().run(
+            sandbox(own, attempt_id=f"att_{name}"),
+            CommandSpec(
+                argv=(
+                    "/usr/bin/sh", "-c",
+                    "stolen=$(cat \"$1/private.txt\" 2>/dev/null) && "
+                    "printf '%s' \"$stolen\" > /workspace/stolen.txt || true; "
+                    "printf '%s' \"$2\" > \"$1/cross-written.txt\" 2>/dev/null || true; "
+                    "printf '%s' \"$3\" > /workspace/own.txt",
+                    "dq01-cross-attempt", str(other), f"cross:{name}", f"own:{name}",
+                ),
+                limits=limits(),
+            ),
+        )
+
+    threads = (
+        threading.Thread(target=attack, args=("a", workspaces[0], workspaces[1])),
+        threading.Thread(target=attack, args=("b", workspaces[1], workspaces[0])),
+    )
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=5)
+
+    assert all(not thread.is_alive() for thread in threads)
+    assert {name: result.exit_code for name, result in results.items()} == {"a": 0, "b": 0}
+    assert (workspaces[0] / "own.txt").read_text() == "own:a"
+    assert (workspaces[1] / "own.txt").read_text() == "own:b"
+    assert not (workspaces[0] / "cross-written.txt").exists()
+    assert not (workspaces[1] / "cross-written.txt").exists()
+    assert not (workspaces[0] / "stolen.txt").exists()
+    assert not (workspaces[1] / "stolen.txt").exists()

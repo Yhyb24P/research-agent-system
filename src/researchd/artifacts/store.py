@@ -39,6 +39,11 @@ class ContentAddressedArtifactStore:
                 stream.flush()
                 os.fsync(stream.fileno())
             os.replace(temporary, target)
+            directory = os.open(target.parent, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
         finally:
             temporary.unlink(missing_ok=True)
         return f"artifact://sha256/{digest}", digest
