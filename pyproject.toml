@@ -15,6 +15,9 @@ dependencies = [
 a2a = [
   "a2a-sdk>=1.0,<2",
 ]
+langgraph-agent = [
+  "langgraph>=1.2,<2",
+]
 
 [project.scripts]
 researchctl = "researchd.cli.main:entrypoint"

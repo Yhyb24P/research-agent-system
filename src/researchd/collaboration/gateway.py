@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 from uuid import uuid4
-from researchd.collaboration.contracts import AgentInvocationRequest, AgentInvocationResult, Delegation, ExecuteInvocationInput, InvocationInput, PlanInvocationInput, ReviewInvocationInput
+from researchd.collaboration.contracts import AgentInvocationRequest, AgentInvocationResult, Delegation, ExecuteInvocationInput, InvocationInput, PlanInvocationInput, ResearchCriticResult, ReviewInvocationInput, SpecialistInvocationInput
 from researchd.collaboration.delegation import DelegationService
 from researchd.collaboration.invocation import InvocationService
 from researchd.collaboration.selector import AgentSelector
@@ -271,6 +271,37 @@ class CollaborationGateway:
         if tracking is not None and self.cloud is not None:
             self.cloud.bind_invocation(tracking[1], result.interaction_id)
         self._finish(tracking[1] if tracking else None, success=True, output_type=type(result.output).__name__, output=result.output.model_dump(mode="json"))
+        return result
+
+    async def specialist(self, run_id: str, request: SpecialistInvocationInput) -> ResearchCriticResult:
+        """Delegate a structured specialist review through the canonical Agent plane."""
+
+        tracking = self._start(
+            run_id,
+            DelegationPurpose.SPECIALIST,
+            required_roles=("specialist",),
+            required_skills=("research.critique",),
+            typed_input=request,
+        )
+        if tracking is None:
+            raise ValueError("specialist delegation requires canonical tracking")
+        try:
+            adapter = self._tracked_adapter(tracking)
+            if adapter is None:
+                raise ValueError("specialist Agent adapter is unavailable")
+            response = await adapter.invoke(self._canonical_request(tracking, request))
+            if response.status is not InvocationStatus.SUCCEEDED or response.output is None:
+                raise ValueError(response.reason_code or "specialist Agent invocation failed")
+            result = ResearchCriticResult.model_validate(response.output)
+        except Exception as error:
+            self._finish(tracking[1], success=False, reason=type(error).__name__)
+            raise
+        self._finish(
+            tracking[1],
+            success=True,
+            output_type="ResearchCriticResult",
+            output=result.model_dump(mode="json"),
+        )
         return result
 
     async def execute(self, work_order: WorkOrderRecord, attempt: AttemptRecord) -> ExecutorResult:

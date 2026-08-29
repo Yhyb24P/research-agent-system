@@ -9,5 +9,6 @@ from researchd.collaboration.selector import AgentSelector, AgentSelection
 from researchd.collaboration.messages import CollaborationMessageService
 from researchd.collaboration.heterogeneous import A2ARemoteAgentAdapter, HttpAgentAdapter, LocalProcessAgentAdapter
 from researchd.collaboration.runtime import AgentAdapterCatalog
+from researchd.collaboration.langgraph_runtime import LangGraphAgentAdapter
 
-__all__ = ["AgentRegistryService", "DelegationService", "InvocationService", "CloudLeadAgentAdapter", "LocalExecutorAgentAdapter", "CollaborationGateway", "AgentSelector", "AgentSelection", "CollaborationMessageService", "A2ARemoteAgentAdapter", "HttpAgentAdapter", "LocalProcessAgentAdapter", "AgentAdapterCatalog"]
+__all__ = ["AgentRegistryService", "DelegationService", "InvocationService", "CloudLeadAgentAdapter", "LocalExecutorAgentAdapter", "CollaborationGateway", "AgentSelector", "AgentSelection", "CollaborationMessageService", "A2ARemoteAgentAdapter", "HttpAgentAdapter", "LocalProcessAgentAdapter", "AgentAdapterCatalog", "LangGraphAgentAdapter"]

@@ -135,6 +135,7 @@ class AgentAdapterKind(StrEnum):
     PROCESS = "PROCESS"
     HTTP = "HTTP"
     A2A = "A2A"
+    LANGGRAPH = "LANGGRAPH"
 
 
 class DelegationPurpose(StrEnum):

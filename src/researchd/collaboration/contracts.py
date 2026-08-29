@@ -29,8 +29,35 @@ class EvidenceInvocationInput(DomainModel):
     context: CloudContextSelection
 
 
+class SpecialistClaim(DomainModel):
+    claim_id: str = Field(min_length=1, max_length=128)
+    statement: str = Field(min_length=1, max_length=16_384)
+    evidence_refs: tuple[str, ...] = ()
+
+
+class SpecialistInvocationInput(DomainModel):
+    kind: Literal["SPECIALIST"] = "SPECIALIST"
+    objective: str = Field(min_length=1, max_length=16_384)
+    claims: tuple[SpecialistClaim, ...] = ()
+    review_focus: tuple[str, ...] = ()
+
+
+class SpecialistFinding(DomainModel):
+    code: str = Field(min_length=1, max_length=128)
+    severity: Literal["INFO", "WARNING", "ERROR"]
+    detail: str = Field(min_length=1, max_length=16_384)
+    claim_id: str | None = None
+
+
+class ResearchCriticResult(DomainModel):
+    summary: str = Field(min_length=1, max_length=16_384)
+    findings: tuple[SpecialistFinding, ...] = ()
+    recommendation: Literal["ACCEPT", "REVISE"]
+    cited_evidence_refs: tuple[str, ...] = ()
+
+
 InvocationInput = Annotated[
-    PlanInvocationInput | ReviewInvocationInput | ExecuteInvocationInput | EvidenceInvocationInput,
+    PlanInvocationInput | ReviewInvocationInput | ExecuteInvocationInput | EvidenceInvocationInput | SpecialistInvocationInput,
     Field(discriminator="kind"),
 ]
 
