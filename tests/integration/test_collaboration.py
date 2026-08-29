@@ -588,36 +588,8 @@ def test_web_and_tui_clients_share_local_control_resources(tmp_path: Path) -> No
 
 
 def test_collaboration_only_reference_workflow_records_agent_chain(tmp_path: Path) -> None:
-    from test_orchestrator import FakeVerifier, _proposal, _review, make_orchestrator
-    from researchd.collaboration.adapters import CloudLeadAgentAdapter, LocalExecutorAgentAdapter
-    from researchd.collaboration.gateway import CollaborationGateway
-    from researchd.orchestrator.engine import OrchestrationLimits, ResearchOrchestrator
-    from researchd.policy.engine import DeterministicPolicyEngine, RecordingPolicyEngine
-    sessions, legacy, _, _ = make_orchestrator(tmp_path, cloud_responses=[_proposal(), _review()])
-    registry = AgentRegistryService(sessions)
-    for agent_id, role, skill, runtime_id in (
-        ("agent_planner", "planner", "research.plan", "runtime_planner"),
-        ("agent_executor", "executor", "code.modify", "runtime_executor"),
-        ("agent_reviewer", "reviewer", "research.review", "runtime_reviewer"),
-    ):
-        registry.register_profile(AgentProfile(agent_id=AgentId(agent_id), display_name=agent_id, roles=(role,), skills=(skill,), trust_zone=AgentTrustZone.LOCAL_PRIVATE))
-        registry.register_runtime(AgentRuntime(runtime_id=AgentRuntimeId(runtime_id), agent_id=AgentId(agent_id), adapter_kind=AgentAdapterKind.INTERNAL, runtime_name=runtime_id))
-        registry.heartbeat(runtime_id)
-
-    from researchd.executor.contracts import ExecutorResult
-
-    class OneArgExecutor:
-        async def execute(self, work_order: object) -> ExecutorResult:
-            return ExecutorResult(attempt_id="gateway-result", status="execution_complete", capability_results=(), reported_claims=("delegated",), errors=())
-
-    gateway = CollaborationGateway(
-        CloudLeadAgentAdapter(cast(CloudLeadAdapter, legacy.cloud)),
-        LocalExecutorAgentAdapter(cast(LocalExecutorWorker, OneArgExecutor())),
-        delegations=DelegationService(sessions), invocations=InvocationService(sessions),
-        selector=AgentSelector(sessions),
-    )
-    policy = RecordingPolicyEngine(DeterministicPolicyEngine(), sessions)
-    controller = ResearchOrchestrator(sessions, policy=policy, verifier=FakeVerifier(sessions), collaboration=gateway, limits=OrchestrationLimits(max_iterations=8, max_cloud_calls=8))
+    from test_orchestrator import _proposal, _review, make_orchestrator
+    sessions, controller, _, _ = make_orchestrator(tmp_path, cloud_responses=[_proposal(), _review()])
     run_id = controller.create_run(workspace_id="ws_e2e", objective="collaboration e2e")
     assert asyncio.run(controller.run(run_id, max_steps=30)).state is ResearchRunState.COMPLETED
     with sessions() as session:
@@ -631,9 +603,9 @@ def test_collaboration_only_reference_workflow_records_agent_chain(tmp_path: Pat
         attempt = session.scalar(select(AttemptRecord).where(AttemptRecord.work_order_id.in_(select(WorkOrderRecord.work_order_id).where(WorkOrderRecord.run_id == run_id))))
         assert attempt is not None and attempt.delegation_id is not None
         plan_event = session.scalar(select(AuditEventRecord).where(AuditEventRecord.run_id == run_id, AuditEventRecord.event_type == "PLAN_CREATED"))
-        assert plan_event is not None and plan_event.actor_type == "agent" and plan_event.actor_id == "agent_planner"
+        assert plan_event is not None and plan_event.actor_type == "agent" and plan_event.actor_id == "agent_cloud_research_lead"
     rendered = render_tui(LocalControlAPI(sessions, controller), run_id=run_id)
     timeline = LocalControlAPI(sessions, controller).timeline(run_id)
     assert {item["kind"] for item in timeline} >= {"event", "plan", "work_order", "attempt", "delegation", "invocation"}
-    assert "Runtime runtime_planner" in rendered
+    assert "Runtime runtime_cloud_research_lead" in rendered
     assert "Delegations" in rendered and "Approvals" in rendered and "Artifacts" in rendered and "System" in rendered

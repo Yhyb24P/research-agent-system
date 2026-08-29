@@ -225,7 +225,7 @@ def test_bounded_real_repository_pilot_produces_accepted_trace(tmp_path: Path) -
     cloud_model.responses[:] = [pilot_proposal, _review()]
     orchestrator.workspace_capabilities = frozenset({Capability.WORKSPACE_WRITE, Capability.TEST_RUN})
     orchestrator.user_capabilities = orchestrator.workspace_capabilities
-    orchestrator.executor = PilotExecutor(sessions, repository, tmp_path / "worktrees")
+    orchestrator.collaboration.executor = PilotExecutor(sessions, repository, tmp_path / "worktrees")  # type: ignore[assignment]
     orchestrator.verifier = PilotVerifier(sessions)
     run_id = orchestrator.create_run(workspace_id="ws_e2e", objective="fix the bounded repository test")
     snapshot = asyncio.run(orchestrator.run(run_id, max_steps=40))

@@ -11,22 +11,29 @@ from alembic.config import Config
 from sqlalchemy import select
 
 from researchd.agents.cloud_lead import CloudLeadAdapter
+from researchd.collaboration.adapters import CloudLeadAgentAdapter, LocalExecutorAgentAdapter
+from researchd.collaboration.contracts import AgentProfile, AgentRuntime
+from researchd.collaboration.delegation import DelegationService
 from researchd.context.builder import ContextBuilder
 from researchd.context.redaction import DeterministicRedactor
-from researchd.domain.enums import Capability, DataClassification, VerificationOverall
+from researchd.domain.enums import AgentAdapterKind, AgentTrustZone, Capability, DataClassification, VerificationOverall
 from researchd.domain.criteria import acceptance_fingerprint
 from researchd.domain.verification import CriterionEvaluation, VerificationResult
-from researchd.domain.ids import VerificationId
+from researchd.domain.ids import AgentId, AgentRuntimeId, VerificationId
 from researchd.executor.contracts import ExecutorResult
 from researchd.models.cloud import CloudCallBudget, CloudModelRequest, CloudModelResponse, CloudPricing, CloudUsage
 from researchd.orchestrator.engine import OrchestrationLimits, ResearchOrchestrator
 from researchd.collaboration.gateway import CollaborationGateway
+from researchd.collaboration.invocation import InvocationService
+from researchd.collaboration.registry import AgentRegistryService
+from researchd.collaboration.selector import AgentSelector
 from researchd.cli.main import build_parser
 from researchd.policy.approval import ApprovalService
 from researchd.policy.engine import BudgetLimits, DeterministicPolicyEngine, RecordingPolicyEngine
 from researchd.storage.db import create_sqlite_engine, session_factory
 from researchd.storage.models import (
-    AttemptRecord, AuditEventRecord, ResearchRunRecord, VerificationResultRecord, WorkOrderRecord, WorkspaceRecord,
+    AgentRecord, AgentRuntimeRecord, AttemptRecord, AuditEventRecord, DelegationRecord, ResearchRunRecord,
+    VerificationResultRecord, WorkOrderRecord, WorkspaceRecord,
 )
 from researchd.verifier.contracts import VerificationInputs
 
@@ -112,6 +119,51 @@ class FakeVerifier:
         )
 
 
+def collaboration_gateway(sessions: Any, cloud: CloudLeadAdapter, executor: FakeExecutor) -> CollaborationGateway:
+    """Install the two reference Agents and adapt their existing implementations."""
+    registry = AgentRegistryService(sessions)
+    definitions = (
+        (
+            AgentProfile(
+                agent_id=AgentId("agent_cloud_research_lead"), display_name="Research Lead",
+                roles=("planner", "reviewer"), skills=("research.plan", "research.review"),
+                trust_zone=AgentTrustZone.LOCAL_PRIVATE,
+            ),
+            AgentRuntime(
+                runtime_id=AgentRuntimeId("runtime_cloud_research_lead"),
+                agent_id=AgentId("agent_cloud_research_lead"), adapter_kind=AgentAdapterKind.INTERNAL,
+                runtime_name="Reference research lead runtime",
+            ),
+        ),
+        (
+            AgentProfile(
+                agent_id=AgentId("agent_local_code_executor"), display_name="Code Executor",
+                roles=("executor",), skills=("code.modify",), trust_zone=AgentTrustZone.LOCAL_PRIVATE,
+            ),
+            AgentRuntime(
+                runtime_id=AgentRuntimeId("runtime_local_code_executor"),
+                agent_id=AgentId("agent_local_code_executor"), adapter_kind=AgentAdapterKind.INTERNAL,
+                runtime_name="Reference code executor runtime",
+            ),
+        ),
+    )
+    with sessions() as session:
+        existing_agents = set(session.scalars(select(AgentRecord.agent_id)).all())
+        existing_runtimes = set(session.scalars(select(AgentRuntimeRecord.runtime_id)).all())
+    for profile, runtime in definitions:
+        if str(profile.agent_id) not in existing_agents:
+            registry.register_profile(profile)
+        if str(runtime.runtime_id) not in existing_runtimes:
+            registry.register_runtime(runtime)
+        registry.heartbeat(str(runtime.runtime_id), lease_seconds=3600)
+    return CollaborationGateway(
+        cloud=CloudLeadAgentAdapter(cloud),
+        executor=cast(LocalExecutorAgentAdapter, executor),
+        delegations=DelegationService(sessions), invocations=InvocationService(sessions),
+        selector=AgentSelector(sessions),
+    )
+
+
 def _proposal() -> str:
     return json.dumps({
         "proposal_id": "plan_nan_001", "hypotheses": [],
@@ -164,7 +216,8 @@ def make_orchestrator(tmp_path: Path, *, cloud_responses: list[str], passed: boo
     executor = FakeExecutor()
     policy = RecordingPolicyEngine(DeterministicPolicyEngine(), sessions)
     orchestrator = ResearchOrchestrator(
-        sessions, cloud, policy, executor, FakeVerifier(sessions, passed=passed),
+        sessions, collaboration=collaboration_gateway(sessions, cloud, executor),
+        policy=policy, verifier=FakeVerifier(sessions, passed=passed),
         workspace_capabilities=frozenset(), user_capabilities=frozenset(),
         maximum_budget=BudgetLimits(100, 100, 0, 100, 100),
         limits=OrchestrationLimits(max_iterations=max_iterations, max_cloud_calls=8),
@@ -220,8 +273,10 @@ def test_approval_request_pauses_then_resumes_policy(tmp_path: Path) -> None:
         budget=CloudCallBudget(max_requests=3, max_input_bytes=100_000, max_response_bytes=100_000, max_output_tokens=512, max_total_tokens=2_000),
         pricing=CloudPricing(prompt_usd_per_million=Decimal("0"), completion_usd_per_million=Decimal("0")))
     approvals = ApprovalService(db_sessions)
+    executor = FakeExecutor()
     orchestrator = ResearchOrchestrator(
-        db_sessions, cloud, RecordingPolicyEngine(DeterministicPolicyEngine(), db_sessions), FakeExecutor(), FakeVerifier(db_sessions),
+        db_sessions, collaboration=collaboration_gateway(db_sessions, cloud, executor),
+        policy=RecordingPolicyEngine(DeterministicPolicyEngine(), db_sessions), verifier=FakeVerifier(db_sessions),
         approvals=approvals, workspace_capabilities=frozenset({Capability.NETWORK_EXTERNAL}),
         user_capabilities=frozenset({Capability.NETWORK_EXTERNAL}), maximum_budget=BudgetLimits(100, 100, 0, 100, 100),
     )
@@ -291,19 +346,18 @@ def test_orchestrator_accepts_collaboration_only_constructor(tmp_path: Path) -> 
     sessions, _, _, _ = make_orchestrator(tmp_path, cloud_responses=[])
     policy = RecordingPolicyEngine(DeterministicPolicyEngine(), sessions)
     controller = ResearchOrchestrator(
-        sessions, policy=policy, verifier=FakeVerifier(sessions),
-        collaboration=cast(CollaborationGateway, object()),
+        sessions, policy=policy, verifier=FakeVerifier(sessions), collaboration=cast(CollaborationGateway, object()),
     )
     assert controller.collaboration is not None
-    with pytest.raises(TypeError, match="cloud and executor"):
-        ResearchOrchestrator(sessions, policy=policy, verifier=FakeVerifier(sessions))
+    with pytest.raises(TypeError, match="collaboration"):
+        ResearchOrchestrator(sessions, policy=policy, verifier=FakeVerifier(sessions))  # type: ignore[call-arg]
     assert build_parser().parse_args(["events", "run_demo", "--after", "evt_1"]).after_event_id == "evt_1"
 
 
 def test_retry_unchanged_work_order_creates_new_attempt(tmp_path: Path) -> None:
     sessions, orchestrator, _, model = make_orchestrator(tmp_path, cloud_responses=[_proposal(), _review()])
     flaky = FlakyExecutor()
-    orchestrator.executor = flaky
+    orchestrator.collaboration.executor = cast(LocalExecutorAgentAdapter, flaky)
     run_id = orchestrator.create_run(workspace_id="ws_e2e", objective="retry")
     for _ in range(5):
         asyncio.run(orchestrator.advance(run_id))
@@ -318,3 +372,48 @@ def test_retry_unchanged_work_order_creates_new_attempt(tmp_path: Path) -> None:
         assert session.query(WorkOrderRecord).one().contract["objective"] == "fix the reproducible NaN smoke failure"
     snapshot = asyncio.run(orchestrator.run(run_id, max_steps=30))
     assert snapshot.state.value == "COMPLETED" and flaky.calls == 2
+
+
+def test_failed_agent_redelegation_creates_new_delegation_and_attempt(tmp_path: Path) -> None:
+    sessions, orchestrator, _, _ = make_orchestrator(tmp_path, cloud_responses=[_proposal(), _review()])
+    flaky = FlakyExecutor()
+    orchestrator.collaboration.executor = cast(LocalExecutorAgentAdapter, flaky)
+    run_id = orchestrator.create_run(workspace_id="ws_e2e", objective="switch executor Agent")
+    for _ in range(5):
+        asyncio.run(orchestrator.advance(run_id))
+
+    with sessions() as session:
+        order = session.scalar(select(WorkOrderRecord).where(WorkOrderRecord.run_id == run_id))
+        first_attempt = session.scalar(select(AttemptRecord).where(AttemptRecord.work_order_id == order.work_order_id)) if order else None
+        first_delegation = session.get(DelegationRecord, first_attempt.delegation_id) if first_attempt else None
+        assert order is not None and order.state == "EXECUTION_FAILED"
+        assert first_attempt is not None and first_delegation is not None
+        assert first_delegation.assigned_agent_id == "agent_local_code_executor"
+        frozen_snapshot = dict(first_delegation.agent_snapshot_json)
+
+    registry = AgentRegistryService(sessions)
+    registry.register_profile(AgentProfile(
+        agent_id=AgentId("agent_backup_code_executor"), display_name="Backup Code Executor",
+        roles=("executor",), skills=("code.modify",), trust_zone=AgentTrustZone.LOCAL_PRIVATE,
+    ))
+    registry.register_runtime(AgentRuntime(
+        runtime_id=AgentRuntimeId("runtime_backup_code_executor"),
+        agent_id=AgentId("agent_backup_code_executor"), adapter_kind=AgentAdapterKind.INTERNAL,
+        runtime_name="Backup code executor runtime",
+    ))
+    registry.heartbeat("runtime_backup_code_executor", lease_seconds=3600)
+    registry.disable("agent_local_code_executor")
+
+    second_attempt_id = orchestrator.retry_attempt(order.work_order_id)
+    with sessions() as session:
+        attempts = session.scalars(select(AttemptRecord).where(AttemptRecord.work_order_id == order.work_order_id).order_by(AttemptRecord.created_at)).all()
+        second_attempt = session.get(AttemptRecord, second_attempt_id)
+        second_delegation = session.get(DelegationRecord, second_attempt.delegation_id) if second_attempt else None
+        persisted_first = session.get(DelegationRecord, first_delegation.delegation_id)
+        assert len(attempts) == 2 and attempts[0].attempt_id != attempts[1].attempt_id
+        assert second_attempt is not None and second_delegation is not None
+        assert second_delegation.delegation_id != first_delegation.delegation_id
+        assert second_delegation.assigned_agent_id == "agent_backup_code_executor"
+        assert persisted_first is not None and persisted_first.agent_snapshot_json == frozen_snapshot
+
+    assert asyncio.run(orchestrator.run(run_id, max_steps=30)).state.value == "COMPLETED"

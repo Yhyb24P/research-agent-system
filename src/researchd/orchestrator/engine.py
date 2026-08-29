@@ -1,4 +1,4 @@
-"""Durable, bounded controller loop joining Cloud Lead, executor and verifier."""
+"""Durable, bounded controller loop joining Agent collaboration and verification."""
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -9,7 +9,7 @@ from uuid import uuid4
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
-from researchd.agents.cloud_lead import CloudLeadAdapter, CloudLeadResult
+from researchd.agents.cloud_lead import CloudLeadResult
 from researchd.collaboration.gateway import CollaborationGateway
 from researchd.agents.schemas import PlanProposal, WorkOrderProposal
 from researchd.context.builder import CloudContextSelection
@@ -30,11 +30,6 @@ from researchd.storage.models import (
 from researchd.storage.repositories import utc_now
 from researchd.storage.transitions import TransactionalTransitionService
 from researchd.domain.verification import VerificationResult
-
-
-class ExecutionDriver(Protocol):
-    async def execute(self, work_order: WorkOrderRecord, attempt: AttemptRecord) -> ExecutorResult: ...
-    async def cancel(self, attempt_id: str) -> None: ...
 
 
 class VerificationDriver(Protocol):
@@ -65,23 +60,17 @@ class ResearchOrchestrator:
     """One controller instance; all transitions are persisted before side effects."""
 
     def __init__(
-        self, sessions: sessionmaker[Session], cloud: CloudLeadAdapter | None = None,
-        policy: RecordingPolicyEngine | PolicyEvaluator | None = None, executor: ExecutionDriver | None = None,
-        verifier: VerificationDriver | None = None, *, collaboration: CollaborationGateway | None = None, approvals: ApprovalService | None = None,
+        self, sessions: sessionmaker[Session], *, collaboration: CollaborationGateway,
+        policy: RecordingPolicyEngine | PolicyEvaluator,
+        verifier: VerificationDriver, approvals: ApprovalService | None = None,
         jobs: JobManager | None = None,
         workspace_capabilities: frozenset[Capability] = frozenset(),
         user_capabilities: frozenset[Capability] = frozenset(),
         maximum_budget: BudgetLimits = BudgetLimits(7200, 7200, 1200, 16_384, 16_384),
         limits: OrchestrationLimits = OrchestrationLimits(),
     ) -> None:
-        if policy is None or verifier is None:
-            raise TypeError("policy and verifier are required")
-        if collaboration is None and (cloud is None or executor is None):
-            raise TypeError("cloud and executor are required without collaboration")
         self.sessions = sessions
-        self.cloud = cloud
         self.policy = policy
-        self.executor = executor
         self.collaboration = collaboration
         self.verifier = verifier
         self.approvals = approvals
@@ -92,23 +81,19 @@ class ResearchOrchestrator:
         self.limits = limits
         self.transitions = TransactionalTransitionService(sessions)
 
-    def _legacy_cloud(self) -> CloudLeadAdapter:
-        if self.cloud is None:
-            raise OrchestrationError("Cloud Lead compatibility adapter is not configured")
-        return self.cloud
+    def _agent_actor(self, work_order_id: str) -> tuple[str, str]:
+        agent_id = self.collaboration.assigned_agent_for(work_order_id)
+        if agent_id is not None:
+            return "agent", agent_id
+        raise OrchestrationError(f"no assigned Agent for WorkOrder {work_order_id}")
 
-    def _legacy_executor(self) -> ExecutionDriver:
-        if self.executor is None:
-            raise OrchestrationError("executor compatibility adapter is not configured")
-        return self.executor
-
-    def _agent_actor(self, work_order_id: str, *, fallback_type: str, fallback_id: str) -> tuple[str, str]:
-        if self.collaboration is not None:
-            agent_id = self.collaboration.assigned_agent_for(work_order_id)
-            if agent_id is not None:
-                return "agent", agent_id
-            raise OrchestrationError(f"no assigned Agent for WorkOrder {work_order_id}")
-        return fallback_type, fallback_id
+    def _requester_actor(self, order: WorkOrderRecord) -> tuple[str, str]:
+        assigned = self.collaboration.assigned_agent_for(order.work_order_id)
+        if assigned is None:
+            assigned = self.collaboration.assigned_agent_for_run(order.run_id, DelegationPurpose.PLAN)
+        if assigned is None:
+            raise OrchestrationError(f"no requesting Agent for WorkOrder {order.work_order_id}")
+        return "agent", assigned
 
     def create_run(self, *, workspace_id: str, objective: str, run_id: str | None = None) -> str:
         identifier = run_id or f"run_{uuid4().hex}"
@@ -173,7 +158,7 @@ class ResearchOrchestrator:
         if not self._consume_cloud_call(run_id, run):
             return False
         try:
-            result = await (self.collaboration.plan(CloudContextSelection(run_id=run_id)) if self.collaboration else self._legacy_cloud().propose_plan(CloudContextSelection(run_id=run_id)))
+            result = await self.collaboration.plan(CloudContextSelection(run_id=run_id))
         except (CloudProviderUnavailable, TimeoutError) as error:
             self._transition_run(run_id, ResearchRunState.WAITING_EXTERNAL, "CLOUD_PLAN_WAITING", {"error": type(error).__name__})
             return False
@@ -186,12 +171,10 @@ class ResearchOrchestrator:
 
     def _persist_plan(self, run_id: str, result: CloudLeadResult[PlanProposal]) -> None:
         now = utc_now()
-        actor_type, actor_id = "controller", "orchestrator"
-        if self.collaboration is not None:
-            assigned = self.collaboration.assigned_agent_for_run(run_id, DelegationPurpose.PLAN)
-            if assigned is None:
-                raise OrchestrationError(f"no assigned planning Agent for run {run_id}")
-            actor_type, actor_id = "agent", assigned
+        assigned = self.collaboration.assigned_agent_for_run(run_id, DelegationPurpose.PLAN)
+        if assigned is None:
+            raise OrchestrationError(f"no assigned planning Agent for run {run_id}")
+        actor_type, actor_id = "agent", assigned
         with self.sessions.begin() as session:
             session.add(PlanRecord(
                 plan_id=result.output.proposal_id, run_id=run_id,
@@ -297,7 +280,7 @@ class ResearchOrchestrator:
                 metadata={"outcome": decision.outcome.value, "reason_codes": list(decision.reason_codes)})
             return True
         if decision.outcome is PolicyOutcome.APPROVAL_REQUIRED and self.approvals is not None:
-            requester_type, requester_id = self._agent_actor(order.work_order_id, fallback_type="cloud_lead", fallback_id="cloud-lead")
+            requester_type, requester_id = self._requester_actor(order)
             approval = self.approvals.request(
                 operation_type="work_order.capabilities", parameters={"work_order_id": order.work_order_id, "capabilities": sorted(requested)},
                 requested_by=requester_id, reason=order.objective, risk_level="elevated", resource_scope={"run_id": order.run_id},
@@ -355,7 +338,7 @@ class ResearchOrchestrator:
             event_type="WORK_ORDER_DISPATCHED", actor_type="controller", actor_id="orchestrator", correlation_id=order.work_order_id)
         now = utc_now()
         attempt_id = f"att_{uuid4().hex}"
-        delegation_id = self.collaboration.prepare_execution(order) if self.collaboration is not None else None
+        delegation_id = self.collaboration.prepare_execution(order)
         with self.sessions.begin() as session:
             session.add(AttemptRecord(attempt_id=attempt_id, work_order_id=order.work_order_id, delegation_id=delegation_id, state=AttemptState.CREATED.value,
                 terminal_at=None, version=1, created_at=now, updated_at=now))
@@ -386,7 +369,7 @@ class ResearchOrchestrator:
             event_type="ATTEMPT_RETRY_REQUESTED", actor_type="controller", actor_id="orchestrator", correlation_id=order.work_order_id)
         now = utc_now()
         attempt_id = f"att_{uuid4().hex}"
-        delegation_id = self.collaboration.prepare_execution(order) if self.collaboration is not None else None
+        delegation_id = self.collaboration.prepare_execution(order)
         with self.sessions.begin() as session:
             session.add(AttemptRecord(attempt_id=attempt_id, work_order_id=order.work_order_id, delegation_id=delegation_id,
                 state=AttemptState.CREATED.value, terminal_at=None, version=1, created_at=now, updated_at=now))
@@ -406,10 +389,10 @@ class ResearchOrchestrator:
             raise OrchestrationError("EXECUTING WorkOrder has no Attempt")
         result = self._stored_execution_result(attempt.attempt_id)
         if result is None:
-            result = await (self.collaboration.execute(order, attempt) if self.collaboration else self._legacy_executor().execute(order, attempt))
+            result = await self.collaboration.execute(order, attempt)
             self._store_execution_result(attempt.attempt_id, result)
         if result.status != "execution_complete":
-            actor_type, actor_id = self._agent_actor(order.work_order_id, fallback_type="executor", fallback_id="local-executor")
+            actor_type, actor_id = self._agent_actor(order.work_order_id)
             self.transitions.transition_attempt(attempt.attempt_id, attempt.version, AttemptState.FAILED,
                 event_type="EXECUTION_FAILED", actor_type=actor_type, actor_id=actor_id, correlation_id=attempt.attempt_id)
             refreshed = self._order(order.work_order_id)
@@ -456,13 +439,10 @@ class ResearchOrchestrator:
         if not self._consume_cloud_call(run_id, self._run(run_id)):
             return False
         try:
-            result = await (self.collaboration.review(CloudContextSelection(
+            result = await self.collaboration.review(CloudContextSelection(
                 run_id=run_id, work_order_id=order.work_order_id,
                 verification_id=self._latest_verification_id(order.work_order_id),
-            )) if self.collaboration else self._legacy_cloud().review(CloudContextSelection(
-                run_id=run_id, work_order_id=order.work_order_id,
-                verification_id=self._latest_verification_id(order.work_order_id),
-            )))
+            ))
         except (CloudProviderUnavailable, TimeoutError) as error:
             self._transition_run(run_id, ResearchRunState.WAITING_EXTERNAL, "CLOUD_REVIEW_WAITING", {"error": type(error).__name__})
             return False
@@ -483,7 +463,7 @@ class ResearchOrchestrator:
             self.transitions.transition_work_order(current.work_order_id, current.version, WorkOrderState.ACCEPTED,
                 event_type="WORK_ORDER_ACCEPTED", actor_type="controller", actor_id="orchestrator", correlation_id=current.work_order_id)
             return True
-        actor_type, actor_id = self._agent_actor(current.work_order_id, fallback_type="cloud_lead", fallback_id="cloud-lead")
+        actor_type, actor_id = self._agent_actor(current.work_order_id)
         if decision is ReviewDecisionKind.HUMAN_REQUIRED:
             self.transitions.transition_work_order(current.work_order_id, current.version, WorkOrderState.HUMAN_REQUIRED,
                 event_type="HUMAN_REQUIRED", actor_type=actor_type, actor_id=actor_id, correlation_id=current.work_order_id)
@@ -503,7 +483,7 @@ class ResearchOrchestrator:
             metadata={"decision": decision.value})
         # The next objective is carried into the new WorkOrder only; the dispatched
         # predecessor remains immutable and fully traceable.
-        self._create_revision(self._order(current.work_order_id), "cloud requested revision", objective=result.output.requested_next_objective)
+        self._create_revision(self._order(current.work_order_id), "Agent requested revision", objective=result.output.requested_next_objective)
         self._transition_run(run_id, ResearchRunState.ACTIVE, "REVISION_RESUMED")
         return True
 
@@ -537,10 +517,11 @@ class ResearchOrchestrator:
                 requested_evidence=list(result.output.requested_evidence), confidence=result.output.confidence,
                 created_at=now,
             ))
+            actor_type, actor_id = self._agent_actor(order.work_order_id)
             session.add(AuditEventRecord(
                 event_id=f"evt_{uuid4().hex}", event_type="REVIEW_DECISION_RECORDED", run_id=run_id,
-                entity_type="work_order", entity_id=order.work_order_id, actor_type=self._agent_actor(order.work_order_id, fallback_type="cloud_lead", fallback_id="cloud-lead")[0],
-                actor_id=self._agent_actor(order.work_order_id, fallback_type="cloud_lead", fallback_id="cloud-lead")[1], timestamp=now, correlation_id=order.work_order_id,
+                entity_type="work_order", entity_id=order.work_order_id, actor_type=actor_type,
+                actor_id=actor_id, timestamp=now, correlation_id=order.work_order_id,
                 causation_id=result.interaction_id, metadata_json={"decision": result.output.decision.value},
             ))
 
@@ -566,7 +547,7 @@ class ResearchOrchestrator:
             current.updated_at = utc_now()
         for attempt in self._active_attempts(run_id):
             # Cancellation is best-effort at the backend, but the state is never silently resumed.
-            await (self.collaboration.cancel(attempt.attempt_id) if self.collaboration else self._legacy_executor().cancel(attempt.attempt_id))
+            await self.collaboration.cancel(attempt.attempt_id)
             current_attempt = self._attempt(attempt.attempt_id)
             self.transitions.transition_attempt(current_attempt.attempt_id, current_attempt.version, AttemptState.CANCELLED,
                 event_type="ATTEMPT_CANCELLED", actor_type="controller", actor_id="orchestrator", correlation_id=current_attempt.attempt_id)
@@ -597,8 +578,7 @@ class ResearchOrchestrator:
         for attempt in self._active_attempts(run_id):
             stored = self._stored_execution_result(attempt.attempt_id)
             if stored is not None:
-                if self.collaboration is not None:
-                    self.collaboration.reconcile_attempt(attempt.attempt_id, stored)
+                self.collaboration.reconcile_attempt(attempt.attempt_id, stored)
                 with self.sessions.begin() as session:
                     session.add(AuditEventRecord(
                         event_id=f"evt_{uuid4().hex}", event_type="RECOVERY_EXECUTION_RECONCILED", run_id=run_id,
@@ -606,24 +586,23 @@ class ResearchOrchestrator:
                         actor_id="recovery", timestamp=utc_now(), correlation_id=attempt.attempt_id,
                         causation_id=None, metadata_json={"result_persisted": True},
                     ))
-        if self.collaboration is not None:
-            recovered = self.collaboration.recover_run(run_id)
-            if recovered:
-                with self.sessions.begin() as session:
-                    for invocation_id in recovered:
-                        session.add(AuditEventRecord(
-                            event_id=f"evt_{uuid4().hex}", event_type="RECOVERY_INVOCATION_FAILED", run_id=run_id,
-                            entity_type="agent_invocation", entity_id=invocation_id, actor_type="controller",
-                            actor_id="recovery", timestamp=utc_now(), correlation_id=invocation_id,
-                            causation_id=None, metadata_json={"reason": "CONTROLLER_RESTARTED"},
-                        ))
+        recovered = self.collaboration.recover_run(run_id)
+        if recovered:
+            with self.sessions.begin() as session:
+                for invocation_id in recovered:
+                    session.add(AuditEventRecord(
+                        event_id=f"evt_{uuid4().hex}", event_type="RECOVERY_INVOCATION_FAILED", run_id=run_id,
+                        entity_type="agent_invocation", entity_id=invocation_id, actor_type="controller",
+                        actor_id="recovery", timestamp=utc_now(), correlation_id=invocation_id,
+                        causation_id=None, metadata_json={"reason": "CONTROLLER_RESTARTED"},
+                    ))
         return self.snapshot(run_id)
 
     def _assert_hard_verification(self, work_order_id: str) -> None:
         with self.sessions() as session:
             result = session.scalar(select(VerificationResultRecord).where(VerificationResultRecord.work_order_id == work_order_id).order_by(VerificationResultRecord.created_at.desc()).limit(1))
             if result is not None and result.overall != VerificationOverall.PASS.value:
-                raise OrchestrationError("cloud ACCEPT cannot override hard verification")
+                raise OrchestrationError("Agent ACCEPT cannot override hard verification")
 
     def _stored_execution_result(self, attempt_id: str) -> ExecutorResult | None:
         with self.sessions() as session:
