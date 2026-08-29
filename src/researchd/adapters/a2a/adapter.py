@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from researchd.adapters.a2a.schemas import A2AAgentCard, A2AInterface, A2ATask, A2A_PROTOCOL_VERSION
+from researchd.collaboration.contracts import AgentProfile, AgentRuntime
 from researchd.storage.models import AgentInteractionRecord, AuditEventRecord, AttemptRecord, WorkOrderRecord
 from researchd.storage.repositories import utc_now
 
@@ -25,14 +26,18 @@ class A2ATerminalTaskError(A2AAdapterError):
     pass
 
 
-def executor_agent_card(*, url: str = "http://127.0.0.1:8787/a2a") -> dict[str, Any]:
-    """Return an A2A 1.0 card; the URL is metadata and no server is started."""
+def agent_card(profile: AgentProfile, runtime: AgentRuntime, *, url: str | None = None) -> dict[str, Any]:
+    """Project a trusted Agent identity into A2A discovery metadata."""
+    endpoint = url or runtime.endpoint_ref
+    if endpoint is None:
+        raise ValueError("A2A Agent Card requires a runtime endpoint")
     return A2AAgentCard(
-        name="research-local-executor", description="Bounded executor behind the trusted controller",
-        url=url, protocolVersion=A2A_PROTOCOL_VERSION,
-        supportedInterfaces=(A2AInterface(url=url, protocolBinding="HTTP+JSON", protocolVersion=A2A_PROTOCOL_VERSION),),
+        name=profile.display_name,
+        description=f"Agent roles: {', '.join(profile.roles) if profile.roles else 'unspecified'}",
+        url=endpoint, protocolVersion=A2A_PROTOCOL_VERSION,
+        supportedInterfaces=(A2AInterface(url=endpoint, protocolBinding="HTTP+JSON", protocolVersion=A2A_PROTOCOL_VERSION),),
         capabilities={"streaming": False, "pushNotifications": False},
-        skills=({"id": "execute-work-order", "name": "Execute bounded WorkOrder"},),
+        skills=tuple({"id": skill, "name": skill} for skill in profile.skills),
     ).model_dump(mode="json", by_alias=True)
 
 

@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-from researchd.adapters.a2a import A2AAdapter, A2ATerminalTaskError, executor_agent_card
+from researchd.adapters.a2a import A2AAdapter, A2ATerminalTaskError, agent_card
 from researchd.adapters.mcp import MCPStdioAdapter, MCPStreamableHTTPTestAdapter
 from researchd.collaboration.contracts import AgentInvocationRequest, ExecuteInvocationInput
 from researchd.collaboration.contracts import AgentProfile, AgentRuntime, Delegation
@@ -50,8 +50,18 @@ def test_a2a_dispatch_is_idempotent_and_terminal_refinement_is_new_task(tmp_path
 
 
 def test_a2a_card_is_v1_and_nonterminal_task_cannot_refine(tmp_path: Path) -> None:
-    card = executor_agent_card()
+    profile = AgentProfile(
+        agent_id=AgentId("agent_card"), display_name="Science Agent",
+        roles=("reviewer",), skills=("evidence.inspect",), trust_zone=AgentTrustZone.REMOTE_PRIVATE,
+    )
+    runtime = AgentRuntime(
+        runtime_id=AgentRuntimeId("runtime_card"), agent_id=profile.agent_id,
+        adapter_kind=AgentAdapterKind.A2A, runtime_name="A2A runtime",
+        endpoint_ref="http://127.0.0.1:8787/a2a",
+    )
+    card = agent_card(profile, runtime)
     assert card["protocolVersion"] == "1.0.0" and card["supportedInterfaces"][0]["protocolBinding"] == "HTTP+JSON"
+    assert card["name"] == "Science Agent" and card["skills"][0]["id"] == "evidence.inspect"
     # The terminal guard is exercised by the adapter's typed task mapping in the dispatch test;
     # this assertion protects the protocol shape independently of any SDK.
     assert "supportedInterfaces" in card
