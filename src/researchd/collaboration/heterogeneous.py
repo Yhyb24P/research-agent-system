@@ -3,7 +3,7 @@ import json
 from typing import Any, Protocol
 from urllib.parse import urlparse
 from researchd.adapters.a2a.adapter import A2AAdapter
-from researchd.collaboration.contracts import AgentHealth, AgentInvocationRequest, AgentInvocationResult, AgentRuntime
+from researchd.collaboration.contracts import AgentHealth, AgentInvocationRequest, AgentInvocationResult, AgentRuntime, ExecuteInvocationInput
 from researchd.domain.enums import InvocationStatus
 
 
@@ -15,6 +15,12 @@ class ProcessAgentRunner(Protocol):
     async def invoke(self, command: tuple[str, ...], payload: dict[str, Any]) -> dict[str, Any]: ...
 
 
+def _request_payload(request: AgentInvocationRequest) -> dict[str, Any] | None:
+    if isinstance(request.typed_input, ExecuteInvocationInput):
+        return request.typed_input.work_order.model_dump(mode="json")
+    return request.payload if isinstance(request.payload, dict) else None
+
+
 class A2ARemoteAgentAdapter:
     """Map one canonical Invocation to an A2A Task, never to a WorkOrder."""
     def __init__(self, delegate: A2AAdapter) -> None:
@@ -24,9 +30,10 @@ class A2ARemoteAgentAdapter:
         return AgentHealth(healthy=bool(runtime.endpoint_ref), reason=None if runtime.endpoint_ref else "endpoint_ref missing")
 
     async def invoke(self, request: AgentInvocationRequest) -> AgentInvocationResult:
-        if request.work_order_id is None or request.attempt_id is None or not isinstance(request.payload, dict):
+        payload = _request_payload(request)
+        if request.work_order_id is None or request.attempt_id is None or payload is None:
             return AgentInvocationResult(invocation_id=request.invocation_id, status=InvocationStatus.FAILED, reason_code="A2A_SCOPE_REQUIRED")
-        task = await self.delegate.dispatch(work_order_id=request.work_order_id, attempt_id=request.attempt_id, payload=request.payload, invocation_id=str(request.invocation_id))
+        task = await self.delegate.dispatch(work_order_id=request.work_order_id, attempt_id=request.attempt_id, payload=payload, invocation_id=str(request.invocation_id))
         terminal = task.status.state in {"completed", "failed", "canceled", "rejected"}
         return AgentInvocationResult(invocation_id=request.invocation_id, status=InvocationStatus.SUCCEEDED if terminal else InvocationStatus.RUNNING, output_type="A2ATask", output=task.model_dump(mode="json"), reason_code=None if terminal else "A2A_TASK_NONTERMINAL")
 
@@ -50,16 +57,17 @@ class HttpAgentAdapter:
         return AgentHealth(healthy=True)
 
     async def invoke(self, request: AgentInvocationRequest) -> AgentInvocationResult:
-        if request.payload is None or not isinstance(request.payload, dict):
+        payload = _request_payload(request)
+        if payload is None:
             return AgentInvocationResult(invocation_id=request.invocation_id, status=InvocationStatus.FAILED, reason_code="HTTP_PAYLOAD_REQUIRED")
-        if len(json.dumps(request.payload, sort_keys=True, separators=(",", ":")).encode()) > self.max_payload_bytes:
+        if len(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()) > self.max_payload_bytes:
             return AgentInvocationResult(invocation_id=request.invocation_id, status=InvocationStatus.FAILED, reason_code="HTTP_PAYLOAD_TOO_LARGE")
         if request.endpoint_ref is None:
             return AgentInvocationResult(invocation_id=request.invocation_id, status=InvocationStatus.FAILED, reason_code="HTTP_ENDPOINT_REQUIRED")
         parsed = urlparse(request.endpoint_ref)
         if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
             return AgentInvocationResult(invocation_id=request.invocation_id, status=InvocationStatus.FAILED, reason_code="HTTP_ENDPOINT_UNSAFE")
-        response = await self.client.invoke(request.endpoint_ref, request.payload)
+        response = await self.client.invoke(request.endpoint_ref, payload)
         return AgentInvocationResult(invocation_id=request.invocation_id, status=InvocationStatus.SUCCEEDED, output_type="HttpAgentResult", output=response)
 
     async def cancel(self, invocation_id: str) -> None:
@@ -76,9 +84,10 @@ class LocalProcessAgentAdapter:
         return AgentHealth(healthy=bool(self.command), reason=None if self.command else "process command missing")
 
     async def invoke(self, request: AgentInvocationRequest) -> AgentInvocationResult:
-        if not isinstance(request.payload, dict):
+        payload = _request_payload(request)
+        if payload is None:
             return AgentInvocationResult(invocation_id=request.invocation_id, status=InvocationStatus.FAILED, reason_code="PROCESS_PAYLOAD_REQUIRED")
-        output = await self.runner.invoke(self.command, request.payload)
+        output = await self.runner.invoke(self.command, payload)
         return AgentInvocationResult(invocation_id=request.invocation_id, status=InvocationStatus.SUCCEEDED, output_type="ProcessAgentResult", output=output)
 
     async def cancel(self, invocation_id: str) -> None:

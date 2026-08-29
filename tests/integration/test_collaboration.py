@@ -7,7 +7,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
-from researchd.collaboration.contracts import AgentProfile, AgentRuntime, AgentInvocationRequest, DiscoveredAgentDescriptor, HumanDirective, PlanInvocationInput
+from researchd.collaboration.contracts import AgentProfile, AgentRuntime, AgentInvocationRequest, DiscoveredAgentDescriptor, ExecuteInvocationInput, HumanDirective, PlanInvocationInput
 from researchd.collaboration.registry import AgentRegistryService
 from researchd.collaboration.delegation import DelegationService
 from researchd.collaboration.invocation import InvocationService
@@ -26,9 +26,10 @@ from researchd.context.builder import CloudContextSelection
 from researchd.observability import collect_metrics
 from researchd.policy.approval import ApprovalService
 from researchd.agents.cloud_lead import CloudLeadAdapter
+from researchd.executor.contracts import GrantedWorkOrder, SandboxSpec
 from researchd.executor.worker import LocalExecutorWorker
 from researchd.collaboration.contracts import AgentInvocationResult, Delegation
-from researchd.domain.enums import AgentAdapterKind, AgentTrustZone, DataClassification, DelegationPurpose, InvocationStatus, ResearchRunState
+from researchd.domain.enums import AgentAdapterKind, AgentTrustZone, Capability, DataClassification, DelegationPurpose, InvocationStatus, ResearchRunState
 from researchd.domain.ids import DelegationId, InvocationId, MessageId
 from researchd.storage.models import AgentRecord, AgentRuntimeRecord, AttemptRecord, AuditEventRecord, CollaborationMessageRecord, WorkspaceRecord, ResearchRunRecord, WorkOrderRecord
 from researchd.storage.models import DelegationRecord, AgentInvocationRecord
@@ -319,18 +320,23 @@ def test_http_adapter_uses_validated_runtime_endpoint() -> None:
 
         async def invoke(self, endpoint: str, payload: dict[str, object]) -> dict[str, object]:
             self.endpoints.append(endpoint)
-            return {"accepted": payload["value"]}
+            return {"accepted": payload["objective"], "capabilities": payload["granted_capabilities"]}
 
     client = Client()
     request = AgentInvocationRequest(
         invocation_id=InvocationId("inv_http_endpoint"), delegation_id=DelegationId("del_http_endpoint"),
         run_id="run_test", agent_id=AgentId("agent_executor"), runtime_id=AgentRuntimeId("runtime_http"),
         purpose=DelegationPurpose.EXECUTE, input_sha256="f" * 64,
-        endpoint_ref="http://127.0.0.1:8789/agent", payload={"value": "ok"},
+        endpoint_ref="http://127.0.0.1:8789/agent",
+        typed_input=ExecuteInvocationInput(work_order=GrantedWorkOrder(
+            attempt_id="att_http_endpoint", objective="typed execute", granted_capabilities=frozenset({Capability.TEST_RUN}),
+            sandbox=SandboxSpec(attempt_id="att_http_endpoint", workspace="/workspace"),
+        )),
     )
     result = asyncio.run(HttpAgentAdapter(client).invoke(request))
     assert result.status is InvocationStatus.SUCCEEDED
     assert client.endpoints == ["http://127.0.0.1:8789/agent"]
+    assert result.output is not None and result.output["accepted"] == "typed execute"
 
 
 def test_adapter_catalog_resolves_enabled_healthy_runtime(database: tuple[Path, sessionmaker[Session]]) -> None:
