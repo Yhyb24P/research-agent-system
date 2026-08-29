@@ -130,6 +130,15 @@ uv run pytest -q \
 嵌入式控制器启动时必须先注册 workspace transport，并在接收新任务前调用
 `WorkspaceDelegationService.recover_incomplete()`。系统会使用外部副作用发生前已持久化
 的 transport handle，关闭中断的 provisioning/reconciliation 窗口并记录清理结果。
+控制器还必须使用持久化 session 构造 `WorktreeManager`，并在创建尝试工作树前调用
+`recover_incomplete(repository_mapping)`，从持久化生命周期状态关闭中断的创建/移除窗口。
+
+资格探针必须运行在实际部署数据目录，而不是临时替代目录：
+
+```bash
+uv run python scripts/dq01_preflight.py --strict --target <deployment-root>
+uv run python scripts/dq01_filesystem_probe.py --root <deployment-root>
+```
 
 ## 查看控制面
 

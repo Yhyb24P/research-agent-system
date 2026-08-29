@@ -21,6 +21,21 @@ Record kernel/OS, Python, Bubblewrap, filesystem type/mount options, WSL/native/
 - concurrent attempts cannot write each other's workspace;
 - target filesystem preserves hashes and atomicity assumptions used by CAS/SQLite procedures.
 
+The embedding controller must construct `WorktreeManager` with durable
+sessions and call `recover_incomplete(repository_mapping)` before creating a
+new attempt worktree. Creation persists `PROVISIONING` before the Git side
+effect; removal persists `REMOVING` before cleanup. Recovery owns both crash
+windows and records `CLEANED` or observable `CLEANUP_FAILED` state.
+
+Run the deployment-bound probes on the directory that will contain controller
+state, CAS data and attempt worktrees:
+
+```bash
+uv run python scripts/dq01_preflight.py --strict --target <deployment-root>
+uv run python scripts/dq01_filesystem_probe.py --root <deployment-root>
+uv run pytest -q tests/security/test_sandbox.py tests/integration/test_executor.py
+```
+
 ## HARD failures
 
 Any host filesystem escape, unexpected network access, secret inheritance, cross-attempt write, or process surviving a completed mandatory cleanup check.
