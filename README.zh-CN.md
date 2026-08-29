@@ -103,6 +103,17 @@ uv run mypy src tests
 git diff --check
 ```
 
+RC 后的资格验证主线、Gate 策略和可执行证据契约见
+[`docs/qualification/`](docs/qualification/README.md)。可用下列命令验证示例记录：
+
+```bash
+uv sync --frozen --extra qualification
+uv run python scripts/qualification_validate.py \
+  --plan examples/qualification_plan.example.json \
+  --evidence examples/qualification_evidence.example.json \
+  --acceptance examples/qualification_acceptance.example.json
+```
+
 直接运行四个互操作/工作区 pilot：
 
 ```bash
@@ -175,8 +186,8 @@ curl -N http://127.0.0.1:8788/api/runs/<run-id>/stream?follow=1
 
 ## 边界与发布策略
 
-项目只支持当前 contract，不承诺旧协议或旧数据库兼容。未经验证或不安全的边界会失败
-关闭。
+项目只实现并验证当前 contract，不保留旧协议适配层，也不提供旧数据库迁移兼容。
+未经验证或不安全的边界会失败关闭。
 
 仓库使用不可变 `v1.0.0-rc.*` Git tag 标识 qualification candidate。Python distribution
 在预发布阶段仍保持 `0.1.0`，因此 Git RC tag 用于标识通过资格检查的源码 commit，并与

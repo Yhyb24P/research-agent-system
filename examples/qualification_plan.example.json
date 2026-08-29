@@ -1,0 +1,18 @@
+{
+  "candidate_commit": "df461a601929be3bc4aed10190f9ac8a05664a61",
+  "candidate_tag": "v1.0.0-rc.71",
+  "status": "PLANNED",
+  "gates": [
+    {"gate_id": "IQ01", "title": "A2A real interoperability", "severity": "HARD", "dependencies": [], "status": "NOT_STARTED", "accepted_evidence_ids": []},
+    {"gate_id": "IQ02", "title": "Workspace transport and fault qualification", "severity": "HARD", "dependencies": [], "status": "NOT_STARTED", "accepted_evidence_ids": []},
+    {"gate_id": "IQ03", "title": "AG-UI replay and reconnect qualification", "severity": "HARD", "dependencies": [], "status": "NOT_STARTED", "accepted_evidence_ids": []},
+    {"gate_id": "DQ01", "title": "Host, sandbox and filesystem", "severity": "HARD", "dependencies": [], "status": "NOT_STARTED", "accepted_evidence_ids": []},
+    {"gate_id": "DQ02", "title": "Agent runtime and invocation lifecycle", "severity": "HARD", "dependencies": ["DQ01"], "status": "NOT_STARTED", "accepted_evidence_ids": []},
+    {"gate_id": "DQ03", "title": "Cloud provider and egress", "severity": "HARD", "dependencies": [], "status": "NOT_STARTED", "accepted_evidence_ids": []},
+    {"gate_id": "DQ04", "title": "Backup, restore and DR", "severity": "HARD", "dependencies": ["DQ01"], "status": "NOT_STARTED", "accepted_evidence_ids": []},
+    {"gate_id": "DQ05", "title": "Soak, restart and fault endurance", "severity": "HARD", "dependencies": ["DQ01", "DQ02", "DQ03", "DQ04"], "status": "NOT_STARTED", "accepted_evidence_ids": []},
+    {"gate_id": "RQ01", "title": "Release provenance", "severity": "RELEASE", "dependencies": ["IQ01", "IQ02", "IQ03", "DQ01", "DQ02", "DQ03", "DQ04", "DQ05"], "status": "NOT_STARTED", "accepted_evidence_ids": []},
+    {"gate_id": "RQ02", "title": "End-to-end acceptance", "severity": "RELEASE", "dependencies": ["IQ01", "IQ02", "IQ03", "DQ01", "DQ02", "DQ03", "DQ04", "DQ05"], "status": "NOT_STARTED", "accepted_evidence_ids": []},
+    {"gate_id": "RQ03", "title": "Production Go / No-Go", "severity": "RELEASE", "dependencies": ["RQ01", "RQ02"], "status": "NOT_STARTED", "accepted_evidence_ids": []}
+  ]
+}

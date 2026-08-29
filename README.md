@@ -112,6 +112,19 @@ uv run mypy src tests
 git diff --check
 ```
 
+The post-RC qualification mainline, Gate policy, and executable evidence
+contracts are documented in
+[`docs/qualification/`](docs/qualification/README.md). Validate their example
+bundle with:
+
+```bash
+uv sync --frozen --extra qualification
+uv run python scripts/qualification_validate.py \
+  --plan examples/qualification_plan.example.json \
+  --evidence examples/qualification_evidence.example.json \
+  --acceptance examples/qualification_acceptance.example.json
+```
+
 Run the four interoperability/workspace pilots directly:
 
 ```bash

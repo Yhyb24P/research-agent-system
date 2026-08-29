@@ -32,13 +32,19 @@ jobs:
           test "$(stat -c '%A' /usr/bin/bwrap | cut -c4)" != "s"
           test -z "$(getcap /usr/bin/bwrap)"
       - name: Install from committed lock
-        run: uv sync --frozen --extra a2a --extra langgraph-agent
+        run: uv sync --frozen --extra a2a --extra langgraph-agent --extra qualification
       - name: Verify optional Agent runtimes
         run: uv run python -c 'import a2a, langgraph; print("optional Agent runtimes available")'
       - name: Generate lock-derived SBOM
         run: |
           uv run python scripts/lock_sbom.py --output /tmp/dq00-python-sbom.json
           uv run python -c 'import json; p=json.load(open("/tmp/dq00-python-sbom.json")); assert p["bomFormat"] == "CycloneDX" and p["components"]'
+      - name: Validate qualification contracts
+        run: |
+          uv run python scripts/qualification_validate.py \
+            --plan examples/qualification_plan.example.json \
+            --evidence examples/qualification_evidence.example.json \
+            --acceptance examples/qualification_acceptance.example.json
       - name: Test
         run: uv run pytest -q
       - name: Type check

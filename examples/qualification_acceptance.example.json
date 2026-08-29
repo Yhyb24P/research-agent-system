@@ -1,0 +1,14 @@
+{
+  "acceptance_id": "qa_example_iq03",
+  "gate_id": "IQ03",
+  "candidate_commit": "df461a601929be3bc4aed10190f9ac8a05664a61",
+  "candidate_tag": "v1.0.0-rc.71",
+  "result": "INCONCLUSIVE",
+  "hard_failures": [],
+  "major_findings": ["Template record only; no qualification evidence has been accepted."],
+  "accepted_evidence_ids": ["qe_example_iq03"],
+  "reviewer": {"actor_type": "HUMAN", "actor_id": "qualification-reviewer", "attestation_sha256": null},
+  "reviewed_at": "2026-08-29T00:02:00Z",
+  "notes": "Template only; not an accepted Gate decision.",
+  "supersedes_acceptance_id": null
+}
