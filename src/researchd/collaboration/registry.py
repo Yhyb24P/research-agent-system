@@ -5,8 +5,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from researchd.collaboration.contracts import AgentProfile, AgentRuntime, DiscoveredAgentDescriptor
-from researchd.domain.enums import AgentTrustZone
-from researchd.domain.ids import AgentId
+from researchd.domain.enums import AgentAdapterKind, AgentTrustZone
+from researchd.domain.ids import AgentId, AgentRuntimeId
 from researchd.storage.models import AgentRecord, AgentRuntimeRecord
 
 
@@ -111,6 +111,44 @@ class AgentRegistryService:
                 protocols_json=list(runtime.protocols), metadata_json=dict(runtime.metadata),
                 enabled=True, version=1, created_at=now, updated_at=now,
             ))
+
+    def update_runtime(self, runtime: AgentRuntime) -> None:
+        """Update implementation details without changing runtime/agent identity."""
+        now = datetime.now(UTC)
+        with self.sessions.begin() as session:
+            row = session.get(AgentRuntimeRecord, str(runtime.runtime_id))
+            if row is None:
+                raise ValueError(f"agent runtime does not exist: {runtime.runtime_id}")
+            if row.agent_id != str(runtime.agent_id):
+                raise ValueError("runtime owner cannot be changed")
+            row.adapter_kind = runtime.adapter_kind.value
+            row.runtime_name = runtime.runtime_name
+            row.endpoint_ref = runtime.endpoint_ref
+            row.framework = runtime.framework
+            row.model_provider = runtime.model_provider
+            row.model_name = runtime.model_name
+            row.protocols_json = list(runtime.protocols)
+            row.metadata_json = dict(runtime.metadata)
+            row.version += 1
+            row.updated_at = now
+
+    def get_runtime(self, runtime_id: str) -> AgentRuntime:
+        with self.sessions() as session:
+            row = session.get(AgentRuntimeRecord, runtime_id)
+            if row is None:
+                raise ValueError(f"agent runtime does not exist: {runtime_id}")
+            return self._runtime_from_record(row)
+
+    def list_runtimes(self, agent_id: str | None = None) -> tuple[AgentRuntime, ...]:
+        with self.sessions() as session:
+            query = select(AgentRuntimeRecord).order_by(AgentRuntimeRecord.runtime_id)
+            if agent_id is not None:
+                query = query.where(AgentRuntimeRecord.agent_id == agent_id)
+            return tuple(self._runtime_from_record(row) for row in session.scalars(query).all())
+
+    @staticmethod
+    def _runtime_from_record(row: AgentRuntimeRecord) -> AgentRuntime:
+        return AgentRuntime(runtime_id=AgentRuntimeId(row.runtime_id), agent_id=AgentId(row.agent_id), adapter_kind=AgentAdapterKind(row.adapter_kind), runtime_name=row.runtime_name, endpoint_ref=row.endpoint_ref, framework=row.framework, model_provider=row.model_provider, model_name=row.model_name, protocols=tuple(row.protocols_json), metadata=dict(row.metadata_json))
 
     def discovered_descriptor(self, descriptor: DiscoveredAgentDescriptor) -> DiscoveredAgentDescriptor:
         return descriptor

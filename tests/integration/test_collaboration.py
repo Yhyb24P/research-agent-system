@@ -83,6 +83,19 @@ def test_registry_profile_lifecycle_advances_snapshot_version(database: tuple[Pa
     assert registry.get_agent("agent_executor").enabled
 
 
+def test_runtime_replacement_preserves_agent_identity(database: tuple[Path, sessionmaker[Session]]) -> None:
+    _, sessions = database
+    registry = AgentRegistryService(sessions)
+    registry.register_profile(profile())
+    registry.register_runtime(AgentRuntime(runtime_id=AgentRuntimeId("runtime_qwen"), agent_id=AgentId("agent_executor"), adapter_kind=AgentAdapterKind.HTTP, runtime_name="Qwen", model_provider="qwen", model_name="qwen-old"))
+    registry.update_runtime(AgentRuntime(runtime_id=AgentRuntimeId("runtime_qwen"), agent_id=AgentId("agent_executor"), adapter_kind=AgentAdapterKind.HTTP, runtime_name="Qwen upgraded", model_provider="vllm", model_name="qwen-new"))
+    runtime = registry.get_runtime("runtime_qwen")
+    assert runtime.agent_id == AgentId("agent_executor") and runtime.model_provider == "vllm" and runtime.model_name == "qwen-new"
+    assert registry.list_runtimes("agent_executor") == (runtime,)
+    with pytest.raises(ValueError, match="owner cannot"):
+        registry.update_runtime(AgentRuntime(runtime_id=AgentRuntimeId("runtime_qwen"), agent_id=AgentId("agent_other"), adapter_kind=AgentAdapterKind.HTTP, runtime_name="invalid"))
+
+
 def test_discovery_descriptor_does_not_persist_or_enable_agent(database: tuple[Path, sessionmaker[Session]]) -> None:
     _, sessions = database
     registry = AgentRegistryService(sessions)
