@@ -25,7 +25,14 @@ class WorkspaceTransport(Protocol):
     kind: WorkspaceTransportKind
 
     def snapshot(self, grant: WorkspaceGrant, source_root: Path) -> WorkspaceSnapshot: ...
-    def provision(self, grant: WorkspaceGrant, source_root: Path, snapshot: WorkspaceSnapshot) -> ProvisionedWorkspace: ...
+    def plan(self, grant: WorkspaceGrant, source_root: Path, snapshot: WorkspaceSnapshot) -> ProvisionedWorkspace: ...
+    def provision(
+        self,
+        grant: WorkspaceGrant,
+        source_root: Path,
+        snapshot: WorkspaceSnapshot,
+        planned: ProvisionedWorkspace,
+    ) -> ProvisionedWorkspace: ...
     def reconcile(
         self,
         grant: WorkspaceGrant,
@@ -77,19 +84,12 @@ class GitWorktreeTransport:
             source_revision=revision,
         )
 
-    def provision(self, grant: WorkspaceGrant, source_root: Path, snapshot: WorkspaceSnapshot) -> ProvisionedWorkspace:
+    def plan(
+        self, grant: WorkspaceGrant, source_root: Path, snapshot: WorkspaceSnapshot
+    ) -> ProvisionedWorkspace:
         if snapshot.source_revision is None:
             raise WorkspaceAdmissionError("Git workspace snapshot requires a source revision")
         target = _safe_target(self.transport_root, grant.workspace_grant_id)
-        if target.exists():
-            raise WorkspaceAdmissionError("Git transport target already exists")
-        _git(source_root, "worktree", "add", "--detach", str(target), snapshot.source_revision)
-        patterns = list(grant.allowed_paths or (".",))
-        patterns.extend(f"!{item}" for item in grant.excluded_paths)
-        if patterns != ["."]:
-            _git(target, "sparse-checkout", "set", "--no-cone", "--", *patterns)
-        if grant.access_mode is WorkspaceAccessMode.READ_ONLY:
-            self._set_read_only(target, read_only=True)
         return ProvisionedWorkspace(
             transport_handle={
                 "source_root": str(source_root.resolve()),
@@ -98,6 +98,28 @@ class GitWorktreeTransport:
             },
             remote_workspace_handle=str(target),
         )
+
+    def provision(
+        self,
+        grant: WorkspaceGrant,
+        source_root: Path,
+        snapshot: WorkspaceSnapshot,
+        planned: ProvisionedWorkspace,
+    ) -> ProvisionedWorkspace:
+        expected = self.plan(grant, source_root, snapshot)
+        if planned != expected:
+            raise WorkspaceAdmissionError("Git transport plan changed before provisioning")
+        target = Path(planned.transport_handle["worktree_root"])
+        if target.exists():
+            raise WorkspaceAdmissionError("Git transport target already exists")
+        _git(source_root, "worktree", "add", "--detach", str(target), planned.transport_handle["base_revision"])
+        patterns = list(grant.allowed_paths or (".",))
+        patterns.extend(f"!{item}" for item in grant.excluded_paths)
+        if patterns != ["."]:
+            _git(target, "sparse-checkout", "set", "--no-cone", "--", *patterns)
+        if grant.access_mode is WorkspaceAccessMode.READ_ONLY:
+            self._set_read_only(target, read_only=True)
+        return planned
 
     def reconcile(
         self,
@@ -172,7 +194,10 @@ class GitWorktreeTransport:
         source = Path(provisioned.transport_handle["source_root"])
         if grant.access_mode is WorkspaceAccessMode.READ_ONLY and target.exists():
             self._set_read_only(target, read_only=False)
-        _git(source, "worktree", "remove", "--force", str(target))
+        if target.exists():
+            _git(source, "worktree", "remove", "--force", str(target))
+        else:
+            _git(source, "worktree", "prune")
 
     @staticmethod
     def _set_read_only(root: Path, *, read_only: bool) -> None:
@@ -199,8 +224,27 @@ class ArchiveWorkspaceTransport:
             source_revision=grant.source_revision,
         )
 
-    def provision(self, grant: WorkspaceGrant, source_root: Path, snapshot: WorkspaceSnapshot) -> ProvisionedWorkspace:
+    def plan(
+        self, grant: WorkspaceGrant, source_root: Path, snapshot: WorkspaceSnapshot
+    ) -> ProvisionedWorkspace:
+        del source_root, snapshot
         target = _safe_target(self.transport_root, grant.workspace_grant_id, ".tar")
+        return ProvisionedWorkspace(
+            transport_handle={"archive_path": str(target)},
+            remote_workspace_handle=str(target),
+        )
+
+    def provision(
+        self,
+        grant: WorkspaceGrant,
+        source_root: Path,
+        snapshot: WorkspaceSnapshot,
+        planned: ProvisionedWorkspace,
+    ) -> ProvisionedWorkspace:
+        expected = self.plan(grant, source_root, snapshot)
+        if planned != expected:
+            raise WorkspaceAdmissionError("Archive transport plan changed before provisioning")
+        target = Path(planned.transport_handle["archive_path"])
         if target.exists():
             raise WorkspaceAdmissionError("Archive transport target already exists")
         payload = self._create_archive(source_root.resolve(), snapshot)
@@ -209,10 +253,7 @@ class ArchiveWorkspaceTransport:
             stream.write(payload)
             stream.flush()
             os.fsync(stream.fileno())
-        return ProvisionedWorkspace(
-            transport_handle={"archive_path": str(target)},
-            remote_workspace_handle=str(target),
-        )
+        return planned
 
     def reconcile(
         self,
@@ -224,7 +265,10 @@ class ArchiveWorkspaceTransport:
         del provisioned
         if remote_result is None:
             raise WorkspaceAdmissionError("Archive reconciliation requires a returned archive")
-        payload = remote_result.read_bytes()
+        try:
+            payload = remote_result.read_bytes()
+        except OSError as error:
+            raise WorkspaceAdmissionError("returned archive is unavailable") from error
         result_snapshot = self._inspect_archive(payload, grant)
         return ReconciliationPayload(
             payload=payload,
@@ -255,29 +299,32 @@ class ArchiveWorkspaceTransport:
     def _inspect_archive(payload: bytes, grant: WorkspaceGrant) -> WorkspaceSnapshot:
         files: list[WorkspaceFile] = []
         total = 0
-        with tarfile.open(fileobj=io.BytesIO(payload), mode="r:") as archive:
-            for member in sorted(archive.getmembers(), key=lambda item: item.name):
-                path = member.name.replace("\\", "/")
-                if path.startswith("/") or ".." in Path(path).parts:
-                    raise WorkspaceAdmissionError("returned archive contains a path traversal")
-                if not member.isfile():
-                    raise WorkspaceAdmissionError("returned archive may contain only regular files")
-                if not selected(path, grant.allowed_paths, grant.excluded_paths):
-                    raise WorkspaceAdmissionError("returned archive contains a path outside the grant")
-                if member.size > grant.limits.max_single_file_bytes:
-                    raise WorkspaceAdmissionError("returned archive file exceeds the single-file limit")
-                total += member.size
-                if total > grant.limits.max_total_bytes:
-                    raise WorkspaceAdmissionError("returned archive exceeds the total-byte limit")
-                if len(files) + 1 > grant.limits.max_file_count:
-                    raise WorkspaceAdmissionError("returned archive exceeds the file-count limit")
-                stream = archive.extractfile(member)
-                if stream is None:
-                    raise WorkspaceAdmissionError("returned archive member could not be read")
-                data = stream.read()
-                if len(data) != member.size:
-                    raise WorkspaceAdmissionError("returned archive member size changed while reading")
-                files.append(WorkspaceFile(path=path, size=len(data), sha256=hashlib.sha256(data).hexdigest()))
+        try:
+            with tarfile.open(fileobj=io.BytesIO(payload), mode="r:") as archive:
+                for member in sorted(archive.getmembers(), key=lambda item: item.name):
+                    path = member.name.replace("\\", "/")
+                    if path.startswith("/") or ".." in Path(path).parts:
+                        raise WorkspaceAdmissionError("returned archive contains a path traversal")
+                    if not member.isfile():
+                        raise WorkspaceAdmissionError("returned archive may contain only regular files")
+                    if not selected(path, grant.allowed_paths, grant.excluded_paths):
+                        raise WorkspaceAdmissionError("returned archive contains a path outside the grant")
+                    if member.size > grant.limits.max_single_file_bytes:
+                        raise WorkspaceAdmissionError("returned archive file exceeds the single-file limit")
+                    total += member.size
+                    if total > grant.limits.max_total_bytes:
+                        raise WorkspaceAdmissionError("returned archive exceeds the total-byte limit")
+                    if len(files) + 1 > grant.limits.max_file_count:
+                        raise WorkspaceAdmissionError("returned archive exceeds the file-count limit")
+                    stream = archive.extractfile(member)
+                    if stream is None:
+                        raise WorkspaceAdmissionError("returned archive member could not be read")
+                    data = stream.read()
+                    if len(data) != member.size:
+                        raise WorkspaceAdmissionError("returned archive member size changed while reading")
+                    files.append(WorkspaceFile(path=path, size=len(data), sha256=hashlib.sha256(data).hexdigest()))
+        except tarfile.TarError as error:
+            raise WorkspaceAdmissionError("returned archive is corrupt") from error
         import json
 
         canonical = json.dumps(

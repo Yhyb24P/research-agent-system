@@ -127,6 +127,10 @@ uv run pytest -q \
 集成测试是当前可执行 reference workflow。仓库目前是 library/模块化单体基线，尚未
 提供生产 daemon 或浏览器应用的一键启动入口。
 
+嵌入式控制器启动时必须先注册 workspace transport，并在接收新任务前调用
+`WorkspaceDelegationService.recover_incomplete()`。系统会使用外部副作用发生前已持久化
+的 transport handle，关闭中断的 provisioning/reconciliation 窗口并记录清理结果。
+
 ## 查看控制面
 
 `researchctl` 会打开已有数据库，但不会构造 Orchestrator：
