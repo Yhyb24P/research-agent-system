@@ -5,6 +5,7 @@ from pydantic import Field, field_validator, model_validator
 
 from researchd.domain.base import DomainModel
 from researchd.domain.enums import Capability, NetworkMode
+from researchd.workspace.contracts import WorkspaceGrantBinding
 
 
 class CommandLimits(DomainModel):
@@ -75,6 +76,7 @@ class GrantedWorkOrder(DomainModel):
     objective: str
     granted_capabilities: frozenset[Capability]
     sandbox: SandboxSpec
+    workspace_grant: WorkspaceGrantBinding | None = None
     max_agent_steps: int = Field(default=16, gt=0, le=100)
 
 

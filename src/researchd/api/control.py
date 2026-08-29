@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from researchd.domain.enums import AttemptState, WorkOrderState
 from researchd.orchestrator.engine import ResearchOrchestrator
-from researchd.storage.models import AgentRecord, AgentRuntimeRecord, ArtifactRecord, ApprovalRequestRecord, AuditEventRecord, ClaimRecord, CollaborationMessageRecord, DelegationRecord, AgentInvocationRecord, AttemptRecord, ObservationRecord, PlanRecord, ResearchRunRecord, ReviewDecisionRecord, VerificationResultRecord, WorkOrderRecord
+from researchd.storage.models import AgentRecord, AgentRuntimeRecord, ArtifactRecord, ApprovalRequestRecord, AuditEventRecord, ClaimRecord, CollaborationMessageRecord, DelegationRecord, AgentInvocationRecord, AttemptRecord, ObservationRecord, PlanRecord, ResearchRunRecord, ReviewDecisionRecord, VerificationResultRecord, WorkOrderRecord, WorkspaceGrantRecord, WorkspaceReconciliationRecord, WorkspaceTransportRecord
 
 
 class LocalControlAPI:
@@ -120,6 +120,42 @@ class LocalControlAPI:
                 query = query.where(ApprovalRequestRecord.run_id == run_id)
             return [{"approval_id": row.approval_id, "run_id": row.run_id, "work_order_id": row.work_order_id, "status": row.status, "requester_actor_type": row.requester_actor_type, "requester_actor_id": row.requester_actor_id, "operation_type": row.operation_type, "created_at": row.created_at.isoformat()} for row in session.scalars(query).all()]
 
+    def workspace_grants(self, run_id: str | None = None) -> list[dict[str, Any]]:
+        with self.sessions() as session:
+            query = select(WorkspaceGrantRecord).join(DelegationRecord).order_by(
+                WorkspaceGrantRecord.created_at, WorkspaceGrantRecord.workspace_grant_id
+            )
+            if run_id is not None:
+                query = query.where(DelegationRecord.run_id == run_id)
+            rows = session.scalars(query).all()
+            payload: list[dict[str, Any]] = []
+            for row in rows:
+                transport = session.scalar(select(WorkspaceTransportRecord).where(
+                    WorkspaceTransportRecord.workspace_grant_id == row.workspace_grant_id
+                ).order_by(WorkspaceTransportRecord.created_at.desc()).limit(1))
+                reconciliation = session.scalar(select(WorkspaceReconciliationRecord).where(
+                    WorkspaceReconciliationRecord.workspace_grant_id == row.workspace_grant_id
+                ).order_by(WorkspaceReconciliationRecord.created_at.desc()).limit(1))
+                payload.append({
+                    "workspace_grant_id": row.workspace_grant_id,
+                    "delegation_id": row.delegation_id,
+                    "source_workspace_id": row.source_workspace_id,
+                    "source_revision": row.source_revision,
+                    "source_manifest_sha256": row.source_manifest_sha256,
+                    "access_mode": row.access_mode,
+                    "allowed_paths": row.allowed_paths,
+                    "excluded_paths": row.excluded_paths,
+                    "classification_ceiling": row.classification_ceiling,
+                    "transport_kind": row.transport_kind,
+                    "remote_workspace_handle": transport.remote_workspace_handle if transport else None,
+                    "lease_expires_at": row.lease_expires_at.isoformat() if row.lease_expires_at else None,
+                    "state": row.state,
+                    "cleanup_state": row.cleanup_state,
+                    "result_artifact_id": reconciliation.result_artifact_id if reconciliation else None,
+                    "created_at": row.created_at.isoformat(),
+                })
+            return payload
+
     def artifacts(self, run_id: str) -> list[dict[str, Any]]:
         with self.sessions() as session:
             rows = session.execute(select(ArtifactRecord).join(AttemptRecord, AttemptRecord.attempt_id == ArtifactRecord.attempt_id).join(WorkOrderRecord, WorkOrderRecord.work_order_id == AttemptRecord.work_order_id).where(WorkOrderRecord.run_id == run_id).order_by(ArtifactRecord.created_at, ArtifactRecord.artifact_id)).scalars().all()
@@ -133,6 +169,8 @@ class LocalControlAPI:
             items.append({"kind": "approval", "entity_id": approval["approval_id"], "timestamp": approval["created_at"], **approval})
         for artifact in self.artifacts(run_id):
             items.append({"kind": "artifact", "entity_id": artifact["artifact_id"], "timestamp": artifact["created_at"], **artifact})
+        for grant in self.workspace_grants(run_id):
+            items.append({"kind": "workspace_grant", "entity_id": grant["workspace_grant_id"], "timestamp": grant["created_at"], **grant})
         with self.sessions() as session:
             run = session.get(ResearchRunRecord, run_id)
             if run is None:
@@ -150,7 +188,7 @@ class LocalControlAPI:
             items.extend({"kind": "plan", "entity_id": item.plan_id, "timestamp": item.created_at.isoformat(), "plan_id": item.plan_id, "run_id": item.run_id} for item in plans)
             items.extend({"kind": "work_order", "entity_id": item.work_order_id, "timestamp": item.created_at.isoformat(), "work_order_id": item.work_order_id, "state": item.state, "objective": item.objective} for item in orders)
             items.extend({"kind": "attempt", "entity_id": item.attempt_id, "timestamp": item.created_at.isoformat(), "attempt_id": item.attempt_id, "work_order_id": item.work_order_id, "delegation_id": item.delegation_id, "state": item.state} for item in attempts)
-            items.extend({"kind": "invocation", "entity_id": item.invocation_id, "timestamp": item.created_at.isoformat(), "invocation_id": item.invocation_id, "delegation_id": item.delegation_id, "purpose": item.purpose, "agent_id": item.agent_id, "runtime_id": item.runtime_id, "status": item.status} for item in invocations)
+            items.extend({"kind": "invocation", "entity_id": item.invocation_id, "timestamp": item.created_at.isoformat(), "invocation_id": item.invocation_id, "delegation_id": item.delegation_id, "workspace_grant_id": item.workspace_grant_id, "purpose": item.purpose, "agent_id": item.agent_id, "runtime_id": item.runtime_id, "status": item.status} for item in invocations)
             items.extend({"kind": "observation", "entity_id": item.observation_id, "timestamp": item.created_at.isoformat(), "attempt_id": item.attempt_id, "name": item.name, "producer_type": item.producer_type, "producer_id": item.producer_id, "classification": item.classification} for item in observations)
             items.extend({"kind": "claim", "entity_id": item.claim_id, "timestamp": item.created_at.isoformat(), "attempt_id": item.attempt_id, "producer_type": item.producer_type, "producer_id": item.producer_id} for item in claims)
             items.extend({"kind": "verification", "entity_id": item.verification_id, "timestamp": item.created_at.isoformat(), "attempt_id": item.attempt_id, "work_order_id": item.work_order_id, "overall": item.overall, "verifier_version": item.verifier_version, "valid": item.valid} for item in verifications)

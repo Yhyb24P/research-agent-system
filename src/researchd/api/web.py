@@ -25,6 +25,8 @@ class ControlResourceRouter:
                 return 200, self.api.delegations(query.get("run", [None])[0])
             if parts == ["api", "approvals"]:
                 return 200, self.api.approvals(query.get("run", [None])[0])
+            if parts == ["api", "workspace-grants"]:
+                return 200, self.api.workspace_grants(query.get("run", [None])[0])
             if parts == ["api", "artifacts"] and query.get("run", [None])[0]:
                 return 200, self.api.artifacts(query["run"][0])
             if len(parts) == 3 and parts[:2] == ["api", "timeline"]:

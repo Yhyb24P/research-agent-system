@@ -160,6 +160,78 @@ class DelegationRecord(Base, VersionedTimestamps):
     completed_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
 
 
+class WorkspaceGrantRecord(Base, VersionedTimestamps):
+    __tablename__ = "workspace_grants"
+    __table_args__ = (
+        Index("ix_workspace_grants_state_lease", "state", "lease_expires_at"),
+        CheckConstraint("max_total_bytes > 0", name="ck_workspace_grants_total_bytes"),
+        CheckConstraint("max_file_count > 0", name="ck_workspace_grants_file_count"),
+        CheckConstraint("max_single_file_bytes > 0", name="ck_workspace_grants_single_file"),
+        CheckConstraint("lease_seconds > 0 AND lease_seconds <= 86400", name="ck_workspace_grants_lease_seconds"),
+    )
+    workspace_grant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    delegation_id: Mapped[str] = mapped_column(ForeignKey("delegations.delegation_id"), nullable=False, unique=True)
+    source_workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.workspace_id"), nullable=False)
+    source_revision: Mapped[str | None] = mapped_column(String(256))
+    source_manifest_sha256: Mapped[str | None] = mapped_column(String(64))
+    access_mode: Mapped[str] = mapped_column(String(32), nullable=False)
+    allowed_paths: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    excluded_paths: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    classification_ceiling: Mapped[str] = mapped_column(String(32), nullable=False)
+    max_total_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    max_file_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    max_single_file_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    lease_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
+    lease_started_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    lease_expires_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    renewal_policy: Mapped[str] = mapped_column(String(32), nullable=False)
+    transport_kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    reconciliation_mode: Mapped[str] = mapped_column(String(32), nullable=False)
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    cleanup_state: Mapped[str] = mapped_column(String(32), nullable=False)
+
+
+class WorkspaceSnapshotRecord(Base):
+    __tablename__ = "workspace_snapshots"
+    __table_args__ = (Index("ix_workspace_snapshots_grant", "workspace_grant_id", "created_at"),)
+    workspace_snapshot_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    workspace_grant_id: Mapped[str] = mapped_column(ForeignKey("workspace_grants.workspace_grant_id"), nullable=False)
+    source_revision: Mapped[str | None] = mapped_column(String(256))
+    manifest_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    manifest: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False)
+    total_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    file_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+
+
+class WorkspaceTransportRecord(Base):
+    __tablename__ = "workspace_transports"
+    __table_args__ = (Index("ix_workspace_transports_grant", "workspace_grant_id", "created_at"),)
+    workspace_transport_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    workspace_grant_id: Mapped[str] = mapped_column(ForeignKey("workspace_grants.workspace_grant_id"), nullable=False)
+    transport_kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    transport_handle: Mapped[dict[str, str]] = mapped_column(JSON, nullable=False)
+    remote_workspace_handle: Mapped[str] = mapped_column(String(1024), nullable=False)
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    closed_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+
+
+class WorkspaceReconciliationRecord(Base):
+    __tablename__ = "workspace_reconciliations"
+    __table_args__ = (Index("ix_workspace_reconciliations_grant", "workspace_grant_id", "created_at"),)
+    workspace_reconciliation_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    workspace_grant_id: Mapped[str] = mapped_column(ForeignKey("workspace_grants.workspace_grant_id"), nullable=False)
+    workspace_transport_id: Mapped[str] = mapped_column(ForeignKey("workspace_transports.workspace_transport_id"), nullable=False)
+    base_manifest_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    result_manifest_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    result_artifact_id: Mapped[str] = mapped_column(ForeignKey("artifacts.artifact_id"), nullable=False)
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+
+
 class AgentInvocationRecord(Base):
     __tablename__ = "agent_invocations"
     __table_args__ = (Index("ix_agent_invocations_delegation", "delegation_id"), Index("ix_agent_invocations_status", "status"))
@@ -168,6 +240,7 @@ class AgentInvocationRecord(Base):
     run_id: Mapped[str] = mapped_column(ForeignKey("research_runs.run_id"), nullable=False)
     work_order_id: Mapped[str | None] = mapped_column(ForeignKey("work_orders.work_order_id"))
     attempt_id: Mapped[str | None] = mapped_column(ForeignKey("attempts.attempt_id"))
+    workspace_grant_id: Mapped[str | None] = mapped_column(ForeignKey("workspace_grants.workspace_grant_id"))
     agent_id: Mapped[str] = mapped_column(ForeignKey("agents.agent_id"), nullable=False)
     runtime_id: Mapped[str] = mapped_column(ForeignKey("agent_runtimes.runtime_id"), nullable=False)
     purpose: Mapped[str] = mapped_column(String(32), nullable=False)

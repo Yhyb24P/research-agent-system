@@ -93,6 +93,7 @@ class AgentInvocationRequest(DomainModel):
     run_id: str
     work_order_id: str | None = None
     attempt_id: str | None = None
+    workspace_grant_id: str | None = None
     agent_id: AgentId
     runtime_id: AgentRuntimeId
     purpose: DelegationPurpose

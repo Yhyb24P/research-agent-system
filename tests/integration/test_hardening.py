@@ -99,7 +99,7 @@ def test_sqlite_and_artifact_backup_restore_validates_checksums(tmp_path: Path) 
     restored_artifacts = tmp_path / "restored-artifacts"
     assert restore_snapshot(backup_dir, restored_db, restored_artifacts) == manifest
     health = check_restored_snapshot(restored_db, restored_artifacts)
-    assert health.healthy and health.schema_revision == "0014" and health.artifacts_verified == 1
+    assert health.healthy and health.schema_revision == "0015" and health.artifacts_verified == 1
     with pytest.raises(BackupError, match="already exist"):
         restore_snapshot(backup_dir, restored_db, tmp_path / "other-artifacts")
     assert restored_db.is_file() and restored_artifacts.is_dir()
@@ -150,7 +150,7 @@ def test_legacy_backup_restore_then_upgrade_to_head(tmp_path: Path) -> None:
     restored_config.set_main_option("sqlalchemy.url", f"sqlite:///{restored_db}")
     command.upgrade(restored_config, "head")
     with sqlite3.connect(restored_db) as connection:
-            assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == ("0014",)
+            assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == ("0015",)
     assert check_restored_snapshot(restored_db, restored_artifacts).healthy
 
 

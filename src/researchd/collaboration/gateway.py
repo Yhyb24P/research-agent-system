@@ -1,5 +1,6 @@
 """Gateway routing orchestration through adapters and recording collaboration facts."""
 import hashlib
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 from uuid import uuid4
@@ -20,7 +21,14 @@ from researchd.context.agent_context import AgentContextBuilder, AgentContextBun
 from researchd.collaboration.adapters import CloudLeadAgentAdapter, LocalExecutorAgentAdapter
 from researchd.executor.contracts import ExecutorResult, GrantedWorkOrder, SandboxSpec
 from researchd.storage.models import AttemptRecord, WorkOrderRecord
-from researchd.storage.models import DelegationRecord, AgentInvocationRecord, AgentRecord
+from researchd.storage.models import (
+    AgentInvocationRecord,
+    AgentRecord,
+    DelegationRecord,
+    WorkspaceGrantRecord,
+    WorkspaceTransportRecord,
+)
+from researchd.workspace.contracts import WorkspaceAccessMode, WorkspaceGrantBinding, WorkspaceTransportKind
 from sqlalchemy import select
 
 
@@ -54,6 +62,7 @@ class CollaborationGateway:
         return AgentInvocationRequest(
             invocation_id=InvocationId(row.invocation_id), delegation_id=DelegationId(row.delegation_id),
             run_id=row.run_id, work_order_id=row.work_order_id, attempt_id=row.attempt_id,
+            workspace_grant_id=row.workspace_grant_id,
             agent_id=AgentId(row.agent_id), runtime_id=AgentRuntimeId(row.runtime_id),
             purpose=DelegationPurpose(row.purpose), input_sha256=row.input_sha256,
             endpoint_ref=runtime.endpoint_ref,
@@ -73,8 +82,7 @@ class CollaborationGateway:
             cost=CloudCostMetadata(attempts=1, prompt_tokens=0, completion_tokens=0, total_tokens=0, cost_usd=Decimal("0")),
         )
 
-    @staticmethod
-    def _typed_execute_input(work_order: WorkOrderRecord, attempt_id: str) -> ExecuteInvocationInput:
+    def _typed_execute_input(self, work_order: WorkOrderRecord, attempt_id: str) -> ExecuteInvocationInput:
         """Build a host-path-free execution contract from the trusted WorkOrder."""
         contract = work_order.contract
         constraints = contract.get("constraints", {})
@@ -85,7 +93,44 @@ class CollaborationGateway:
             objective=work_order.objective,
             granted_capabilities=requested,
             sandbox=SandboxSpec(attempt_id=attempt_id, workspace="/workspace", network=network),
+            workspace_grant=self._workspace_binding(attempt_id),
         ))
+
+    def _workspace_binding(self, attempt_id: str) -> WorkspaceGrantBinding | None:
+        if self.invocations is None:
+            return None
+        with self.invocations.sessions() as session:
+            attempt = session.get(AttemptRecord, attempt_id)
+            if attempt is None or attempt.delegation_id is None:
+                return None
+            grant = session.scalar(select(WorkspaceGrantRecord).where(
+                WorkspaceGrantRecord.delegation_id == attempt.delegation_id
+            ))
+            if grant is None:
+                return None
+            if (
+                grant.state != "ACTIVE"
+                or grant.lease_expires_at is None
+                or grant.lease_expires_at <= datetime.now(UTC)
+                or grant.source_manifest_sha256 is None
+            ):
+                raise ValueError("execution workspace grant is not active and valid")
+            transport = session.scalar(select(WorkspaceTransportRecord).where(
+                WorkspaceTransportRecord.workspace_grant_id == grant.workspace_grant_id,
+                WorkspaceTransportRecord.state == "ACTIVE",
+            ).order_by(WorkspaceTransportRecord.created_at.desc()).limit(1))
+            if transport is None:
+                raise ValueError("execution workspace transport is missing")
+            return WorkspaceGrantBinding(
+                workspace_grant_id=grant.workspace_grant_id,
+                transport_kind=WorkspaceTransportKind(grant.transport_kind),
+                remote_workspace_handle=transport.remote_workspace_handle,
+                access_mode=WorkspaceAccessMode(grant.access_mode),
+                allowed_paths=tuple(grant.allowed_paths),
+                excluded_paths=tuple(grant.excluded_paths),
+                source_manifest_sha256=grant.source_manifest_sha256,
+                lease_expires_at=grant.lease_expires_at,
+            )
 
     @property
     def tracking_enabled(self) -> bool:
@@ -136,7 +181,13 @@ class CollaborationGateway:
                 target_trust_zone=AgentTrustZone(agent_row.trust_zone), purpose=purpose,
                 run_id=run_id, work_order_id=work_order_id,
             ))
-        self.invocations.start(AgentInvocationRequest(invocation_id=invocation_id, delegation_id=delegation_id, run_id=run_id, work_order_id=work_order_id, attempt_id=attempt_id, agent_id=agent_id, runtime_id=runtime_id, purpose=purpose, input_sha256=hashlib.sha256(f"{run_id}:{purpose.value}:{work_order_id}:{attempt_id}".encode()).hexdigest(), endpoint_ref=endpoint_ref, context_bundle=context_bundle, typed_input=typed_input))
+        workspace_grant_id = (
+            typed_input.work_order.workspace_grant.workspace_grant_id
+            if isinstance(typed_input, ExecuteInvocationInput)
+            and typed_input.work_order.workspace_grant is not None
+            else None
+        )
+        self.invocations.start(AgentInvocationRequest(invocation_id=invocation_id, delegation_id=delegation_id, run_id=run_id, work_order_id=work_order_id, attempt_id=attempt_id, workspace_grant_id=workspace_grant_id, agent_id=agent_id, runtime_id=runtime_id, purpose=purpose, input_sha256=hashlib.sha256(f"{run_id}:{purpose.value}:{work_order_id}:{attempt_id}".encode()).hexdigest(), endpoint_ref=endpoint_ref, context_bundle=context_bundle, typed_input=typed_input))
         if context_bundle is not None:
             self._context_bundles[str(invocation_id)] = context_bundle
         return delegation_id, invocation_id
