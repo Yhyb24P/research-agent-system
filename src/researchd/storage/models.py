@@ -187,11 +187,13 @@ class CollaborationMessageRecord(Base):
     __table_args__ = (Index("ix_collaboration_messages_run_created", "run_id", "created_at"),)
     message_id: Mapped[str] = mapped_column(String(128), primary_key=True)
     run_id: Mapped[str] = mapped_column(ForeignKey("research_runs.run_id"), nullable=False)
+    work_order_id: Mapped[str | None] = mapped_column(ForeignKey("work_orders.work_order_id"))
     sender_actor_type: Mapped[str] = mapped_column(String(32), nullable=False)
     sender_actor_id: Mapped[str] = mapped_column(String(128), nullable=False)
     recipient_agent_id: Mapped[str | None] = mapped_column(ForeignKey("agents.agent_id"))
     purpose: Mapped[str] = mapped_column(String(64), nullable=False)
     body: Mapped[str] = mapped_column(Text, nullable=False)
+    classification: Mapped[str] = mapped_column(String(32), nullable=False, default="PROJECT_PRIVATE")
     metadata_json: Mapped[dict[str, str]] = mapped_column("metadata", JSON, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
 

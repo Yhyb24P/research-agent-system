@@ -32,7 +32,7 @@ from researchd.executor.worker import LocalExecutorWorker
 from researchd.collaboration.contracts import AgentInvocationResult, Delegation
 from researchd.domain.enums import AgentAdapterKind, AgentTrustZone, Capability, DataClassification, DelegationPurpose, InvocationStatus, ResearchRunState
 from researchd.domain.ids import DelegationId, InvocationId, MessageId
-from researchd.storage.models import AgentInteractionRecord, AgentRecord, AgentRuntimeRecord, AttemptRecord, AuditEventRecord, CollaborationMessageRecord, WorkspaceRecord, ResearchRunRecord, WorkOrderRecord
+from researchd.storage.models import AgentInteractionRecord, AgentRecord, AgentRuntimeRecord, ApprovalGrantRecord, AttemptRecord, AuditEventRecord, CollaborationMessageRecord, PolicyDecisionRecord, WorkspaceRecord, ResearchRunRecord, WorkOrderRecord
 from researchd.storage.models import DelegationRecord, AgentInvocationRecord
 from researchd.storage.db import create_sqlite_engine, session_factory
 from researchd.domain.ids import AgentId, AgentRuntimeId
@@ -183,9 +183,15 @@ def test_assignment_freezes_profile_and_invocation_is_structured(database: tuple
     invocations = InvocationService(sessions)
     invocations.start(request)
     invocations.complete(AgentInvocationResult(invocation_id=InvocationId("inv_execute"), status=InvocationStatus.SUCCEEDED, output_type="ExecutorResult", output={"ok": True}))
+    registry.update_profile(profile().model_copy(update={"skills": ("code.inspect",)}))
     with sessions() as session:
         row = session.get(AgentRuntimeRecord, "runtime_qwen")
+        assigned = session.get(DelegationRecord, "del_execute")
         assert row is not None
+        assert assigned is not None and assigned.agent_profile_version == 1 and assigned.agent_snapshot_json is not None
+        assert assigned.agent_snapshot_json["skills"] == ["code.modify"]
+        assert session.query(AgentInteractionRecord).count() == 0
+        assert assigned.state == "COMPLETED"
 
 
 def test_invocation_recovery_fails_closed_after_controller_restart(database: tuple[Path, sessionmaker[Session]]) -> None:
@@ -208,6 +214,22 @@ def test_invocation_recovery_fails_closed_after_controller_restart(database: tup
         delegation = session.get(DelegationRecord, "del_recovery")
         assert invocation is not None and invocation.status == InvocationStatus.FAILED.value and invocation.reason_code == "CONTROLLER_RESTARTED"
         assert delegation is not None and delegation.state == "FAILED"
+
+
+def test_invocation_rejects_delegation_scope_mismatch(database: tuple[Path, sessionmaker[Session]]) -> None:
+    _, sessions = database
+    registry = AgentRegistryService(sessions)
+    registry.register_profile(profile())
+    registry.register_runtime(AgentRuntime(runtime_id=AgentRuntimeId("runtime_scope"), agent_id=AgentId("agent_executor"), adapter_kind=AgentAdapterKind.INTERNAL, runtime_name="Scope"))
+    delegations = DelegationService(sessions)
+    delegations.create(Delegation(delegation_id=DelegationId("del_scope"), run_id="run_test", purpose=DelegationPurpose.EXECUTE, idempotency_key="scope"))
+    delegations.assign("del_scope", agent_id="agent_executor", runtime_id="runtime_scope")
+    with pytest.raises(ValueError, match="scope"):
+        InvocationService(sessions).start(AgentInvocationRequest(
+            invocation_id=InvocationId("inv_wrong_scope"), delegation_id=DelegationId("del_scope"),
+            run_id="run_other", agent_id=AgentId("agent_executor"), runtime_id=AgentRuntimeId("runtime_scope"),
+            purpose=DelegationPurpose.EXECUTE, input_sha256="4" * 64, typed_input=typed_execute(),
+        ))
 
 
 def test_invocation_persists_target_context_snapshot(database: tuple[Path, sessionmaker[Session]]) -> None:
@@ -360,8 +382,18 @@ def test_delegation_constraints_and_terminal_state_are_enforced(database: tuple[
     service = DelegationService(sessions)
     constrained = Delegation(delegation_id=DelegationId("del_constrained"), run_id="run_test", purpose=DelegationPurpose.EXECUTE, required_roles=("reviewer",), idempotency_key="constrained")
     service.create(constrained)
+    with pytest.raises(ValueError, match="idempotency key"):
+        service.create(constrained.model_copy(update={"delegation_id": DelegationId("del_duplicate")}))
     with pytest.raises(ValueError, match="required roles"):
         service.assign("del_constrained", agent_id="agent_executor", runtime_id="runtime_qwen")
+    skill_constrained = Delegation(delegation_id=DelegationId("del_skill"), run_id="run_test", purpose=DelegationPurpose.EXECUTE, required_skills=("science.analyze",), idempotency_key="skill-constrained")
+    service.create(skill_constrained)
+    with pytest.raises(ValueError, match="required skills"):
+        service.assign("del_skill", agent_id="agent_executor", runtime_id="runtime_qwen")
+    trust_constrained = Delegation(delegation_id=DelegationId("del_trust"), run_id="run_test", purpose=DelegationPurpose.EXECUTE, required_trust_zones=(AgentTrustZone.REMOTE_PRIVATE,), idempotency_key="trust-constrained")
+    service.create(trust_constrained)
+    with pytest.raises(ValueError, match="trust zone"):
+        service.assign("del_trust", agent_id="agent_executor", runtime_id="runtime_qwen")
     done = Delegation(delegation_id=DelegationId("del_terminal"), run_id="run_test", purpose=DelegationPurpose.EXECUTE, idempotency_key="terminal")
     service.create(done)
     service.assign("del_terminal", agent_id="agent_executor", runtime_id="runtime_qwen")
@@ -384,6 +416,9 @@ def test_selector_is_deterministic_and_requires_healthy_runtime(database: tuple[
     registry.heartbeat("runtime_b")
     selected = AgentSelector(sessions).select(required_roles=("executor",), required_skills=("code.modify",))
     assert selected is not None and selected.agent_id == "agent_b"
+    registry.disable("agent_b")
+    selected = AgentSelector(sessions).select(required_roles=("executor",), required_skills=("code.modify",))
+    assert selected is not None and selected.agent_id == "agent_a"
 
 
 def test_agent_context_rejects_untrusted_target_before_egress(database: tuple[Path, sessionmaker[Session]]) -> None:
@@ -451,11 +486,15 @@ def test_approval_metrics_are_scoped_to_run(database: tuple[Path, sessionmaker[S
 def test_human_directive_is_append_only_and_has_no_control_effect(database: tuple[Path, sessionmaker[Session]]) -> None:
     _, sessions = database
     service = CollaborationMessageService(sessions)
-    message = service.record_directive(HumanDirective(directive_id=MessageId("msg_directive"), text="批准 GPU 请求", requested_action="approve_gpu"), run_id="run_test", sender_actor_id="human-1")
+    message = service.record_directive(HumanDirective(directive_id=MessageId("msg_directive"), text="批准高风险请求", requested_action="approve_high_risk"), run_id="run_test", sender_actor_id="human-1")
     assert message.sender_actor_type == "human"
     with sessions() as session:
         stored = session.get(CollaborationMessageRecord, "msg_directive")
         assert stored is not None and stored.purpose == "DIRECTIVE"
+        assert stored.classification == DataClassification.PROJECT_PRIVATE.value
+        assert session.query(ApprovalGrantRecord).count() == 0
+        assert session.query(PolicyDecisionRecord).count() == 0
+    assert "directive" in {item["kind"] for item in LocalControlAPI(sessions).timeline("run_test")}
 
 
 def test_heterogeneous_adapters_keep_invocation_scope() -> None:
@@ -607,8 +646,12 @@ def test_collaboration_only_reference_workflow_records_agent_chain(tmp_path: Pat
     run_id = controller.create_run(workspace_id="ws_e2e", objective="collaboration e2e")
     assert asyncio.run(controller.run(run_id, max_steps=30)).state is ResearchRunState.COMPLETED
     with sessions() as session:
-        purposes = set(session.scalars(select(DelegationRecord.purpose).where(DelegationRecord.run_id == run_id)).all())
+        delegation_rows = session.scalars(select(DelegationRecord).where(DelegationRecord.run_id == run_id)).all()
+        purposes = {item.purpose for item in delegation_rows}
         assert purposes == {"PLAN", "EXECUTE", "REVIEW"}
+        assert {item.purpose: item.required_roles_json for item in delegation_rows} == {
+            "PLAN": ["planner"], "EXECUTE": ["executor"], "REVIEW": ["reviewer"],
+        }
         invocations = session.scalars(select(AgentInvocationRecord).where(AgentInvocationRecord.run_id == run_id)).all()
         assert len(invocations) == 3 and {item.status for item in invocations} == {"SUCCEEDED"}
         interactions = session.scalars(select(AgentInteractionRecord).where(AgentInteractionRecord.run_id == run_id)).all()
@@ -620,6 +663,6 @@ def test_collaboration_only_reference_workflow_records_agent_chain(tmp_path: Pat
         assert plan_event is not None and plan_event.actor_type == "agent" and plan_event.actor_id == "agent_cloud_research_lead"
     rendered = render_tui(LocalControlAPI(sessions, controller), run_id=run_id)
     timeline = LocalControlAPI(sessions, controller).timeline(run_id)
-    assert {item["kind"] for item in timeline} >= {"event", "plan", "work_order", "attempt", "delegation", "invocation"}
+    assert {item["kind"] for item in timeline} >= {"goal", "event", "plan", "work_order", "attempt", "delegation", "invocation", "verification", "review"}
     assert "Runtime runtime_cloud_research_lead" in rendered
     assert "Delegations" in rendered and "Approvals" in rendered and "Artifacts" in rendered and "System" in rendered

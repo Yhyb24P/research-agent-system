@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from researchd.domain.enums import AttemptState, WorkOrderState
 from researchd.orchestrator.engine import ResearchOrchestrator
-from researchd.storage.models import AgentRecord, AgentRuntimeRecord, ArtifactRecord, ApprovalRequestRecord, AuditEventRecord, DelegationRecord, AgentInvocationRecord, AttemptRecord, PlanRecord, ResearchRunRecord, WorkOrderRecord
+from researchd.storage.models import AgentRecord, AgentRuntimeRecord, ArtifactRecord, ApprovalRequestRecord, AuditEventRecord, ClaimRecord, CollaborationMessageRecord, DelegationRecord, AgentInvocationRecord, AttemptRecord, ObservationRecord, PlanRecord, ResearchRunRecord, ReviewDecisionRecord, VerificationResultRecord, WorkOrderRecord
 
 
 class LocalControlAPI:
@@ -134,14 +134,28 @@ class LocalControlAPI:
         for artifact in self.artifacts(run_id):
             items.append({"kind": "artifact", "entity_id": artifact["artifact_id"], "timestamp": artifact["created_at"], **artifact})
         with self.sessions() as session:
+            run = session.get(ResearchRunRecord, run_id)
+            if run is None:
+                raise LookupError(run_id)
             plans = session.scalars(select(PlanRecord).where(PlanRecord.run_id == run_id).order_by(PlanRecord.created_at, PlanRecord.plan_id)).all()
             orders = session.scalars(select(WorkOrderRecord).where(WorkOrderRecord.run_id == run_id).order_by(WorkOrderRecord.created_at, WorkOrderRecord.work_order_id)).all()
             attempts = session.scalars(select(AttemptRecord).join(WorkOrderRecord).where(WorkOrderRecord.run_id == run_id).order_by(AttemptRecord.created_at, AttemptRecord.attempt_id)).all()
             invocations = session.scalars(select(AgentInvocationRecord).where(AgentInvocationRecord.run_id == run_id).order_by(AgentInvocationRecord.created_at, AgentInvocationRecord.invocation_id)).all()
+            observations = session.scalars(select(ObservationRecord).join(AttemptRecord).join(WorkOrderRecord).where(WorkOrderRecord.run_id == run_id).order_by(ObservationRecord.created_at, ObservationRecord.observation_id)).all()
+            claims = session.scalars(select(ClaimRecord).join(AttemptRecord).join(WorkOrderRecord).where(WorkOrderRecord.run_id == run_id).order_by(ClaimRecord.created_at, ClaimRecord.claim_id)).all()
+            verifications = session.scalars(select(VerificationResultRecord).join(WorkOrderRecord).where(WorkOrderRecord.run_id == run_id).order_by(VerificationResultRecord.created_at, VerificationResultRecord.verification_id)).all()
+            reviews = session.scalars(select(ReviewDecisionRecord).where(ReviewDecisionRecord.run_id == run_id).order_by(ReviewDecisionRecord.created_at, ReviewDecisionRecord.review_id)).all()
+            messages = session.scalars(select(CollaborationMessageRecord).where(CollaborationMessageRecord.run_id == run_id).order_by(CollaborationMessageRecord.created_at, CollaborationMessageRecord.message_id)).all()
+            items.append({"kind": "goal", "entity_id": run.run_id, "timestamp": run.created_at.isoformat(), "run_id": run.run_id, "objective": run.objective})
             items.extend({"kind": "plan", "entity_id": item.plan_id, "timestamp": item.created_at.isoformat(), "plan_id": item.plan_id, "run_id": item.run_id} for item in plans)
             items.extend({"kind": "work_order", "entity_id": item.work_order_id, "timestamp": item.created_at.isoformat(), "work_order_id": item.work_order_id, "state": item.state, "objective": item.objective} for item in orders)
             items.extend({"kind": "attempt", "entity_id": item.attempt_id, "timestamp": item.created_at.isoformat(), "attempt_id": item.attempt_id, "work_order_id": item.work_order_id, "delegation_id": item.delegation_id, "state": item.state} for item in attempts)
             items.extend({"kind": "invocation", "entity_id": item.invocation_id, "timestamp": item.created_at.isoformat(), "invocation_id": item.invocation_id, "delegation_id": item.delegation_id, "purpose": item.purpose, "agent_id": item.agent_id, "runtime_id": item.runtime_id, "status": item.status} for item in invocations)
+            items.extend({"kind": "observation", "entity_id": item.observation_id, "timestamp": item.created_at.isoformat(), "attempt_id": item.attempt_id, "name": item.name, "producer_type": item.producer_type, "producer_id": item.producer_id, "classification": item.classification} for item in observations)
+            items.extend({"kind": "claim", "entity_id": item.claim_id, "timestamp": item.created_at.isoformat(), "attempt_id": item.attempt_id, "producer_type": item.producer_type, "producer_id": item.producer_id} for item in claims)
+            items.extend({"kind": "verification", "entity_id": item.verification_id, "timestamp": item.created_at.isoformat(), "attempt_id": item.attempt_id, "work_order_id": item.work_order_id, "overall": item.overall, "verifier_version": item.verifier_version, "valid": item.valid} for item in verifications)
+            items.extend({"kind": "review", "entity_id": item.review_id, "timestamp": item.created_at.isoformat(), "work_order_id": item.work_order_id, "attempt_id": item.attempt_id, "decision": item.decision} for item in reviews)
+            items.extend({"kind": "directive" if item.purpose == "DIRECTIVE" else "message", "entity_id": item.message_id, "timestamp": item.created_at.isoformat(), "work_order_id": item.work_order_id, "sender_actor_type": item.sender_actor_type, "sender_actor_id": item.sender_actor_id, "recipient_agent_id": item.recipient_agent_id, "classification": item.classification} for item in messages)
         return sorted(items, key=lambda item: (item["timestamp"], item["kind"], item["entity_id"]))
 
     async def cancel_run(self, run_id: str) -> dict[str, Any]:

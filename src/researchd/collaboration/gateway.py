@@ -91,7 +91,7 @@ class CollaborationGateway:
     def tracking_enabled(self) -> bool:
         return self.delegations is not None and self.invocations is not None and ((self.agent_id is not None and self.runtime_id is not None) or self.selector is not None)
 
-    def _start(self, run_id: str, purpose: DelegationPurpose, *, work_order_id: str | None = None, attempt_id: str | None = None, required_roles: tuple[str, ...] = (), required_skills: tuple[str, ...] = (), existing_delegation_id: str | None = None, typed_input: InvocationInput | None = None) -> tuple[DelegationId, InvocationId] | None:
+    def _start(self, run_id: str, purpose: DelegationPurpose, *, work_order_id: str | None = None, attempt_id: str | None = None, required_roles: tuple[str, ...] = (), required_skills: tuple[str, ...] = (), required_trust_zones: tuple[AgentTrustZone, ...] = (), existing_delegation_id: str | None = None, typed_input: InvocationInput | None = None) -> tuple[DelegationId, InvocationId] | None:
         if typed_input is None:
             raise ValueError("typed invocation input is required")
         if (self.delegations is None or self.invocations is None) or (not self.tracking_enabled and existing_delegation_id is None):
@@ -106,7 +106,7 @@ class CollaborationGateway:
                 raise ValueError("delegation is not assigned")
             agent_id, runtime_id = AgentId(assigned.assigned_agent_id), AgentRuntimeId(assigned.assigned_runtime_id)
         elif self.selector is not None and (self.agent_id is None or self.runtime_id is None):
-            selected = self.selector.select(required_roles=required_roles, required_skills=required_skills)
+            selected = self.selector.select(required_roles=required_roles, required_skills=required_skills, required_trust_zones=required_trust_zones)
             if selected is None:
                 raise ValueError("no eligible Agent runtime for delegation")
             agent_id, runtime_id = selected.agent_id, selected.runtime_id
@@ -118,7 +118,12 @@ class CollaborationGateway:
             runtime, _ = self.catalog.resolve(str(runtime_id))
             endpoint_ref = runtime.endpoint_ref
         if existing_delegation_id is None:
-            self.delegations.create(Delegation(delegation_id=delegation_id, run_id=run_id, work_order_id=work_order_id, purpose=purpose, idempotency_key=f"{delegation_id}-orchestration"))
+            self.delegations.create(Delegation(
+                delegation_id=delegation_id, run_id=run_id, work_order_id=work_order_id,
+                purpose=purpose, required_roles=required_roles, required_skills=required_skills,
+                required_trust_zones=required_trust_zones,
+                idempotency_key=f"{delegation_id}-orchestration",
+            ))
             self.delegations.assign(str(delegation_id), agent_id=str(agent_id), runtime_id=str(runtime_id))
         context_bundle = None
         if self.context_builder is not None:
