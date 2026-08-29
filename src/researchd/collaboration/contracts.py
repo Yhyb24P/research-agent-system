@@ -5,6 +5,7 @@ from researchd.domain.base import DomainModel
 from researchd.domain.enums import AgentAdapterKind, AgentTrustZone, DelegationPurpose, DelegationState, InvocationStatus
 from researchd.domain.ids import AgentId, AgentRuntimeId, DelegationId, InvocationId, MessageId
 from researchd.context.builder import CloudContextSelection
+from researchd.context.agent_context import AgentContextBundle
 from researchd.executor.contracts import GrantedWorkOrder
 
 
@@ -97,6 +98,7 @@ class AgentInvocationRequest(DomainModel):
     purpose: DelegationPurpose
     input_sha256: str
     endpoint_ref: str | None = None
+    context_bundle: AgentContextBundle | None = None
     typed_input: InvocationInput | None = None
     # Deprecated compatibility escape hatch for pre-ACP adapters. New gateway
     # calls must use typed_input so purpose and payload cannot drift apart.

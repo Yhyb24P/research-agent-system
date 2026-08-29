@@ -16,11 +16,16 @@ class ProcessAgentRunner(Protocol):
 
 
 def _request_payload(request: AgentInvocationRequest) -> dict[str, Any] | None:
+    payload: dict[str, Any] | None
     if isinstance(request.typed_input, ExecuteInvocationInput):
-        return request.typed_input.work_order.model_dump(mode="json")
-    if isinstance(request.typed_input, (PlanInvocationInput, ReviewInvocationInput)):
-        return request.typed_input.context.model_dump(mode="json")
-    return request.payload if isinstance(request.payload, dict) else None
+        payload = request.typed_input.work_order.model_dump(mode="json")
+    elif isinstance(request.typed_input, (PlanInvocationInput, ReviewInvocationInput)):
+        payload = request.typed_input.context.model_dump(mode="json")
+    else:
+        payload = request.payload if isinstance(request.payload, dict) else None
+    if payload is not None and request.context_bundle is not None:
+        payload = {**payload, "agent_context": request.context_bundle.model_dump(mode="json")}
+    return payload
 
 
 class A2ARemoteAgentAdapter:

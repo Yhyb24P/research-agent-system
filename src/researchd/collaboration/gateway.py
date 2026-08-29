@@ -13,12 +13,14 @@ from researchd.models.cloud import CloudCostMetadata
 from researchd.agents.schemas import PlanProposal
 from researchd.domain.review import ReviewDecision
 from researchd.domain.enums import Capability, DelegationPurpose, InvocationStatus, NetworkMode
+from researchd.domain.enums import AgentTrustZone
 from researchd.domain.ids import AgentId, AgentRuntimeId, DelegationId, InvocationId
 from researchd.context.builder import CloudContextSelection
+from researchd.context.agent_context import AgentContextBuilder, AgentContextBundle, AgentContextSelection
 from researchd.collaboration.adapters import CloudLeadAgentAdapter, LocalExecutorAgentAdapter
 from researchd.executor.contracts import ExecutorResult, GrantedWorkOrder, SandboxSpec
 from researchd.storage.models import AttemptRecord, WorkOrderRecord
-from researchd.storage.models import DelegationRecord, AgentInvocationRecord
+from researchd.storage.models import DelegationRecord, AgentInvocationRecord, AgentRecord
 from sqlalchemy import select
 
 
@@ -26,13 +28,16 @@ class CollaborationGateway:
     def __init__(self, cloud: CloudLeadAgentAdapter | None = None, executor: LocalExecutorAgentAdapter | None = None, *,
                  delegations: DelegationService | None = None, invocations: InvocationService | None = None,
                  agent_id: AgentId | None = None, runtime_id: AgentRuntimeId | None = None,
-                 selector: AgentSelector | None = None, catalog: AgentAdapterCatalog | None = None) -> None:
+                 selector: AgentSelector | None = None, catalog: AgentAdapterCatalog | None = None,
+                 context_builder: AgentContextBuilder | None = None) -> None:
         self.cloud = cloud
         self.executor = executor
         self.delegations, self.invocations = delegations, invocations
         self.agent_id, self.runtime_id = agent_id, runtime_id
         self.selector = selector
         self.catalog = catalog
+        self.context_builder = context_builder
+        self._context_bundles: dict[str, AgentContextBundle] = {}
 
     def _canonical_request(self, tracking: tuple[DelegationId, InvocationId], typed_input: InvocationInput) -> AgentInvocationRequest:
         """Reconstruct the typed request after durable tracking has started."""
@@ -48,7 +53,8 @@ class CollaborationGateway:
             run_id=row.run_id, work_order_id=row.work_order_id, attempt_id=row.attempt_id,
             agent_id=AgentId(row.agent_id), runtime_id=AgentRuntimeId(row.runtime_id),
             purpose=DelegationPurpose(row.purpose), input_sha256=row.input_sha256,
-            endpoint_ref=runtime.endpoint_ref, typed_input=typed_input,
+            endpoint_ref=runtime.endpoint_ref,
+            context_bundle=self._context_bundles.get(str(tracking[1])), typed_input=typed_input,
         )
 
     async def _invoke_business(self, tracking: tuple[DelegationId, InvocationId], typed_input: InvocationInput, output_type: type[PlanProposal] | type[ReviewDecision]) -> CloudLeadResult[Any]:
@@ -109,7 +115,20 @@ class CollaborationGateway:
         if existing_delegation_id is None:
             self.delegations.create(Delegation(delegation_id=delegation_id, run_id=run_id, work_order_id=work_order_id, purpose=purpose, idempotency_key=f"{delegation_id}-orchestration"))
             self.delegations.assign(str(delegation_id), agent_id=str(agent_id), runtime_id=str(runtime_id))
-        self.invocations.start(AgentInvocationRequest(invocation_id=invocation_id, delegation_id=delegation_id, run_id=run_id, work_order_id=work_order_id, attempt_id=attempt_id, agent_id=agent_id, runtime_id=runtime_id, purpose=purpose, input_sha256=hashlib.sha256(f"{run_id}:{purpose.value}:{work_order_id}:{attempt_id}".encode()).hexdigest(), endpoint_ref=endpoint_ref, typed_input=typed_input))
+        context_bundle = None
+        if self.context_builder is not None:
+            with self.delegations.sessions() as session:
+                agent_row = session.get(AgentRecord, str(agent_id))
+            if agent_row is None:
+                raise ValueError("assigned Agent profile disappeared")
+            context_bundle = self.context_builder.build(AgentContextSelection(
+                target_agent_id=str(agent_id), target_runtime_id=str(runtime_id),
+                target_trust_zone=AgentTrustZone(agent_row.trust_zone), purpose=purpose,
+                run_id=run_id, work_order_id=work_order_id,
+            ))
+        self.invocations.start(AgentInvocationRequest(invocation_id=invocation_id, delegation_id=delegation_id, run_id=run_id, work_order_id=work_order_id, attempt_id=attempt_id, agent_id=agent_id, runtime_id=runtime_id, purpose=purpose, input_sha256=hashlib.sha256(f"{run_id}:{purpose.value}:{work_order_id}:{attempt_id}".encode()).hexdigest(), endpoint_ref=endpoint_ref, context_bundle=context_bundle, typed_input=typed_input))
+        if context_bundle is not None:
+            self._context_bundles[str(invocation_id)] = context_bundle
         return delegation_id, invocation_id
 
     def prepare_execution(self, work_order: WorkOrderRecord) -> str | None:
