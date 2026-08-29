@@ -21,7 +21,7 @@ from researchd.domain.criteria import acceptance_fingerprint
 from researchd.domain.verification import CriterionEvaluation, VerificationResult
 from researchd.domain.ids import AgentId, AgentRuntimeId, VerificationId
 from researchd.executor.contracts import ExecutorResult
-from researchd.models.cloud import CloudCallBudget, CloudModelRequest, CloudModelResponse, CloudPricing, CloudUsage
+from researchd.models.cloud import CloudCallBudget, CloudModelRequest, CloudModelResponse, CloudPricing, CloudProviderConfiguration, CloudUsage
 from researchd.orchestrator.engine import OrchestrationLimits, ResearchOrchestrator
 from researchd.collaboration.gateway import CollaborationGateway
 from researchd.collaboration.invocation import InvocationService
@@ -39,6 +39,19 @@ from researchd.verifier.contracts import VerificationInputs
 
 
 ROOT = Path(__file__).parents[2]
+
+
+def cloud_configuration() -> CloudProviderConfiguration:
+    return CloudProviderConfiguration(
+        configuration_id="orchestrator-fake-v1", provider="fake-cloud",
+        endpoint="https://fake-cloud.example", account_id="test-account", project_id="test-project",
+        region="test-region", model="fake-model", sdk_client="test-double",
+        request_timeout_seconds=60, retry_max_requests=3,
+        retry_backoff_seconds=0.25, retry_max_backoff_seconds=8,
+        retention_policy="none", training_opt_out=True, privacy_mode="test-isolated",
+        structured_output_mode="json-schema-strict",
+        token_accounting_source="test-double", cost_accounting_source="configured-pricing",
+    )
 
 
 def migrate(path: Path) -> None:
@@ -212,6 +225,7 @@ def make_orchestrator(tmp_path: Path, *, cloud_responses: list[str], passed: boo
     model = FakeCloud(cloud_responses)
     cloud = CloudLeadAdapter(
         model, sessions, builder,
+        configuration=cloud_configuration(),
         budget=CloudCallBudget(max_requests=3, max_input_bytes=100_000, max_response_bytes=100_000, max_output_tokens=512, max_total_tokens=2_000),
         pricing=CloudPricing(prompt_usd_per_million=Decimal("0"), completion_usd_per_million=Decimal("0")),
     )
@@ -272,6 +286,7 @@ def test_approval_request_pauses_then_resumes_policy(tmp_path: Path) -> None:
     builder = ContextBuilder(db_sessions, ContentAddressedArtifactStore(tmp_path / "artifacts2"), DeterministicRedactor())
     model = FakeCloud([_proposal_with_capability("network.external")])
     cloud = CloudLeadAdapter(model, db_sessions, builder,
+        configuration=cloud_configuration(),
         budget=CloudCallBudget(max_requests=3, max_input_bytes=100_000, max_response_bytes=100_000, max_output_tokens=512, max_total_tokens=2_000),
         pricing=CloudPricing(prompt_usd_per_million=Decimal("0"), completion_usd_per_million=Decimal("0")))
     approvals = ApprovalService(db_sessions)

@@ -54,7 +54,7 @@ from researchd.workspace import (
 from researchd.workspace.contracts import ProvisionedWorkspace, ReconciliationPayload, WorkspaceSnapshot
 from researchd.workspace.manifest import WorkspaceAdmissionError
 from researchd.workspace.service import WorkspaceDelegationError
-from test_storage import migrate
+from tests.integration.test_storage import migrate
 
 
 def _database(tmp_path: Path) -> tuple[sessionmaker[Session], ArtifactService]:

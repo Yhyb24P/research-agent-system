@@ -36,7 +36,7 @@ from researchd.storage.models import AgentInteractionRecord, AgentRecord, AgentR
 from researchd.storage.models import DelegationRecord, AgentInvocationRecord
 from researchd.storage.db import create_sqlite_engine, session_factory
 from researchd.domain.ids import AgentId, AgentRuntimeId
-from test_storage import migrate
+from tests.integration.test_storage import migrate
 
 
 @pytest.fixture
@@ -610,7 +610,7 @@ def test_http_and_process_adapters_reject_unsafe_or_oversized_inputs() -> None:
 
 
 def test_web_and_tui_clients_share_local_control_resources(tmp_path: Path) -> None:
-    from test_orchestrator import make_orchestrator, _proposal, _review
+    from tests.integration.test_orchestrator import make_orchestrator, _proposal, _review
     sessions, orchestrator, _, _ = make_orchestrator(tmp_path, cloud_responses=[_proposal(), _review()])
     run_id = orchestrator.create_run(workspace_id="ws_e2e", objective="ui")
     api = LocalControlAPI(sessions, orchestrator)
@@ -650,7 +650,7 @@ def test_web_and_tui_clients_share_local_control_resources(tmp_path: Path) -> No
 
 
 def test_collaboration_only_reference_workflow_records_agent_chain(tmp_path: Path) -> None:
-    from test_orchestrator import _proposal, _review, make_orchestrator
+    from tests.integration.test_orchestrator import _proposal, _review, make_orchestrator
     sessions, controller, _, _ = make_orchestrator(tmp_path, cloud_responses=[_proposal(), _review()])
     run_id = controller.create_run(workspace_id="ws_e2e", objective="collaboration e2e")
     assert asyncio.run(controller.run(run_id, max_steps=30)).state is ResearchRunState.COMPLETED

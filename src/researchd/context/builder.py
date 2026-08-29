@@ -8,7 +8,7 @@ from researchd.context.cloud_bundle import CloudArtifactItem, CloudContextBundle
 from researchd.context.redaction import DeterministicRedactor
 from researchd.domain.enums import DataClassification
 from researchd.domain.base import DomainModel
-from researchd.storage.models import ArtifactDerivationRecord, ArtifactRecord, AttemptRecord, ObservationRecord, ResearchRunRecord, VerificationResultRecord, WorkOrderRecord
+from researchd.storage.models import AgentInvocationRecord, ArtifactDerivationRecord, ArtifactRecord, AttemptRecord, ObservationRecord, ResearchRunRecord, VerificationResultRecord, WorkOrderRecord
 
 
 class EgressDenied(PermissionError):
@@ -22,6 +22,7 @@ class ContextRecordMissing(LookupError):
 class CloudContextSelection(DomainModel):
     run_id: str
     work_order_id: str | None = None
+    invocation_id: str | None = None
     artifact_ids: tuple[str, ...] = ()
     observation_ids: tuple[str, ...] = ()
     verification_id: str | None = None
@@ -105,6 +106,14 @@ class ContextBuilder:
             )
 
     def build_selection(self, selection: CloudContextSelection) -> CloudContextBundle:
+        if selection.invocation_id is not None:
+            with self.sessions() as session:
+                invocation = session.get(AgentInvocationRecord, selection.invocation_id)
+                if (
+                    invocation is None or invocation.run_id != selection.run_id
+                    or (selection.work_order_id is not None and invocation.work_order_id != selection.work_order_id)
+                ):
+                    raise EgressDenied("cloud interaction invocation is outside the requested authoritative scope")
         return self.build(
             run_id=selection.run_id, work_order_id=selection.work_order_id,
             artifact_ids=selection.artifact_ids, observation_ids=selection.observation_ids,
