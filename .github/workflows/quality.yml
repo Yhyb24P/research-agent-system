@@ -10,7 +10,9 @@ permissions:
 
 jobs:
   quality:
-    runs-on: ubuntu-latest
+    # Bubblewrap security tests require the user/network namespace behavior
+    # available on this runner image; do not silently skip those tests.
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
