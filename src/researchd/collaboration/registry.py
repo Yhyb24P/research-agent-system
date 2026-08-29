@@ -1,13 +1,31 @@
 from datetime import UTC, datetime, timedelta
+from uuid import uuid4
 
-from sqlalchemy import select
+from sqlalchemy import or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
-from researchd.collaboration.contracts import AgentProfile, AgentRuntime, DiscoveredAgentDescriptor
+from researchd.collaboration.contracts import (
+    AgentProfile,
+    AgentRuntime,
+    AgentRuntimeLease,
+    DiscoveredAgentDescriptor,
+)
 from researchd.domain.enums import AgentAdapterKind, AgentTrustZone
 from researchd.domain.ids import AgentId, AgentRuntimeId
-from researchd.storage.models import AgentRecord, AgentRuntimeRecord
+from researchd.storage.models import (
+    AgentRecord,
+    AgentRuntimeLeaseEventRecord,
+    AgentRuntimeRecord,
+)
+
+
+class RuntimeLeaseConflict(RuntimeError):
+    pass
+
+
+class RuntimeLeaseInvalid(RuntimeError):
+    pass
 
 
 class AgentRegistryService:
@@ -159,18 +177,168 @@ class AgentRegistryService:
         if reserved:
             raise ValueError(f"reserved trusted role cannot be registered as Agent: {sorted(reserved)[0]}")
 
-    def heartbeat(self, runtime_id: str, *, lease_seconds: int = 30) -> None:
+    def acquire_runtime(
+        self,
+        runtime_id: str,
+        *,
+        owner_id: str,
+        lease_seconds: int = 30,
+        now: datetime | None = None,
+    ) -> AgentRuntimeLease:
         if lease_seconds <= 0:
             raise ValueError("lease_seconds must be positive")
-        now = datetime.now(UTC)
+        if not owner_id or len(owner_id) > 128:
+            raise ValueError("runtime lease owner_id is invalid")
+        reference = now or datetime.now(UTC)
+        lease_id = f"runtime_lease_{uuid4().hex}"
+        expires_at = reference + timedelta(seconds=lease_seconds)
         with self.sessions.begin() as session:
-            runtime = session.get(AgentRuntimeRecord, runtime_id)
-            if runtime is None or not runtime.enabled:
+            runtime = session.scalar(
+                select(AgentRuntimeRecord)
+                .join(AgentRecord, AgentRecord.agent_id == AgentRuntimeRecord.agent_id)
+                .where(
+                    AgentRuntimeRecord.runtime_id == runtime_id,
+                    AgentRuntimeRecord.enabled.is_(True),
+                    AgentRecord.enabled.is_(True),
+                )
+            )
+            if runtime is None:
                 raise ValueError(f"agent runtime is unavailable: {runtime_id}")
-            runtime.last_heartbeat_at = now
-            runtime.lease_expires_at = now + timedelta(seconds=lease_seconds)
-            runtime.updated_at = now
-            runtime.version += 1
+            if (
+                runtime.runtime_lease_id is not None
+                and runtime.lease_owner_id == owner_id
+                and runtime.lease_expires_at is not None
+                and runtime.lease_expires_at > reference
+            ):
+                lease_id = runtime.runtime_lease_id
+                acquired_at = runtime.lease_acquired_at or reference
+                runtime.last_heartbeat_at = reference
+                runtime.lease_expires_at = expires_at
+                runtime.updated_at = reference
+                runtime.version += 1
+                session.add(self._lease_event(runtime_id, lease_id, owner_id, "RENEWED", reference))
+                conflict = False
+            else:
+                acquired_at = reference
+                acquired = int(getattr(session.execute(
+                    update(AgentRuntimeRecord)
+                    .where(
+                        AgentRuntimeRecord.runtime_id == runtime_id,
+                        or_(
+                            AgentRuntimeRecord.runtime_lease_id.is_(None),
+                            AgentRuntimeRecord.lease_expires_at.is_(None),
+                            AgentRuntimeRecord.lease_expires_at <= reference,
+                        ),
+                    )
+                    .values(
+                        runtime_lease_id=lease_id,
+                        lease_owner_id=owner_id,
+                        lease_acquired_at=reference,
+                        last_heartbeat_at=reference,
+                        lease_expires_at=expires_at,
+                        updated_at=reference,
+                        version=AgentRuntimeRecord.version + 1,
+                    )
+                ), "rowcount", 0))
+                conflict = acquired != 1
+                if not conflict:
+                    session.add(self._lease_event(
+                        runtime_id, lease_id, owner_id, "ACQUIRED", reference
+                    ))
+            if conflict:
+                session.add(self._lease_event(
+                    runtime_id, runtime.runtime_lease_id, owner_id, "CONFLICT", reference
+                ))
+        if conflict:
+            raise RuntimeLeaseConflict(f"agent runtime lease is already held: {runtime_id}")
+        return AgentRuntimeLease(
+            lease_id=lease_id,
+            runtime_id=AgentRuntimeId(runtime_id),
+            owner_id=owner_id,
+            acquired_at=acquired_at,
+            expires_at=expires_at,
+        )
+
+    def renew_runtime(
+        self,
+        lease: AgentRuntimeLease,
+        *,
+        lease_seconds: int = 30,
+        now: datetime | None = None,
+    ) -> AgentRuntimeLease:
+        if lease_seconds <= 0:
+            raise ValueError("lease_seconds must be positive")
+        reference = now or datetime.now(UTC)
+        expires_at = reference + timedelta(seconds=lease_seconds)
+        with self.sessions.begin() as session:
+            renewed = int(getattr(session.execute(
+                update(AgentRuntimeRecord)
+                .where(
+                    AgentRuntimeRecord.runtime_id == str(lease.runtime_id),
+                    AgentRuntimeRecord.runtime_lease_id == lease.lease_id,
+                    AgentRuntimeRecord.lease_owner_id == lease.owner_id,
+                    AgentRuntimeRecord.lease_expires_at > reference,
+                )
+                .values(
+                    last_heartbeat_at=reference,
+                    lease_expires_at=expires_at,
+                    updated_at=reference,
+                    version=AgentRuntimeRecord.version + 1,
+                )
+            ), "rowcount", 0))
+            if renewed != 1:
+                raise RuntimeLeaseInvalid("runtime lease is missing, expired, or out of scope")
+            session.add(self._lease_event(
+                str(lease.runtime_id), lease.lease_id, lease.owner_id, "RENEWED", reference
+            ))
+        return lease.model_copy(update={"expires_at": expires_at})
+
+    def release_runtime(
+        self,
+        lease: AgentRuntimeLease,
+        *,
+        now: datetime | None = None,
+    ) -> None:
+        reference = now or datetime.now(UTC)
+        with self.sessions.begin() as session:
+            released = int(getattr(session.execute(
+                update(AgentRuntimeRecord)
+                .where(
+                    AgentRuntimeRecord.runtime_id == str(lease.runtime_id),
+                    AgentRuntimeRecord.runtime_lease_id == lease.lease_id,
+                    AgentRuntimeRecord.lease_owner_id == lease.owner_id,
+                )
+                .values(
+                    runtime_lease_id=None,
+                    lease_owner_id=None,
+                    lease_acquired_at=None,
+                    lease_expires_at=None,
+                    updated_at=reference,
+                    version=AgentRuntimeRecord.version + 1,
+                )
+            ), "rowcount", 0))
+            if released != 1:
+                raise RuntimeLeaseInvalid("runtime lease is missing or out of scope")
+            session.add(self._lease_event(
+                str(lease.runtime_id), lease.lease_id, lease.owner_id, "RELEASED", reference
+            ))
+
+    @staticmethod
+    def _lease_event(
+        runtime_id: str,
+        lease_id: str | None,
+        owner_id: str,
+        event_type: str,
+        observed_at: datetime,
+    ) -> AgentRuntimeLeaseEventRecord:
+        return AgentRuntimeLeaseEventRecord(
+            event_id=f"runtime_lease_event_{uuid4().hex}",
+            runtime_id=runtime_id,
+            lease_id=lease_id,
+            owner_id=owner_id,
+            event_type=event_type,
+            observed_at=observed_at,
+        )
 
     def eligible(self, *, role: str | None = None, skill: str | None = None) -> tuple[str, ...]:
         with self.sessions() as session:

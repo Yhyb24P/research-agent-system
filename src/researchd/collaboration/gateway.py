@@ -59,6 +59,7 @@ class CollaborationGateway:
         context_bundle = AgentContextBundle.model_validate(row.context_bundle_json) if row.context_bundle_json is not None else self._context_bundles.get(str(tracking[1]))
         if row.context_bundle_sha256 is not None and (context_bundle is None or context_bundle.bundle_sha256 != row.context_bundle_sha256):
             raise ValueError("persisted context bundle checksum mismatch")
+        self.invocations.mark_dispatched(str(tracking[1]))
         return AgentInvocationRequest(
             invocation_id=InvocationId(row.invocation_id), delegation_id=DelegationId(row.delegation_id),
             run_id=row.run_id, work_order_id=row.work_order_id, attempt_id=row.attempt_id,
@@ -213,11 +214,16 @@ class CollaborationGateway:
         self.delegations.assign(str(delegation_id), agent_id=str(agent_id), runtime_id=str(runtime_id))
         return str(delegation_id)
 
-    def _finish(self, invocation_id: InvocationId | None, *, success: bool, output_type: str | None = None, output: dict[str, object] | None = None, reason: str | None = None) -> None:
+    def _finish(self, invocation_id: InvocationId | None, *, success: bool, output_type: str | None = None, output: dict[str, object] | None = None, reason: str | None = None, external_invocation_id: str | None = None) -> None:
         if invocation_id is not None:
             assert self.invocations is not None
+            if external_invocation_id is None:
+                with self.invocations.sessions() as session:
+                    row = session.get(AgentInvocationRecord, str(invocation_id))
+                    if row is not None:
+                        external_invocation_id = row.external_invocation_id
             status = InvocationStatus.SUCCEEDED if success else (InvocationStatus.CANCELLED if reason == "CANCELLED" else InvocationStatus.FAILED)
-            self.invocations.complete(AgentInvocationResult(invocation_id=invocation_id, status=status, output_type=output_type, output=output, reason_code=reason))
+            self.invocations.complete(AgentInvocationResult(invocation_id=invocation_id, status=status, external_invocation_id=external_invocation_id, output_type=output_type, output=output, reason_code=reason))
 
     def _tracked_adapter(self, tracking: tuple[DelegationId, InvocationId] | None) -> AgentAdapter | None:
         if tracking is None or self.catalog is None or self.invocations is None:
@@ -307,6 +313,7 @@ class CollaborationGateway:
     async def execute(self, work_order: WorkOrderRecord, attempt: AttemptRecord) -> ExecutorResult:
         typed_input = self._typed_execute_input(work_order, attempt.attempt_id)
         tracking = self._start(work_order.run_id, DelegationPurpose.EXECUTE, work_order_id=work_order.work_order_id, attempt_id=attempt.attempt_id, required_roles=("executor",), existing_delegation_id=attempt.delegation_id, typed_input=typed_input)
+        external_invocation_id = None
         try:
             adapter = self._tracked_adapter(tracking)
             if adapter is None:
@@ -319,13 +326,14 @@ class CollaborationGateway:
                 if tracking is None:
                     raise ValueError("canonical adapter is unavailable")
                 response = await adapter.invoke(self._canonical_request(tracking, typed_input))
+                external_invocation_id = response.external_invocation_id
                 if response.status is not InvocationStatus.SUCCEEDED or response.output is None:
                     raise ValueError(response.reason_code or "agent invocation failed")
                 result = ExecutorResult.model_validate(response.output)
         except Exception as error:
             self._finish(tracking[1] if tracking else None, success=False, reason=type(error).__name__)
             raise
-        self._finish(tracking[1] if tracking else None, success=result.status == "execution_complete", output_type="ExecutorResult", output=result.model_dump(mode="json"), reason=None if result.status == "execution_complete" else result.status)
+        self._finish(tracking[1] if tracking else None, success=result.status == "execution_complete", output_type="ExecutorResult", output=result.model_dump(mode="json"), reason=None if result.status == "execution_complete" else result.status, external_invocation_id=external_invocation_id)
         return result
 
     async def cancel(self, attempt_id: str) -> None:
@@ -338,11 +346,21 @@ class CollaborationGateway:
                     AgentInvocationRecord.status == InvocationStatus.RUNNING.value,
                 )).all()
             for invocation in invocations:
+                cancelled_before_dispatch = self.invocations.request_cancel(
+                    invocation.invocation_id
+                )
+                if cancelled_before_dispatch:
+                    continue
                 if self.catalog is not None:
                     _, adapter = self.catalog.resolve(invocation.runtime_id)
                     await adapter.cancel(invocation.invocation_id)
                 invocation_id = invocation.invocation_id
-                self._finish(InvocationId(invocation_id), success=False, reason="CANCELLED")
+                self._finish(
+                    InvocationId(invocation_id),
+                    success=False,
+                    reason="CANCELLED",
+                    external_invocation_id=invocation.external_invocation_id,
+                )
 
     def assigned_agent_for(self, work_order_id: str) -> str | None:
         if self.delegations is None:

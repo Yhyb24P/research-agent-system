@@ -160,6 +160,7 @@ def _controller(path: Path, endpoint: str) -> sessionmaker[Session]:
         protocols=("A2A/1.0",),
         metadata={"a2a_tenant": TENANT, "implementation": "a2a-sdk-server"},
     ))
+    registry.acquire_runtime(str(RUNTIME_ID), owner_id="iq01-controller")
     return sessions
 
 

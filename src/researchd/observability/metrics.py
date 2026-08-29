@@ -13,7 +13,7 @@ from researchd.storage.models import (
     AgentInteractionRecord, ApprovalRequestRecord, JobRecord, PolicyDecisionRecord,
     ReviewDecisionRecord, VerificationResultRecord, AttemptRecord, WorkOrderRecord,
     DelegationRecord, AgentInvocationRecord,
-    AgentRecord, AgentRuntimeRecord,
+    AgentRecord, AgentRuntimeLeaseEventRecord, AgentRuntimeRecord,
 )
 
 
@@ -33,6 +33,9 @@ class MetricsSnapshot:
     agent_invocation_failures: int
     agent_utilization: dict[str, float]
     agent_runtime_health: dict[str, int]
+    agent_runtime_lease_conflicts: int
+    agent_invocation_orphans: int
+    agent_invocation_latency_ms: dict[str, float]
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -49,6 +52,9 @@ class MetricsSnapshot:
             "agent_invocation_failures": self.agent_invocation_failures,
             "agent_utilization": dict(self.agent_utilization),
             "agent_runtime_health": dict(self.agent_runtime_health),
+            "agent_runtime_lease_conflicts": self.agent_runtime_lease_conflicts,
+            "agent_invocation_orphans": self.agent_invocation_orphans,
+            "agent_invocation_latency_ms": dict(self.agent_invocation_latency_ms),
         }
 
     def prometheus(self) -> str:
@@ -75,6 +81,14 @@ class MetricsSnapshot:
             lines.append(f'research_agent_utilization_ratio{{agent_id="{agent_id}"}} {utilization_value}')
         for runtime_id, health_value in sorted(self.agent_runtime_health.items()):
             lines.append(f'research_agent_runtime_health{{runtime_id="{runtime_id}"}} {health_value}')
+        lines.append(
+            f"research_agent_runtime_lease_conflicts_total {self.agent_runtime_lease_conflicts}"
+        )
+        lines.append(f"research_agent_invocation_orphans {self.agent_invocation_orphans}")
+        for phase, latency_value in sorted(self.agent_invocation_latency_ms.items()):
+            lines.append(
+                f'research_agent_invocation_latency_ms{{phase="{phase}"}} {latency_value}'
+            )
         return "\n".join(lines) + "\n"
 
 
@@ -112,6 +126,42 @@ def collect_metrics(sessions: sessionmaker[Session], *, run_id: str | None = Non
         utilization = {agent.agent_id: round(active_by_agent.get(agent.agent_id, 0) / agent.max_parallel_delegations, 6) for agent in agents}
         reference = datetime.now(UTC)
         runtime_health = {runtime.runtime_id: int(runtime.enabled and runtime.lease_expires_at is not None and runtime.lease_expires_at > reference and any(agent.agent_id == runtime.agent_id and agent.enabled for agent in agents)) for runtime in runtimes}
+        runtime_by_id = {runtime.runtime_id: runtime for runtime in runtimes}
+        orphan_count = sum(
+            invocation.status == "RUNNING"
+            and (
+                (runtime := runtime_by_id.get(invocation.runtime_id)) is None
+                or runtime.runtime_lease_id != invocation.runtime_lease_id
+                or runtime.lease_expires_at is None
+                or runtime.lease_expires_at <= reference
+            )
+            for invocation in invocations
+        )
+
+        def average_latency(values: list[float]) -> float:
+            return round(sum(values) / len(values), 3) if values else 0.0
+
+        latency = {
+            "queue": average_latency([
+                (item.dispatched_at - item.created_at).total_seconds() * 1000
+                for item in invocations if item.dispatched_at is not None
+            ]),
+            "start": average_latency([
+                (item.external_started_at - item.dispatched_at).total_seconds() * 1000
+                for item in invocations
+                if item.external_started_at is not None and item.dispatched_at is not None
+            ]),
+            "reconciliation": average_latency([
+                (item.last_reconciled_at - item.reconciliation_requested_at).total_seconds() * 1000
+                for item in invocations
+                if item.last_reconciled_at is not None and item.reconciliation_requested_at is not None
+            ]),
+            "cancel": average_latency([
+                (item.completed_at - item.cancel_requested_at).total_seconds() * 1000
+                for item in invocations
+                if item.completed_at is not None and item.cancel_requested_at is not None
+            ]),
+        }
         return MetricsSnapshot(
             cloud_calls=len(interactions),
             cloud_tokens=sum(item.total_tokens for item in interactions),
@@ -127,4 +177,9 @@ def collect_metrics(sessions: sessionmaker[Session], *, run_id: str | None = Non
             agent_invocation_failures=sum(item.status == "FAILED" for item in invocations),
             agent_utilization=utilization,
             agent_runtime_health=runtime_health,
+            agent_runtime_lease_conflicts=session.query(AgentRuntimeLeaseEventRecord).filter_by(
+                event_type="CONFLICT"
+            ).count(),
+            agent_invocation_orphans=orphan_count,
+            agent_invocation_latency_ms=latency,
         )

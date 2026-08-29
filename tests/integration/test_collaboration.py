@@ -127,7 +127,7 @@ def test_runtime_requires_trusted_profile_and_heartbeat_expires(database: tuple[
         registry.register_runtime(runtime)
     registry.register_profile(profile())
     registry.register_runtime(runtime)
-    registry.heartbeat("runtime_qwen", lease_seconds=10)
+    registry.acquire_runtime("runtime_qwen", owner_id="runtime-qwen-test", lease_seconds=10)
     with sessions() as session:
         row = session.get(AgentRuntimeRecord, "runtime_qwen")
         assert row is not None and row.lease_expires_at is not None
@@ -174,6 +174,7 @@ def test_assignment_freezes_profile_and_invocation_is_structured(database: tuple
     registry = AgentRegistryService(sessions)
     registry.register_profile(profile())
     registry.register_runtime(AgentRuntime(runtime_id=AgentRuntimeId("runtime_qwen"), agent_id=AgentId("agent_executor"), adapter_kind=AgentAdapterKind.HTTP, runtime_name="Qwen"))
+    registry.acquire_runtime("runtime_qwen", owner_id="assignment-test")
     delegation = Delegation(delegation_id=DelegationId("del_execute"), run_id="run_test", purpose=DelegationPurpose.EXECUTE, idempotency_key="del-execute-1")
     delegations = DelegationService(sessions)
     delegations.create(delegation)
@@ -199,6 +200,7 @@ def test_invocation_recovery_fails_closed_after_controller_restart(database: tup
     registry = AgentRegistryService(sessions)
     registry.register_profile(profile())
     registry.register_runtime(AgentRuntime(runtime_id=AgentRuntimeId("runtime_recovery"), agent_id=AgentId("agent_executor"), adapter_kind=AgentAdapterKind.HTTP, runtime_name="Recovery"))
+    registry.acquire_runtime("runtime_recovery", owner_id="recovery-test")
     delegations = DelegationService(sessions)
     delegations.create(Delegation(delegation_id=DelegationId("del_recovery"), run_id="run_test", purpose=DelegationPurpose.EXECUTE, idempotency_key="recovery-delegation"))
     delegations.assign("del_recovery", agent_id="agent_executor", runtime_id="runtime_recovery")
@@ -212,7 +214,7 @@ def test_invocation_recovery_fails_closed_after_controller_restart(database: tup
     with sessions() as session:
         invocation = session.get(AgentInvocationRecord, "inv_recovery")
         delegation = session.get(DelegationRecord, "del_recovery")
-        assert invocation is not None and invocation.status == InvocationStatus.FAILED.value and invocation.reason_code == "CONTROLLER_RESTARTED"
+        assert invocation is not None and invocation.status == InvocationStatus.FAILED.value and invocation.reason_code == "CONTROLLER_RESTARTED_BEFORE_EXTERNAL_BIND"
         assert delegation is not None and delegation.state == "FAILED"
 
 
@@ -241,6 +243,7 @@ def test_invocation_persists_target_context_snapshot(database: tuple[Path, sessi
     registry = AgentRegistryService(sessions)
     registry.register_profile(profile(AgentId("agent_context")))
     registry.register_runtime(AgentRuntime(runtime_id=AgentRuntimeId("runtime_context"), agent_id=AgentId("agent_context"), adapter_kind=AgentAdapterKind.HTTP, runtime_name="Context"))
+    registry.acquire_runtime("runtime_context", owner_id="context-test")
     context_builder = AgentContextBuilder(ContextBuilder(sessions, ContentAddressedArtifactStore(path.parent / "context-snapshot"), DeterministicRedactor()))
     gateway = CollaborationGateway(
         delegations=DelegationService(sessions), invocations=InvocationService(sessions),
@@ -278,6 +281,7 @@ def test_gateway_tracking_creates_delegation_and_invocation(database: tuple[Path
     registry = AgentRegistryService(sessions)
     registry.register_profile(profile())
     registry.register_runtime(AgentRuntime(runtime_id=AgentRuntimeId("runtime_qwen"), agent_id=AgentId("agent_executor"), adapter_kind=AgentAdapterKind.HTTP, runtime_name="Qwen"))
+    registry.acquire_runtime("runtime_qwen", owner_id="gateway-tracking-test")
     gateway = CollaborationGateway(
         cast(CloudLeadAgentAdapter, None), cast(LocalExecutorAgentAdapter, None),
         delegations=DelegationService(sessions), invocations=InvocationService(sessions),
@@ -298,6 +302,7 @@ def test_gateway_cancellation_preserves_cancelled_terminal_state(database: tuple
     registry = AgentRegistryService(sessions)
     registry.register_profile(profile())
     registry.register_runtime(AgentRuntime(runtime_id=AgentRuntimeId("runtime_qwen"), agent_id=AgentId("agent_executor"), adapter_kind=AgentAdapterKind.HTTP, runtime_name="Qwen"))
+    registry.acquire_runtime("runtime_qwen", owner_id="gateway-cancel-test")
     gateway = CollaborationGateway(cast(CloudLeadAgentAdapter, None), cast(LocalExecutorAgentAdapter, None), delegations=DelegationService(sessions), invocations=InvocationService(sessions), agent_id=AgentId("agent_executor"), runtime_id=AgentRuntimeId("runtime_qwen"))
     tracking = gateway._start("run_test", DelegationPurpose.EXECUTE, typed_input=typed_execute())
     assert tracking is not None
@@ -314,6 +319,7 @@ def test_gateway_catalog_routes_plan_to_generic_http_agent(database: tuple[Path,
     registry = AgentRegistryService(sessions)
     registry.register_profile(AgentProfile(agent_id=AgentId("agent_planner"), display_name="Planner", roles=("planner",), skills=("research.plan",), trust_zone=AgentTrustZone.REMOTE_PRIVATE))
     registry.register_runtime(AgentRuntime(runtime_id=AgentRuntimeId("runtime_http"), agent_id=AgentId("agent_planner"), adapter_kind=AgentAdapterKind.HTTP, runtime_name="HTTP", endpoint_ref="http://127.0.0.1"))
+    registry.acquire_runtime("runtime_http", owner_id="http-plan-test")
     catalog = AgentAdapterCatalog(sessions)
     class Client:
         async def invoke(self, endpoint: str, payload: dict[str, object]) -> dict[str, object]:
@@ -335,6 +341,7 @@ def test_gateway_routes_typed_execute_to_generic_http_agent(database: tuple[Path
         runtime_id=AgentRuntimeId("runtime_remote_executor"), agent_id=AgentId("agent_remote_executor"),
         adapter_kind=AgentAdapterKind.HTTP, runtime_name="Remote executor", endpoint_ref="http://127.0.0.1/execute",
     ))
+    registry.acquire_runtime("runtime_remote_executor", owner_id="remote-execute-test")
     now = datetime.now(UTC)
     with sessions.begin() as session:
         session.add(WorkOrderRecord(
@@ -379,6 +386,7 @@ def test_delegation_constraints_and_terminal_state_are_enforced(database: tuple[
     registry = AgentRegistryService(sessions)
     registry.register_profile(profile())
     registry.register_runtime(AgentRuntime(runtime_id=AgentRuntimeId("runtime_qwen"), agent_id=AgentId("agent_executor"), adapter_kind=AgentAdapterKind.HTTP, runtime_name="Qwen"))
+    registry.acquire_runtime("runtime_qwen", owner_id="terminal-test")
     service = DelegationService(sessions)
     constrained = Delegation(delegation_id=DelegationId("del_constrained"), run_id="run_test", purpose=DelegationPurpose.EXECUTE, required_roles=("reviewer",), idempotency_key="constrained")
     service.create(constrained)
@@ -412,8 +420,8 @@ def test_selector_is_deterministic_and_requires_healthy_runtime(database: tuple[
     registry.register_profile(AgentProfile(agent_id=AgentId("agent_b"), display_name="B", roles=("executor",), skills=("code.modify",), trust_zone=AgentTrustZone.LOCAL_PRIVATE, labels={"priority": "5"}))
     registry.register_runtime(AgentRuntime(runtime_id=AgentRuntimeId("runtime_a"), agent_id=AgentId("agent_a"), adapter_kind=AgentAdapterKind.HTTP, runtime_name="A"))
     registry.register_runtime(AgentRuntime(runtime_id=AgentRuntimeId("runtime_b"), agent_id=AgentId("agent_b"), adapter_kind=AgentAdapterKind.HTTP, runtime_name="B"))
-    registry.heartbeat("runtime_a")
-    registry.heartbeat("runtime_b")
+    registry.acquire_runtime("runtime_a", owner_id="runtime-a-test")
+    registry.acquire_runtime("runtime_b", owner_id="runtime-b-test")
     selected = AgentSelector(sessions).select(required_roles=("executor",), required_skills=("code.modify",))
     assert selected is not None and selected.agent_id == "agent_b"
     registry.disable("agent_b")
@@ -473,7 +481,7 @@ def test_approval_metrics_are_scoped_to_run(database: tuple[Path, sessionmaker[S
     registry = AgentRegistryService(sessions)
     registry.register_profile(profile())
     registry.register_runtime(AgentRuntime(runtime_id=AgentRuntimeId("runtime_qwen"), agent_id=AgentId("agent_executor"), adapter_kind=AgentAdapterKind.HTTP, runtime_name="Qwen"))
-    registry.heartbeat("runtime_qwen")
+    registry.acquire_runtime("runtime_qwen", owner_id="runtime-qwen-test")
     expires = datetime.now(UTC) + timedelta(hours=1)
     approvals.request(operation_type="test", parameters={"run": "run_test"}, requested_by="controller", reason="test", risk_level="low", resource_scope={}, budget_delta={}, expires_at=expires, run_id="run_test", requester_actor_type="controller", requester_actor_id="controller")
     approvals.request(operation_type="test", parameters={"run": "other"}, requested_by="controller", reason="test", risk_level="low", resource_scope={}, budget_delta={}, expires_at=expires, run_id=None)
@@ -522,7 +530,7 @@ def test_http_adapter_uses_validated_runtime_endpoint() -> None:
 
         async def invoke(self, endpoint: str, payload: dict[str, object]) -> dict[str, object]:
             self.endpoints.append(endpoint)
-            return {"accepted": payload["objective"], "capabilities": payload["granted_capabilities"]}
+            return {"attempt_id": payload["attempt_id"], "status": "execution_complete", "capability_results": [], "reported_claims": ["accepted"], "errors": []}
 
     client = Client()
     request = AgentInvocationRequest(
@@ -538,7 +546,7 @@ def test_http_adapter_uses_validated_runtime_endpoint() -> None:
     result = asyncio.run(HttpAgentAdapter(client).invoke(request))
     assert result.status is InvocationStatus.SUCCEEDED
     assert client.endpoints == ["http://127.0.0.1:8789/agent"]
-    assert result.output is not None and result.output["accepted"] == "typed execute"
+    assert result.output is not None and result.output["attempt_id"] == "att_http_endpoint"
 
 
 def test_process_adapter_forwards_typed_execute_contract() -> None:
@@ -567,7 +575,7 @@ def test_adapter_catalog_resolves_enabled_healthy_runtime(database: tuple[Path, 
     registry = AgentRegistryService(sessions)
     registry.register_profile(profile())
     registry.register_runtime(AgentRuntime(runtime_id=AgentRuntimeId("runtime_http"), agent_id=AgentId("agent_executor"), adapter_kind=AgentAdapterKind.HTTP, runtime_name="HTTP", endpoint_ref="http://127.0.0.1"))
-    registry.heartbeat("runtime_http")
+    registry.acquire_runtime("runtime_http", owner_id="runtime-http-test")
     catalog = AgentAdapterCatalog(sessions)
     catalog.register(AgentAdapterKind.HTTP, HttpAgentAdapter(cast(HttpAgentClient, None)))
     runtime, adapter = catalog.resolve("runtime_http")
@@ -580,7 +588,7 @@ def test_registry_delegation_and_control_plane_work_without_a2a_registration(dat
     registry = AgentRegistryService(sessions)
     registry.register_profile(profile())
     registry.register_runtime(AgentRuntime(runtime_id=AgentRuntimeId("runtime_internal"), agent_id=AgentId("agent_executor"), adapter_kind=AgentAdapterKind.INTERNAL, runtime_name="Internal"))
-    registry.heartbeat("runtime_internal")
+    registry.acquire_runtime("runtime_internal", owner_id="runtime-internal-test")
     catalog = AgentAdapterCatalog(sessions)
     assert AgentAdapterKind.A2A not in catalog._adapters
     selected = AgentSelector(sessions).select(required_roles=("executor",), required_skills=("code.modify",))

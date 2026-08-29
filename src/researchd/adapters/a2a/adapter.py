@@ -21,7 +21,13 @@ from researchd.adapters.a2a.schemas import (
     A2ATask,
     A2A_PROTOCOL_VERSION,
 )
-from researchd.storage.models import AgentInteractionRecord, AuditEventRecord, AttemptRecord, WorkOrderRecord
+from researchd.storage.models import (
+    AgentInteractionRecord,
+    AgentInvocationRecord,
+    AuditEventRecord,
+    AttemptRecord,
+    WorkOrderRecord,
+)
 from researchd.storage.repositories import utc_now
 
 if TYPE_CHECKING:
@@ -123,6 +129,10 @@ class A2AAdapter:
         interaction_id = existing.interaction_id if existing else f"interaction_{uuid4().hex}"
         if existing is None:
             self._reserve(interaction_id, order, attempt, outbound.contextId or context_id, body, invocation_id=invocation_id)
+        if invocation_id is not None:
+            from researchd.collaboration.invocation import InvocationService
+
+            InvocationService(self.sessions).mark_dispatched(invocation_id)
         response = await self.client.send(
             body,
             on_task=lambda task: self._bind_task(
@@ -261,6 +271,19 @@ class A2AAdapter:
             if record.a2a_task_id not in {None, task.id}:
                 raise A2AAdapterError("A2A interaction changed its running Task identity")
             record.a2a_task_id = task.id
+            if record.invocation_id is not None:
+                from researchd.collaboration.invocation import InvocationService
+
+                invocation = session.get(AgentInvocationRecord, record.invocation_id)
+                if invocation is None or invocation.status != "RUNNING":
+                    raise A2AAdapterError("A2A invocation cannot bind an external Task")
+                bound_at = utc_now()
+                InvocationService._bind_external(invocation, task.id, bound_at)
+                session.add(InvocationService._audit(
+                    invocation,
+                    "AGENT_INVOCATION_EXTERNAL_BOUND",
+                    bound_at,
+                ))
             session.add(AuditEventRecord(
                 event_id=f"evt_{uuid4().hex}",
                 event_type="A2A_TASK_BOUND",

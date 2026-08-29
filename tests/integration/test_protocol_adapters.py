@@ -170,6 +170,7 @@ def test_a2a_remote_agent_adapter_maps_typed_execute_to_invocation(tmp_path: Pat
     registry = AgentRegistryService(sessions)
     registry.register_profile(AgentProfile(agent_id=AgentId("agent_remote"), display_name="Remote", roles=("executor",), trust_zone=AgentTrustZone.REMOTE_PRIVATE))
     registry.register_runtime(AgentRuntime(runtime_id=AgentRuntimeId("runtime_a2a"), agent_id=AgentId("agent_remote"), adapter_kind=AgentAdapterKind.A2A, runtime_name="A2A"))
+    registry.acquire_runtime("runtime_a2a", owner_id="a2a-typed-test")
     delegation = DelegationService(sessions)
     delegation.create(Delegation(delegation_id=DelegationId("del_a2a_typed"), run_id=run_id, work_order_id=order.work_order_id, purpose=DelegationPurpose.EXECUTE, idempotency_key="del-a2a-typed"))
     delegation.assign("del_a2a_typed", agent_id="agent_remote", runtime_id="runtime_a2a")
@@ -230,6 +231,7 @@ def test_a2a_executor_result_crosses_collaboration_gateway(tmp_path: Path) -> No
         runtime_name="A2A gateway runtime",
         endpoint_ref="http://127.0.0.1:8787/a2a",
     ))
+    registry.acquire_runtime("runtime_a2a_gateway", owner_id="a2a-gateway-test")
     delegations = DelegationService(sessions)
     delegations.create(Delegation(
         delegation_id=DelegationId("del_a2a_gateway"),

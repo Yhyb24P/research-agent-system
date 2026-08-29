@@ -90,7 +90,7 @@ def test_real_langgraph_specialist_runs_through_canonical_agent_plane(tmp_path: 
         protocols=("langgraph:1.2",),
     )
     registry.register_runtime(runtime)
-    registry.heartbeat("runtime_research_critic")
+    registry.acquire_runtime("runtime_research_critic", owner_id="langgraph-test")
 
     graph = _RecordingGraph(build_research_critic_graph())
     adapter = LangGraphAgentAdapter()
