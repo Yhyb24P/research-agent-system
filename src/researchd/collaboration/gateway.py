@@ -106,6 +106,8 @@ class CollaborationGateway:
         except Exception as error:
             self._finish(tracking[1] if tracking else None, success=False, reason=type(error).__name__)
             raise
+        if tracking is not None:
+            self.cloud.bind_invocation(tracking[1], result.interaction_id)
         self._finish(tracking[1] if tracking else None, success=True, output_type=type(result.output).__name__, output=result.output.model_dump(mode="json"))
         return result
 
@@ -122,6 +124,8 @@ class CollaborationGateway:
         except Exception as error:
             self._finish(tracking[1] if tracking else None, success=False, reason=type(error).__name__)
             raise
+        if tracking is not None:
+            self.cloud.bind_invocation(tracking[1], result.interaction_id)
         self._finish(tracking[1] if tracking else None, success=True, output_type=type(result.output).__name__, output=result.output.model_dump(mode="json"))
         return result
 

@@ -31,7 +31,7 @@ from researchd.executor.worker import LocalExecutorWorker
 from researchd.collaboration.contracts import AgentInvocationResult, Delegation
 from researchd.domain.enums import AgentAdapterKind, AgentTrustZone, Capability, DataClassification, DelegationPurpose, InvocationStatus, ResearchRunState
 from researchd.domain.ids import DelegationId, InvocationId, MessageId
-from researchd.storage.models import AgentRecord, AgentRuntimeRecord, AttemptRecord, AuditEventRecord, CollaborationMessageRecord, WorkspaceRecord, ResearchRunRecord, WorkOrderRecord
+from researchd.storage.models import AgentInteractionRecord, AgentRecord, AgentRuntimeRecord, AttemptRecord, AuditEventRecord, CollaborationMessageRecord, WorkspaceRecord, ResearchRunRecord, WorkOrderRecord
 from researchd.storage.models import DelegationRecord, AgentInvocationRecord
 from researchd.storage.db import create_sqlite_engine, session_factory
 from researchd.domain.ids import AgentId, AgentRuntimeId
@@ -452,6 +452,9 @@ def test_collaboration_only_reference_workflow_records_agent_chain(tmp_path: Pat
         assert purposes == {"PLAN", "EXECUTE", "REVIEW"}
         invocations = session.scalars(select(AgentInvocationRecord).where(AgentInvocationRecord.run_id == run_id)).all()
         assert len(invocations) == 3 and {item.status for item in invocations} == {"SUCCEEDED"}
+        interactions = session.scalars(select(AgentInteractionRecord).where(AgentInteractionRecord.run_id == run_id)).all()
+        assert {item.purpose for item in interactions} == {"PLAN", "REVIEW"}
+        assert all(item.invocation_id is not None for item in interactions)
         attempt = session.scalar(select(AttemptRecord).where(AttemptRecord.work_order_id.in_(select(WorkOrderRecord.work_order_id).where(WorkOrderRecord.run_id == run_id))))
         assert attempt is not None and attempt.delegation_id is not None
         plan_event = session.scalar(select(AuditEventRecord).where(AuditEventRecord.run_id == run_id, AuditEventRecord.event_type == "PLAN_CREATED"))

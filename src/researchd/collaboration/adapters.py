@@ -1,7 +1,7 @@
 from researchd.agents.cloud_lead import CloudLeadAdapter
 from researchd.context.builder import CloudContextSelection
 from researchd.executor.contracts import ExecutorResult, GrantedWorkOrder
-from researchd.storage.models import AttemptRecord, WorkOrderRecord
+from researchd.storage.models import AgentInteractionRecord, AttemptRecord, WorkOrderRecord
 from researchd.agents.schemas import PlanProposal
 from researchd.domain.review import ReviewDecision
 from researchd.agents.cloud_lead import CloudLeadResult
@@ -26,11 +26,16 @@ class CloudLeadAgentAdapter:
         if not isinstance(selection, CloudContextSelection):
             return AgentInvocationResult(invocation_id=request.invocation_id, status=InvocationStatus.FAILED, reason_code="CONTEXT_SELECTION_REQUIRED")
         if request.purpose.value == "PLAN":
-            output_obj: BaseModel = (await self.delegate.propose_plan(selection)).output
+            plan_result = await self.delegate.propose_plan(selection)
+            output_obj: BaseModel = plan_result.output
+            interaction_id = plan_result.interaction_id
         elif request.purpose.value == "REVIEW":
-            output_obj = (await self.delegate.review(selection)).output
+            review_result = await self.delegate.review(selection)
+            output_obj = review_result.output
+            interaction_id = review_result.interaction_id
         else:
             return AgentInvocationResult(invocation_id=request.invocation_id, status=InvocationStatus.FAILED, reason_code="UNSUPPORTED_PURPOSE")
+        self.bind_invocation(request.invocation_id, interaction_id)
         return AgentInvocationResult(invocation_id=request.invocation_id, status=InvocationStatus.SUCCEEDED, output_type=type(output_obj).__name__, output=output_obj.model_dump(mode="json"))
 
     async def cancel(self, invocation_id: str) -> None:
@@ -41,6 +46,16 @@ class CloudLeadAgentAdapter:
 
     async def review(self, selection: CloudContextSelection) -> CloudLeadResult[ReviewDecision]:
         return await self.delegate.review(selection)
+
+    def bind_invocation(self, invocation_id: object, interaction_id: str | None) -> None:
+        """Link provider telemetry to the surrounding Collaboration Invocation."""
+        if interaction_id is None:
+            return
+        with self.delegate.sessions.begin() as session:
+            row = session.get(AgentInteractionRecord, interaction_id)
+            if row is None:
+                raise ValueError("cloud interaction disappeared before invocation binding")
+            row.invocation_id = str(invocation_id)
 
 
 class LocalExecutorAgentAdapter:
