@@ -2,10 +2,12 @@
 
 [简体中文](README.zh-CN.md)
 
-Research Agent System is a trusted control plane for long-running research
-work. It turns model proposals into durable, policy-controlled, auditable
-execution—without allowing a model to mutate workflow state, run arbitrary
-host commands, or self-certify its results.
+Research Agent System is an **Agent Collaboration Plane + Trusted Control
+Plane** for long-running research work. Agents—not model APIs—are the
+integration boundary; model, provider, protocol, and execution location are
+runtime details. The controller turns agent proposals into durable,
+policy-controlled, auditable execution without allowing an agent to mutate
+workflow state, run arbitrary host commands, or self-certify its results.
 
 ## What this project is
 
@@ -29,6 +31,11 @@ transitions, capabilities, egress classification, approvals, verification, and
 acceptance. A2A/MCP adapters and model providers are replaceable boundaries;
 they are not the source of truth for research state.
 
+The collaboration plane provides durable `AgentProfile`, `AgentRuntime`,
+`Delegation`, and `AgentInvocation` records. Every plan, execution, and review
+is assigned to an agent and remains traceable to its runtime snapshot. Agent
+skills are descriptive; trusted capabilities are granted only by policy.
+
 ## Current deployment topology
 
 The active setup uses `aweswitch qw` to launch a Qwen agent backed by a remote
@@ -47,6 +54,10 @@ as local GPU execution.
 ## Implemented capabilities
 
 - Durable ResearchRun/WorkOrder/Attempt/Job state with explicit transitions.
+- Agent Registry, runtime health/leases, deterministic selection, Delegation,
+  typed AgentInvocation, and append-only collaboration messages.
+- Canonical adapters for internal, local-process, HTTP, and A2A runtimes;
+  protocol tasks never replace authoritative controller records.
 - Crash-aware Job submission, operation-id idempotency, cancellation, and
   restart reconciliation.
 - Bubblewrap execution with no network, cleared environment, capability
@@ -65,10 +76,15 @@ as local GPU execution.
 
 ```bash
 uv sync --frozen
+uv run alembic upgrade head
 uv run pytest -q
 uv run mypy src tests
-uv run alembic upgrade head
 ```
+
+The repository currently exposes a library/control API rather than a standalone
+daemon entrypoint. Use the integration tests as the executable reference
+workflow; the local control API provides Agents, Runs, Delegations, Approvals,
+Artifacts, and event/timeline queries.
 
 Example DTOs and JSON schemas are in [`examples/`](examples/) and
 [`schemas/`](schemas/). The executable qualification helpers are in

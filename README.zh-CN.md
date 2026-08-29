@@ -2,9 +2,11 @@
 
 [English](README.md)
 
-Research Agent System 是一个面向长时间研究任务的可信控制面。它把模型提出的
-计划转化为持久化、受策略约束、可审计、可恢复的执行流程；模型不能直接修改
-工作流状态、执行任意主机命令，也不能自行证明研究结果成立。
+Research Agent System 是一个 **Agent Collaboration Plane + Trusted Control
+Plane（Agent 协作面 + 可信控制面）**，面向长时间研究任务。平台接入的边界是
+Agent，而不是模型 API；模型、provider、协议和运行位置都只是 AgentRuntime 的
+实现细节。控制器把 Agent 提案转化为持久化、受策略约束、可审计、可恢复的执行
+流程；Agent 不能直接修改工作流状态、执行任意主机命令，也不能自行证明研究结果成立。
 
 ## 项目定位
 
@@ -26,6 +28,10 @@ Research Agent System 是一个面向长时间研究任务的可信控制面。�
 分类、审批、验证和最终接受。A2A/MCP 与模型 provider 都是可替换边界，不能取代
 ResearchRun、WorkOrder、Attempt、Job、Verification 和 AuditEvent 等权威记录。
 
+协作面提供持久化的 `AgentProfile`、`AgentRuntime`、`Delegation` 和
+`AgentInvocation`。每次计划、执行和审查都归属到具体 Agent，并保留运行时快照；
+Agent skill 只是描述信息，可信 Capability 只能由策略系统授予。
+
 ## 当前部署拓扑
 
 当前通过 `aweswitch qw` 启动 Qwen agent，由远程 workstation 推理节点承担模型推理：
@@ -44,6 +50,9 @@ ResearchRun、WorkOrder、Attempt、Job、Verification 和 AuditEvent 等权威�
 ## 已实现功能
 
 - ResearchRun/WorkOrder/Attempt/Job 持久化、显式状态转换和版本控制。
+- Agent Registry、runtime 健康租约、确定性选择、Delegation、typed
+  AgentInvocation 和追加式协作消息。
+- internal、local-process、HTTP、A2A 的统一适配器；协议任务不会取代控制面权威记录。
 - 崩溃感知的 Job 提交、operation-id 幂等、取消和重启恢复协调。
 - Bubblewrap 无网络执行、环境清理、能力代理、worktree 隔离和有界资源限制。
 - 内容寻址 Artifact、来源校验、独立验证和追加式审计事件。
@@ -56,10 +65,14 @@ ResearchRun、WorkOrder、Attempt、Job、Verification 和 AuditEvent 等权威�
 
 ```bash
 uv sync --frozen
+uv run alembic upgrade head
 uv run pytest -q
 uv run mypy src tests
-uv run alembic upgrade head
 ```
+
+当前仓库提供的是库和本地控制 API，尚未提供独立 daemon 入口。集成测试是可执行的
+reference workflow；本地控制 API 提供 Agents、Runs、Delegations、Approvals、
+Artifacts 以及事件/时间线查询。
 
 示例 DTO 和 JSON Schema 位于 [`examples/`](examples/) 与 [`schemas/`)；可执行的
 资格辅助工具位于 [`scripts/`](scripts/)。发布 manifest、运行态数据库和资格证据
