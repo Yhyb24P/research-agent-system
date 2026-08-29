@@ -2,12 +2,14 @@
 
 import argparse
 import json
+import re
 from pathlib import Path
 from typing import Any
 
 
 _CLOUD_METADATA = ("provider", "model", "tested_at_utc", "credential_reference", "retention_policy")
 _FORBIDDEN_CLOUD_KEYS = {"api_key", "apikey", "password", "secret", "access_token", "refresh_token"}
+_RC_TAG = re.compile(r"^v\d+\.\d+\.\d+-rc\.[0-9A-Za-z.-]+$")
 
 
 def _load(path: Path) -> dict[str, Any]:
@@ -47,7 +49,7 @@ def validate(
     commit = source.get("commit") if isinstance(source, dict) else None
     checks.append({"name": "manifest_source_commit", "passed": isinstance(commit, str) and bool(commit)})
     tags = source.get("tags") if isinstance(source, dict) else None
-    checks.append({"name": "manifest_rc_tag_present", "passed": isinstance(tags, list) and any(isinstance(tag, str) and tag.startswith("v1.0.0-rc.") for tag in tags)})
+    checks.append({"name": "manifest_rc_tag_present", "passed": isinstance(tags, list) and any(isinstance(tag, str) and _RC_TAG.fullmatch(tag) for tag in tags)})
     checks.append({"name": "manifest_worktree_clean", "passed": isinstance(source, dict) and source.get("working_tree") == "clean"})
     checks.append({"name": "schema_head_present", "passed": isinstance(manifest.get("schema"), dict) and bool(manifest["schema"].get("alembic_head"))})
     dependencies = manifest.get("dependencies")
