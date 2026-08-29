@@ -3,7 +3,7 @@ import hashlib
 from decimal import Decimal
 from typing import Any
 from uuid import uuid4
-from researchd.collaboration.contracts import AgentInvocationRequest, AgentInvocationResult, Delegation, InvocationInput, PlanInvocationInput, ReviewInvocationInput
+from researchd.collaboration.contracts import AgentInvocationRequest, AgentInvocationResult, Delegation, ExecuteInvocationInput, InvocationInput, PlanInvocationInput, ReviewInvocationInput
 from researchd.collaboration.delegation import DelegationService
 from researchd.collaboration.invocation import InvocationService
 from researchd.collaboration.selector import AgentSelector
@@ -12,11 +12,11 @@ from researchd.agents.cloud_lead import CloudLeadResult
 from researchd.models.cloud import CloudCostMetadata
 from researchd.agents.schemas import PlanProposal
 from researchd.domain.review import ReviewDecision
-from researchd.domain.enums import DelegationPurpose, InvocationStatus
+from researchd.domain.enums import Capability, DelegationPurpose, InvocationStatus, NetworkMode
 from researchd.domain.ids import AgentId, AgentRuntimeId, DelegationId, InvocationId
 from researchd.context.builder import CloudContextSelection
 from researchd.collaboration.adapters import CloudLeadAgentAdapter, LocalExecutorAgentAdapter
-from researchd.executor.contracts import ExecutorResult
+from researchd.executor.contracts import ExecutorResult, GrantedWorkOrder, SandboxSpec
 from researchd.storage.models import AttemptRecord, WorkOrderRecord
 from researchd.storage.models import DelegationRecord, AgentInvocationRecord
 from sqlalchemy import select
@@ -63,6 +63,20 @@ class CollaborationGateway:
             output=output, interaction_id=str(tracking[1]),
             cost=CloudCostMetadata(attempts=1, prompt_tokens=0, completion_tokens=0, total_tokens=0, cost_usd=Decimal("0")),
         )
+
+    @staticmethod
+    def _typed_execute_input(work_order: WorkOrderRecord, attempt: AttemptRecord) -> ExecuteInvocationInput:
+        """Build a host-path-free execution contract from the trusted WorkOrder."""
+        contract = work_order.contract
+        constraints = contract.get("constraints", {})
+        network = NetworkMode(constraints.get("network", NetworkMode.NONE.value))
+        requested = frozenset(Capability(value) for value in contract.get("requested_capabilities", ()))
+        return ExecuteInvocationInput(work_order=GrantedWorkOrder(
+            attempt_id=attempt.attempt_id,
+            objective=work_order.objective,
+            granted_capabilities=requested,
+            sandbox=SandboxSpec(attempt_id=attempt.attempt_id, workspace="/workspace", network=network),
+        ))
 
     @property
     def tracking_enabled(self) -> bool:
@@ -172,7 +186,8 @@ class CollaborationGateway:
         return result
 
     async def execute(self, work_order: WorkOrderRecord, attempt: AttemptRecord) -> ExecutorResult:
-        tracking = self._start(work_order.run_id, DelegationPurpose.EXECUTE, work_order_id=work_order.work_order_id, attempt_id=attempt.attempt_id, required_roles=("executor",), existing_delegation_id=attempt.delegation_id)
+        typed_input = self._typed_execute_input(work_order, attempt)
+        tracking = self._start(work_order.run_id, DelegationPurpose.EXECUTE, work_order_id=work_order.work_order_id, attempt_id=attempt.attempt_id, required_roles=("executor",), existing_delegation_id=attempt.delegation_id, typed_input=typed_input)
         try:
             adapter = self._tracked_adapter(tracking)
             if adapter is None:
@@ -182,7 +197,12 @@ class CollaborationGateway:
             elif isinstance(adapter, LocalExecutorAgentAdapter):
                 result = await adapter.execute(work_order, attempt)
             else:
-                raise ValueError("assigned runtime adapter does not support EXECUTE")
+                if tracking is None:
+                    raise ValueError("canonical adapter is unavailable")
+                response = await adapter.invoke(self._canonical_request(tracking, typed_input))
+                if response.status is not InvocationStatus.SUCCEEDED or response.output is None:
+                    raise ValueError(response.reason_code or "agent invocation failed")
+                result = ExecutorResult.model_validate(response.output)
         except Exception as error:
             self._finish(tracking[1] if tracking else None, success=False, reason=type(error).__name__)
             raise
