@@ -1,7 +1,7 @@
 [project]
 name = "research-agent-system"
 version = "0.1.0"
-description = "Trusted local control plane for long-running research execution"
+description = "Agent collaboration plane and trusted control plane for research workflows"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
@@ -10,6 +10,9 @@ dependencies = [
   "pydantic>=2.13,<3",
   "sqlalchemy>=2.0,<3",
 ]
+
+[project.scripts]
+researchctl = "researchd.cli.main:entrypoint"
 
 [dependency-groups]
 dev = [

@@ -3,14 +3,17 @@
 import argparse
 import asyncio
 import json
+from pathlib import Path
 from collections.abc import Callable
 from typing import Any
 
 from researchd.api.control import LocalControlAPI
+from researchd.storage.db import create_sqlite_engine, session_factory
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="researchd")
+    parser = argparse.ArgumentParser(prog="researchctl")
+    parser.add_argument("--database", default="researchd.db", help="path to the controller SQLite database")
     subparsers = parser.add_subparsers(dest="command", required=True)
     status = subparsers.add_parser("status", help="show a run or WorkOrder status")
     status.add_argument("run_id")
@@ -39,8 +42,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def dispatch(api: LocalControlAPI, argv: list[str] | None = None) -> dict[str, Any] | list[dict[str, Any]]:
-    args = build_parser().parse_args(argv)
+def _dispatch_args(api: LocalControlAPI, args: argparse.Namespace) -> dict[str, Any] | list[dict[str, Any]]:
     if args.command == "status":
         return api.run_status(args.run_id)
     if args.command == "events":
@@ -54,10 +56,26 @@ def dispatch(api: LocalControlAPI, argv: list[str] | None = None) -> dict[str, A
     return asyncio.run(api.cancel_run(args.run_id))
 
 
-def main(api_factory: Callable[[], LocalControlAPI]) -> int:
-    payload = dispatch(api_factory())
+def dispatch(api: LocalControlAPI, argv: list[str] | None = None) -> dict[str, Any] | list[dict[str, Any]]:
+    return _dispatch_args(api, build_parser().parse_args(argv))
+
+
+def main(api_factory: Callable[[], LocalControlAPI] | None = None) -> int:
+    args = build_parser().parse_args()
+    if api_factory is None:
+        database = Path(args.database)
+        if not database.is_file():
+            raise SystemExit(f"controller database does not exist: {database}")
+        api = LocalControlAPI(session_factory(create_sqlite_engine(database)))
+    else:
+        api = api_factory()
+    payload = _dispatch_args(api, args)
     print(json.dumps(payload, sort_keys=True, ensure_ascii=False))
     return 0
 
 
-__all__ = ["build_parser", "dispatch", "main"]
+def entrypoint() -> int:
+    return main()
+
+
+__all__ = ["build_parser", "dispatch", "entrypoint", "main"]

@@ -6,29 +6,34 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
-from researchd.orchestrator.engine import ResearchOrchestrator, RunSnapshot
+from researchd.domain.enums import AttemptState, WorkOrderState
+from researchd.orchestrator.engine import ResearchOrchestrator
 from researchd.storage.models import AgentRecord, AgentRuntimeRecord, ArtifactRecord, ApprovalRequestRecord, AuditEventRecord, DelegationRecord, AgentInvocationRecord, AttemptRecord, PlanRecord, ResearchRunRecord, WorkOrderRecord
 
 
 class LocalControlAPI:
     """Controller facade; it exposes structured status, never agent conversation or raw files."""
 
-    def __init__(self, sessions: sessionmaker[Session], orchestrator: ResearchOrchestrator) -> None:
+    def __init__(self, sessions: sessionmaker[Session], orchestrator: ResearchOrchestrator | None = None) -> None:
         self.sessions = sessions
         self.orchestrator = orchestrator
 
     def run_status(self, run_id: str) -> dict[str, Any]:
-        snapshot = self.orchestrator.snapshot(run_id)
         with self.sessions() as session:
             run = session.get(ResearchRunRecord, run_id)
             if run is None:
                 raise LookupError(run_id)
+            orders = session.scalars(select(WorkOrderRecord).where(WorkOrderRecord.run_id == run_id).order_by(WorkOrderRecord.created_at)).all()
+            attempts = session.scalars(select(AttemptRecord).join(WorkOrderRecord).where(
+                WorkOrderRecord.run_id == run_id,
+                AttemptRecord.state.not_in((AttemptState.SUCCEEDED.value, AttemptState.FAILED.value, AttemptState.CANCELLED.value)),
+            )).all()
             return {
-                "run_id": snapshot.run_id,
-                "state": snapshot.state.value,
-                "work_orders": [{"work_order_id": identifier, "state": state.value} for identifier, state in snapshot.work_orders],
-                "pending_approval_ids": list(snapshot.pending_approval_ids),
-                "active_attempt_ids": list(snapshot.active_attempt_ids),
+                "run_id": run.run_id,
+                "state": run.state,
+                "work_orders": [{"work_order_id": item.work_order_id, "state": item.state} for item in orders],
+                "pending_approval_ids": [item.approval_id for item in orders if item.approval_id and item.state == WorkOrderState.WAITING_APPROVAL.value],
+                "active_attempt_ids": [item.attempt_id for item in attempts],
                 "iterations_used": run.iterations_used,
                 "max_iterations": run.max_iterations,
                 "cloud_calls_used": run.cloud_calls_used,
@@ -140,14 +145,20 @@ class LocalControlAPI:
         return sorted(items, key=lambda item: (item["timestamp"], item["kind"], item["entity_id"]))
 
     async def cancel_run(self, run_id: str) -> dict[str, Any]:
+        if self.orchestrator is None:
+            raise RuntimeError("controller is required for state-changing commands")
         await self.orchestrator.cancel(run_id)
         return self.run_status(run_id)
 
     async def approve(self, work_order_id: str, grant_id: str) -> dict[str, Any]:
+        if self.orchestrator is None:
+            raise RuntimeError("controller is required for state-changing commands")
         await self.orchestrator.approve(work_order_id, grant_id)
         return self.work_order_status(work_order_id)
 
     def resolve_human(self, work_order_id: str, *, action: str, objective: str | None = None) -> dict[str, Any]:
+        if self.orchestrator is None:
+            raise RuntimeError("controller is required for state-changing commands")
         self.orchestrator.resolve_human(work_order_id, action=action, objective=objective)
         return self.work_order_status(work_order_id)
 

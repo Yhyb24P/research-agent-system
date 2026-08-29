@@ -19,6 +19,7 @@ from researchd.collaboration.runtime import AgentAdapterCatalog
 from researchd.api.control import LocalControlAPI
 from researchd.api.web import ControlResourceRouter, serve_local_control
 from researchd.api.tui import render_tui
+from researchd.cli.main import dispatch
 from researchd.adapters.a2a.adapter import A2AAdapter
 from researchd.collaboration.selector import AgentSelector
 from researchd.context.agent_context import AgentContextBuilder, AgentContextSelection
@@ -578,6 +579,12 @@ def test_web_and_tui_clients_share_local_control_resources(tmp_path: Path) -> No
     assert router.get("/api/approvals?run=" + run_id)[0] == 200
     assert router.get("/api/artifacts?run=" + run_id)[0] == 200
     assert "Agents" in render_tui(api, run_id=run_id)
+    read_only = LocalControlAPI(sessions)
+    read_only_status = dispatch(read_only, ["run", "status", run_id])
+    assert isinstance(read_only_status, dict) and read_only_status["run_id"] == run_id
+    assert dispatch(read_only, ["agent", "list"])
+    with pytest.raises(RuntimeError, match="controller is required"):
+        dispatch(read_only, ["cancel", run_id])
     server = serve_local_control(api, port=0)
     try:
         assert server.server_address[0] in {"127.0.0.1", "localhost"}

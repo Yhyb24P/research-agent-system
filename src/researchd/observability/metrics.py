@@ -30,6 +30,7 @@ class MetricsSnapshot:
     review_decisions: dict[str, int]
     delegations: dict[str, int]
     invocations: dict[str, int]
+    agent_invocation_failures: int
     agent_utilization: dict[str, float]
     agent_runtime_health: dict[str, int]
 
@@ -45,6 +46,7 @@ class MetricsSnapshot:
             "verifier_outcomes": dict(self.verifier_outcomes),
             "review_decisions": dict(self.review_decisions),
             "delegations": dict(self.delegations), "invocations": dict(self.invocations),
+            "agent_invocation_failures": self.agent_invocation_failures,
             "agent_utilization": dict(self.agent_utilization),
             "agent_runtime_health": dict(self.agent_runtime_health),
         }
@@ -63,6 +65,16 @@ class MetricsSnapshot:
             for label, value in sorted(values.items()):
                 safe_label = label.replace('"', "")
                 lines.append(f'research_{name}_total{{state="{safe_label}"}} {value}')
+        for key, value in sorted(self.delegations.items()):
+            purpose, state = key.split(":", 1)
+            lines.append(f'research_delegations_total{{purpose="{purpose}",state="{state}"}} {value}')
+        for status, value in sorted(self.invocations.items()):
+            lines.append(f'research_agent_invocations_total{{status="{status}"}} {value}')
+        lines.append(f"research_agent_invocation_failures_total {self.agent_invocation_failures}")
+        for agent_id, utilization_value in sorted(self.agent_utilization.items()):
+            lines.append(f'research_agent_utilization_ratio{{agent_id="{agent_id}"}} {utilization_value}')
+        for runtime_id, health_value in sorted(self.agent_runtime_health.items()):
+            lines.append(f'research_agent_runtime_health{{runtime_id="{runtime_id}"}} {health_value}')
         return "\n".join(lines) + "\n"
 
 
@@ -110,8 +122,9 @@ def collect_metrics(sessions: sessionmaker[Session], *, run_id: str | None = Non
             approval_statuses=dict(Counter(item.status for item in approvals)),
             verifier_outcomes=dict(Counter(item.overall for item in verifications)),
             review_decisions=dict(Counter(item.decision for item in reviews)),
-            delegations=dict(Counter(item.state for item in delegations)),
+            delegations=dict(Counter(f"{item.purpose}:{item.state}" for item in delegations)),
             invocations=dict(Counter(item.status for item in invocations)),
+            agent_invocation_failures=sum(item.status == "FAILED" for item in invocations),
             agent_utilization=utilization,
             agent_runtime_health=runtime_health,
         )

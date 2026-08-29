@@ -52,7 +52,16 @@ def test_metrics_snapshot_covers_cloud_and_workflow_records(tmp_path: Path) -> N
     assert payload["cloud_calls"] == 2
     assert payload["cloud_statuses"] == {"COMPLETED": 2}
     assert payload["verifier_outcomes"] == {"pass": 1}
-    assert "research_cloud_calls_total 2" in metrics.prometheus()
+    assert payload["delegations"] == {"PLAN:COMPLETED": 1, "EXECUTE:COMPLETED": 1, "REVIEW:COMPLETED": 1}
+    assert payload["invocations"] == {"SUCCEEDED": 3}
+    assert payload["agent_invocation_failures"] == 0
+    rendered = metrics.prometheus()
+    assert "research_cloud_calls_total 2" in rendered
+    assert 'research_delegations_total{purpose="EXECUTE",state="COMPLETED"} 1' in rendered
+    assert 'research_agent_invocations_total{status="SUCCEEDED"} 3' in rendered
+    assert "research_agent_invocation_failures_total 0" in rendered
+    assert 'research_agent_utilization_ratio{agent_id="agent_local_code_executor"} 0.0' in rendered
+    assert 'research_agent_runtime_health{runtime_id="runtime_local_code_executor"} 1' in rendered
 
 
 def test_short_mixed_workload_soak_keeps_runs_and_metrics_consistent(tmp_path: Path) -> None:
