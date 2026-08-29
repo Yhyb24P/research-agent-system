@@ -220,16 +220,22 @@ def test_gateway_cancellation_preserves_cancelled_terminal_state(database: tuple
         assert invocation is not None and invocation.status == InvocationStatus.CANCELLED.value
 
 
-def test_gateway_catalog_prevents_wrong_runtime_purpose_dispatch(database: tuple[Path, sessionmaker[Session]]) -> None:
+def test_gateway_catalog_routes_plan_to_generic_http_agent(database: tuple[Path, sessionmaker[Session]]) -> None:
     _, sessions = database
     registry = AgentRegistryService(sessions)
     registry.register_profile(AgentProfile(agent_id=AgentId("agent_planner"), display_name="Planner", roles=("planner",), skills=("research.plan",), trust_zone=AgentTrustZone.REMOTE_PRIVATE))
     registry.register_runtime(AgentRuntime(runtime_id=AgentRuntimeId("runtime_http"), agent_id=AgentId("agent_planner"), adapter_kind=AgentAdapterKind.HTTP, runtime_name="HTTP", endpoint_ref="http://127.0.0.1"))
     catalog = AgentAdapterCatalog(sessions)
-    catalog.register(AgentAdapterKind.HTTP, HttpAgentAdapter(cast(HttpAgentClient, None)))
+    class Client:
+        async def invoke(self, endpoint: str, payload: dict[str, object]) -> dict[str, object]:
+            assert endpoint == "http://127.0.0.1"
+            assert payload["run_id"] == "run_test"
+            return {"proposal_id": "plan_http", "hypotheses": [], "proposed_work_orders": [], "risks": [], "required_evidence": []}
+
+    catalog.register(AgentAdapterKind.HTTP, HttpAgentAdapter(Client()))
     gateway = CollaborationGateway(cast(CloudLeadAgentAdapter, None), cast(LocalExecutorAgentAdapter, None), delegations=DelegationService(sessions), invocations=InvocationService(sessions), agent_id=AgentId("agent_planner"), runtime_id=AgentRuntimeId("runtime_http"), catalog=catalog)
-    with pytest.raises(ValueError, match="does not support PLAN"):
-        asyncio.run(gateway.plan(CloudContextSelection(run_id="run_test")))
+    result = asyncio.run(gateway.plan(CloudContextSelection(run_id="run_test")))
+    assert result.output.proposal_id == "plan_http"
 
 
 def test_delegation_constraints_and_terminal_state_are_enforced(database: tuple[Path, sessionmaker[Session]]) -> None:

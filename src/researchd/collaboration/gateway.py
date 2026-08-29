@@ -1,5 +1,7 @@
 """Gateway routing orchestration through adapters and recording collaboration facts."""
 import hashlib
+from decimal import Decimal
+from typing import Any
 from uuid import uuid4
 from researchd.collaboration.contracts import AgentInvocationRequest, AgentInvocationResult, Delegation, InvocationInput, PlanInvocationInput, ReviewInvocationInput
 from researchd.collaboration.delegation import DelegationService
@@ -7,6 +9,7 @@ from researchd.collaboration.invocation import InvocationService
 from researchd.collaboration.selector import AgentSelector
 from researchd.collaboration.runtime import AgentAdapter, AgentAdapterCatalog
 from researchd.agents.cloud_lead import CloudLeadResult
+from researchd.models.cloud import CloudCostMetadata
 from researchd.agents.schemas import PlanProposal
 from researchd.domain.review import ReviewDecision
 from researchd.domain.enums import DelegationPurpose, InvocationStatus
@@ -20,7 +23,7 @@ from sqlalchemy import select
 
 
 class CollaborationGateway:
-    def __init__(self, cloud: CloudLeadAgentAdapter, executor: LocalExecutorAgentAdapter, *,
+    def __init__(self, cloud: CloudLeadAgentAdapter | None = None, executor: LocalExecutorAgentAdapter | None = None, *,
                  delegations: DelegationService | None = None, invocations: InvocationService | None = None,
                  agent_id: AgentId | None = None, runtime_id: AgentRuntimeId | None = None,
                  selector: AgentSelector | None = None, catalog: AgentAdapterCatalog | None = None) -> None:
@@ -30,6 +33,36 @@ class CollaborationGateway:
         self.agent_id, self.runtime_id = agent_id, runtime_id
         self.selector = selector
         self.catalog = catalog
+
+    def _canonical_request(self, tracking: tuple[DelegationId, InvocationId], typed_input: InvocationInput) -> AgentInvocationRequest:
+        """Reconstruct the typed request after durable tracking has started."""
+        if self.invocations is None or self.catalog is None:
+            raise ValueError("canonical adapter routing requires invocation catalog")
+        with self.invocations.sessions() as session:
+            row = session.get(AgentInvocationRecord, str(tracking[1]))
+        if row is None:
+            raise ValueError("tracked invocation disappeared")
+        runtime, _ = self.catalog.resolve(row.runtime_id)
+        return AgentInvocationRequest(
+            invocation_id=InvocationId(row.invocation_id), delegation_id=DelegationId(row.delegation_id),
+            run_id=row.run_id, work_order_id=row.work_order_id, attempt_id=row.attempt_id,
+            agent_id=AgentId(row.agent_id), runtime_id=AgentRuntimeId(row.runtime_id),
+            purpose=DelegationPurpose(row.purpose), input_sha256=row.input_sha256,
+            endpoint_ref=runtime.endpoint_ref, typed_input=typed_input,
+        )
+
+    async def _invoke_business(self, tracking: tuple[DelegationId, InvocationId], typed_input: InvocationInput, output_type: type[PlanProposal] | type[ReviewDecision]) -> CloudLeadResult[Any]:
+        adapter = self._tracked_adapter(tracking)
+        if adapter is None:
+            raise ValueError("canonical adapter is unavailable")
+        response = await adapter.invoke(self._canonical_request(tracking, typed_input))
+        if response.status is not InvocationStatus.SUCCEEDED or response.output is None:
+            raise ValueError(response.reason_code or "agent invocation failed")
+        output = output_type.model_validate(response.output)
+        return CloudLeadResult(
+            output=output, interaction_id=str(tracking[1]),
+            cost=CloudCostMetadata(attempts=1, prompt_tokens=0, completion_tokens=0, total_tokens=0, cost_usd=Decimal("0")),
+        )
 
     @property
     def tracking_enabled(self) -> bool:
@@ -99,15 +132,19 @@ class CollaborationGateway:
         try:
             adapter = self._tracked_adapter(tracking)
             if adapter is None:
+                if self.cloud is None:
+                    raise ValueError("Cloud Lead adapter is not configured")
                 result = await self.cloud.plan(selection)
             elif isinstance(adapter, CloudLeadAgentAdapter):
-                result = await adapter.plan(selection)
+                assert tracking is not None
+                result = await self._invoke_business(tracking, PlanInvocationInput(context=selection), PlanProposal)
             else:
-                raise ValueError("assigned runtime adapter does not support PLAN")
+                assert tracking is not None
+                result = await self._invoke_business(tracking, PlanInvocationInput(context=selection), PlanProposal)
         except Exception as error:
             self._finish(tracking[1] if tracking else None, success=False, reason=type(error).__name__)
             raise
-        if tracking is not None:
+        if tracking is not None and self.cloud is not None:
             self.cloud.bind_invocation(tracking[1], result.interaction_id)
         self._finish(tracking[1] if tracking else None, success=True, output_type=type(result.output).__name__, output=result.output.model_dump(mode="json"))
         return result
@@ -117,15 +154,19 @@ class CollaborationGateway:
         try:
             adapter = self._tracked_adapter(tracking)
             if adapter is None:
+                if self.cloud is None:
+                    raise ValueError("Cloud Lead adapter is not configured")
                 result = await self.cloud.review(selection)
             elif isinstance(adapter, CloudLeadAgentAdapter):
-                result = await adapter.review(selection)
+                assert tracking is not None
+                result = await self._invoke_business(tracking, ReviewInvocationInput(context=selection), ReviewDecision)
             else:
-                raise ValueError("assigned runtime adapter does not support REVIEW")
+                assert tracking is not None
+                result = await self._invoke_business(tracking, ReviewInvocationInput(context=selection), ReviewDecision)
         except Exception as error:
             self._finish(tracking[1] if tracking else None, success=False, reason=type(error).__name__)
             raise
-        if tracking is not None:
+        if tracking is not None and self.cloud is not None:
             self.cloud.bind_invocation(tracking[1], result.interaction_id)
         self._finish(tracking[1] if tracking else None, success=True, output_type=type(result.output).__name__, output=result.output.model_dump(mode="json"))
         return result
@@ -135,6 +176,8 @@ class CollaborationGateway:
         try:
             adapter = self._tracked_adapter(tracking)
             if adapter is None:
+                if self.executor is None:
+                    raise ValueError("executor adapter is not configured")
                 result = await self.executor.execute(work_order, attempt)
             elif isinstance(adapter, LocalExecutorAgentAdapter):
                 result = await adapter.execute(work_order, attempt)
@@ -147,7 +190,8 @@ class CollaborationGateway:
         return result
 
     async def cancel(self, attempt_id: str) -> None:
-        await self.executor.cancel(attempt_id)
+        if self.executor is not None:
+            await self.executor.cancel(attempt_id)
         if self.invocations is not None:
             with self.invocations.sessions() as session:
                 invocation_ids = session.scalars(select(AgentInvocationRecord.invocation_id).where(AgentInvocationRecord.attempt_id == attempt_id, AgentInvocationRecord.status == InvocationStatus.RUNNING.value)).all()

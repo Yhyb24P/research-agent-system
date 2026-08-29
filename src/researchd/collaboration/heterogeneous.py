@@ -3,7 +3,7 @@ import json
 from typing import Any, Protocol
 from urllib.parse import urlparse
 from researchd.adapters.a2a.adapter import A2AAdapter
-from researchd.collaboration.contracts import AgentHealth, AgentInvocationRequest, AgentInvocationResult, AgentRuntime, ExecuteInvocationInput
+from researchd.collaboration.contracts import AgentHealth, AgentInvocationRequest, AgentInvocationResult, AgentRuntime, ExecuteInvocationInput, PlanInvocationInput, ReviewInvocationInput
 from researchd.domain.enums import InvocationStatus
 
 
@@ -18,6 +18,8 @@ class ProcessAgentRunner(Protocol):
 def _request_payload(request: AgentInvocationRequest) -> dict[str, Any] | None:
     if isinstance(request.typed_input, ExecuteInvocationInput):
         return request.typed_input.work_order.model_dump(mode="json")
+    if isinstance(request.typed_input, (PlanInvocationInput, ReviewInvocationInput)):
+        return request.typed_input.context.model_dump(mode="json")
     return request.payload if isinstance(request.payload, dict) else None
 
 
