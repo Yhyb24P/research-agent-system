@@ -2,6 +2,7 @@
 .pytest_cache/
 .mypy_cache/
 __pycache__/
+docs/
 *.py[cod]
 release-manifest.json
 *-evidence.json

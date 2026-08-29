@@ -1,79 +1,187 @@
 # Research Agent System（中文版）
 
+[![control-plane-quality](https://github.com/Yhyb24P/research-agent-system/actions/workflows/quality.yml/badge.svg)](https://github.com/Yhyb24P/research-agent-system/actions/workflows/quality.yml)
+
 [English](README.md)
 
-Research Agent System 是一个 **Agent Collaboration Plane + Trusted Control
-Plane（Agent 协作面 + 可信控制面）**，面向长时间研究任务。平台接入的边界是
-Agent，而不是模型 API；模型、provider、协议和运行位置都只是 AgentRuntime 的
-实现细节。控制器把 Agent 提案转化为持久化、受策略约束、可审计、可恢复的执行
-流程；Agent 不能直接修改工作流状态、执行任意主机命令，也不能自行证明研究结果成立。
+Research Agent System 是面向持久化、受策略约束研究流程的 **Agent 协作面 +
+可信控制面**。系统接入的实体是 Agent；框架、provider、协议和运行位置都是
+`AgentRuntime` 的实现细节。
 
-## 项目定位
+Agent 可以提出计划、执行工作单、审查结果和完成 specialist 分析，但不能拥有工作流
+状态、给自己授予能力、批准自己的操作或验证自己的结果。这些权力始终属于可信控制面。
 
-这是一个 Python 3.12 模块化单体，核心是可信控制器：
+## 架构
 
 ```text
-Human / researchctl
-        │
-        ▼
-Agent 协作面
-Registry / Runtime / Delegation / Invocation / Context
-        │
-        ▼
-可信控制面
-Run / WorkOrder / Attempt / Policy / Approval / Verification / Audit
-        │
-        ▼
-Agent Runtime 适配器
-internal / process / HTTP / A2A
+Human / Browser / researchctl
+          │ 类型化命令 + 只读 AG-UI 投影
+          ▼
+Local Control API ───────────────► 可信控制面
+                                      │
+                         ResearchRun / WorkOrder / Attempt
+                         Policy / Approval / Audit / Verifier
+                                      │
+                                      ▼
+                            CollaborationGateway
+                                      │
+                     Delegation / AgentInvocation / Context
+                         ┌────────────┼────────────┐
+                         ▼            ▼            ▼
+                    internal/HTTP   A2A v1     LangGraph
+                         │            │        specialist Agent
+                         └────────────┴────────────┘
+                                      │
+                         Workspace Grant / Lease
+                         Git 或 Archive transport
+                                      │
+                                      ▼
+                         Artifact reconciliation
+                                      │
+                                      ▼
+                               独立 Verifier
 ```
 
-Agent 提出计划、承担工作单并返回审查意见。控制器负责状态转换、能力授权、数据出境
-分类、审批、验证和最终接受。A2A/MCP 与模型 provider 都是可替换边界，不能取代
-ResearchRun、WorkOrder、Attempt、Job、Verification 和 AuditEvent 等权威记录。
+SQLite 记录是唯一权威状态。A2A Task、AG-UI Event、workspace transport handle 和
+LangGraph state 都只是适配器或运行时表示，不能取代 `ResearchRun`、`Delegation`、
+`AgentInvocation`、`Artifact` 或 `AuditEvent`。
 
-协作面提供持久化的 `AgentProfile`、`AgentRuntime`、`Delegation` 和
-`AgentInvocation`。每次计划、执行和审查都归属到具体 Agent，并保留运行时快照；
-Agent skill 只是描述信息，可信 Capability 只能由策略系统授予。
+## 已实现能力
 
-## 已实现功能
+- Agent Registry、runtime lease、基于 role/skill/trust-zone 的确定性选择、不可变
+  assignment snapshot、Delegation 和 typed AgentInvocation。
+- A2A v1 Agent Card、Task/Message/Artifact codec、官方 Python SDK client、tenant
+  传递、任务列表、取消、流式聚合，以及通过 `CollaborationGateway` 解码
+  `ExecutorResult` 的端到端路径。
+- 独立的 Workspace Delegation Plane：grant、路径/分类/大小准入、lease、Git
+  worktree 与 Archive transport、artifact-only reconciliation 和 cleanup state。
+- ResearchRun、WorkOrder、Attempt、Job 持久化、显式状态机、operation 幂等、取消和
+  重启恢复协调。
+- 确定性策略、限定范围的人工审批、分类后的 Agent context 和失败关闭的能力代理。
+- 内容寻址 Artifact、provenance、Observation、Claim、独立 Verification、Review 和
+  追加式 AuditEvent。
+- 数据库分配的单调事件 offset、只读 AG-UI 投影、支持 `Last-Event-ID` 的 SSE
+  replay/follow，以及类型化 cancel/approve/human-decision 命令。
+- 可选 LangGraph Agent runtime。仓库内的 `agent_research_critic` pilot 会运行真实
+  compiled graph 并返回结构化 specialist 结果，同时保持 researchd 的权威性。
+- loopback JSON 控制 API、静态 TUI renderer、SQLite backup/restore 检查、运行指标和
+  基于 lock file 的 SBOM 生成。
 
-- ResearchRun/WorkOrder/Attempt/Job 持久化、显式状态转换和版本控制。
-- Agent Registry、runtime 健康租约、确定性选择、Delegation、typed
-  AgentInvocation 和追加式协作消息。
-- internal、local-process、HTTP、A2A 的统一适配器；协议任务不会取代控制面权威记录。
-- 崩溃感知的 Job 提交、operation-id 幂等、取消和重启恢复协调。
-- Bubblewrap 无网络执行、环境清理、能力代理、worktree 隔离和有界资源限制。
-- 内容寻址 Artifact、来源校验、独立验证和追加式审计事件。
-- 确定性策略、人工审批、有界 runtime 调用，以及针对临时适配器故障的分类重试。
-- SQLite 在线备份、CAS 引用一致性、校验和及恢复健康检查。
-- 工作流指标、SQLite/WAL/CAS 增长和备份新鲜度观测。
+## 环境与安装
 
-## 快速开始
+- Linux，Python `>=3.12,<3.13`。
+- 使用 [`uv`](https://docs.astral.sh/uv/) 安装锁定依赖。
+- sandbox/security 测试需要 Bubblewrap。
+
+只安装核心依赖：
 
 ```bash
 uv sync --frozen
-uv run alembic upgrade head
-uv run pytest -q
-uv run mypy src tests
-uv run researchctl --database researchd.db agent list
 ```
 
-当前仓库提供库、loopback 本地控制 API 和只读 `researchctl` 命令。集成测试是可执行的
-reference workflow；控制面提供 Agents、Runs、Delegations、Approvals、Artifacts
-以及事件/时间线查询。修改状态的命令必须显式接入控制器实例。
+安装当前支持的全部 Agent runtime extra：
 
-示例 DTO 和 JSON Schema 位于 [`examples/`](examples/) 与 [`schemas/`)；可执行的
-资格辅助工具位于 [`scripts/`](scripts/)。发布 manifest、运行态数据库和资格证据
-不会写入源码基线。
+```bash
+uv sync --frozen --extra a2a --extra langgraph-agent
+```
 
-## 发布状态
+这些 extra 不会进入可信 domain/storage/policy 核心。
 
-仓库通过不可变的 `v1.0.0-rc.*` tag 发布候选版本，具体版本以最新 Git tag 为准。控制面及已审查的软件安全措施已经实现，但本仓库
-不宣称已获得生产 Go。正式部署前仍需收集目标环境的 runtime/transport 治理、异机备份/恢复和
-长时间运行 soak 证据，并完成最终部署决策。
+## 初始化与测试
 
-## 明确边界
+创建或升级本地控制器数据库：
 
-项目不承诺普遍意义上的分布式 exactly-once，不提供公开 A2A/MCP server，也不会在
-Agent 之间隐式 fallback。未验证或不安全的边界会失败关闭，并要求显式部署决策。
+```bash
+uv run alembic upgrade head
+```
+
+运行完整软件门禁：
+
+```bash
+uv run pytest -q
+uv run mypy src tests
+git diff --check
+```
+
+直接运行四个互操作/工作区 pilot：
+
+```bash
+uv run pytest -q \
+  tests/integration/test_protocol_adapters.py \
+  tests/integration/test_workspace.py \
+  tests/integration/test_agui.py \
+  tests/integration/test_langgraph_runtime.py
+```
+
+集成测试是当前可执行 reference workflow。仓库目前是 library/模块化单体基线，尚未
+提供生产 daemon 或浏览器应用的一键启动入口。
+
+## 查看控制面
+
+`researchctl` 会打开已有数据库，但不会构造 Orchestrator：
+
+```bash
+uv run researchctl --database researchd.db run list
+uv run researchctl --database researchd.db agent list
+uv run researchctl --database researchd.db events <run-id> --after <stream-offset>
+```
+
+为已有数据库启动 loopback 只读 API：
+
+```bash
+uv run python - <<'PY'
+from pathlib import Path
+from researchd.api.control import LocalControlAPI
+from researchd.api.web import serve_local_control
+from researchd.storage.db import create_sqlite_engine, session_factory
+
+sessions = session_factory(create_sqlite_engine(Path("researchd.db")))
+serve_local_control(LocalControlAPI(sessions)).serve_forever()
+PY
+```
+
+然后在另一个终端访问：
+
+```bash
+curl http://127.0.0.1:8788/api/runs
+curl http://127.0.0.1:8788/api/events/<run-id>?after=0
+curl -N http://127.0.0.1:8788/api/runs/<run-id>/stream?follow=1
+```
+
+这个只读启动方式会主动拒绝状态修改。嵌入应用必须使用
+`ResearchOrchestrator` 构造 `LocalControlAPI`；类型化命令随后经现有策略/状态机处理：
+
+| 方法 | 路由 | Body |
+|---|---|---|
+| `POST` | `/api/runs/{run_id}/cancel` | `{}` |
+| `POST` | `/api/work-orders/{work_order_id}/approve` | `{"grant_id":"..."}` |
+| `POST` | `/api/work-orders/{work_order_id}/human-decision` | `{"action":"abort"}` 或 `{"action":"revise","objective":"..."}` |
+
+系统不存在允许任意 UI event 修改状态的入口。
+
+## 仓库结构
+
+- `src/researchd/collaboration/`：Agent contract、registry、selection、delegation、
+  invocation、adapter、message 和 LangGraph runtime。
+- `src/researchd/workspace/`：workspace grant、准入、transport、lease、reconciliation
+  与 cleanup。
+- `src/researchd/orchestrator/`：可信、有界工作流控制器。
+- `src/researchd/api/`：本地控制 facade、AG-UI projection、SSE/JSON HTTP 和 TUI。
+- `src/researchd/storage/`：权威 SQLAlchemy record 和 Alembic migration。
+- `src/researchd/policy/`、`verifier/`、`artifacts/`、`executor/`：可信执行与证据链。
+- [`examples/`](examples/) 与 [`schemas/`](schemas/)：版本化 DTO 示例和 JSON Schema。
+- [`scripts/`](scripts/)：资格检查、release manifest 与 SBOM helper。
+- `tests/`：contract、integration、migration、security 和 typing gate。
+
+## 边界与发布策略
+
+项目只支持当前 contract，不承诺旧协议或旧数据库兼容。未经验证或不安全的边界会失败
+关闭。
+
+仓库使用不可变 `v1.0.0-rc.*` Git tag 标识 qualification candidate。Python distribution
+在预发布阶段仍保持 `0.1.0`，因此 Git RC tag 用于标识通过资格检查的源码 commit，并与
+package semantic version 有意分离。复现候选版本时必须使用最新 tag 及其精确 commit。
+
+项目不承诺普遍意义的分布式 exactly-once，不提供公开 control/A2A service，也尚未完成
+交互式 Web/TUI 产品。正式运行批准仍需要绑定精确 commit 的证据，包括绿色 CI、
+backup/restore 验证、transport 治理和计划中的 soak/acceptance 检查。

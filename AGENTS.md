@@ -15,6 +15,8 @@ protocols are subordinate to `AgentRuntime`.
   system actors and cannot be registered as ordinary Agents.
 - A2A and MCP remain adapters; protocol tasks are not authoritative workflow
   records.
+- Workspace grants and AG-UI events remain bounded transport/projection
+  records; LangGraph may implement an Agent runtime but never orchestration.
 - Preserve append-only audit history, immutable artifacts, explicit state
   transitions, and fail-closed security behavior.
 - Keep repository usage documentation in `README.md` and `README.zh-CN.md`;
@@ -23,7 +25,7 @@ protocols are subordinate to `AgentRuntime`.
 ## Commands
 
 ```bash
-uv sync --frozen
+uv sync --frozen --extra a2a --extra langgraph-agent
 uv run alembic upgrade head
 uv run pytest -q
 uv run mypy src tests
@@ -43,6 +45,7 @@ Use `researchctl --database <path>` for the local read-only control surface.
 
 ## Current state
 
-The Agent-first migrations and reference workflow are implemented. Before a
-release claim, require a green CI run tied to the exact commit and an immutable
-RC tag; keep unverified deployment qualification explicitly pending.
+The Agent collaboration core plus A2A v1, Workspace Delegation, AG-UI/SSE, and
+the optional LangGraph specialist pilot are implemented. Before a release
+claim, require a green CI run tied to the exact commit and an immutable RC tag;
+keep unverified operational qualification explicitly pending.
