@@ -40,7 +40,7 @@ from researchd.domain.enums import AgentAdapterKind, AgentTrustZone, Capability,
 from researchd.domain.ids import AgentId, AgentRuntimeId, DelegationId, InvocationId
 from researchd.executor.contracts import GrantedWorkOrder, SandboxSpec
 from researchd.storage.models import AgentInvocationRecord, AttemptRecord, WorkOrderRecord
-from test_orchestrator import _proposal, make_orchestrator
+from tests.integration.test_orchestrator import _proposal, make_orchestrator
 
 
 class FakeA2AClient:

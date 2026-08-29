@@ -567,3 +567,19 @@ class AgentInteractionRecord(Base):
     provider_request_id: Mapped[str | None] = mapped_column(String(256))
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
     completed_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+
+
+class CloudInteractionGovernanceRecord(Base):
+    """Required one-to-one governance snapshot for an external provider interaction."""
+
+    __tablename__ = "cloud_interaction_governance"
+    __table_args__ = (
+        Index("ix_cloud_governance_configuration", "provider_configuration_id", "created_at"),
+    )
+    interaction_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_interactions.interaction_id"), primary_key=True,
+    )
+    provider_configuration_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    provider_configuration_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    provider_configuration_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)

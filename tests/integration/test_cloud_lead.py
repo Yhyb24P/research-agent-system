@@ -9,6 +9,7 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from researchd.agents.cloud_lead import CloudLeadAdapter
@@ -22,9 +23,11 @@ from researchd.domain.enums import AttemptState, Capability, DataClassification,
 from researchd.domain.verification import VerificationResult
 from researchd.models.cloud import (
     CloudCallBudget,
+    CloudBudgetExceeded,
     CloudModelRequest,
     CloudModelResponse,
     CloudPricing,
+    CloudProviderConfiguration,
     CloudProviderUnavailable,
     CloudSchemaInvalid,
     CloudUsage,
@@ -32,7 +35,7 @@ from researchd.models.cloud import (
 from researchd.models.openai_compatible import OpenAICompatibleCloudModel
 from researchd.policy.engine import BudgetLimits, DeterministicPolicyEngine, PolicyRequest
 from researchd.storage.db import create_sqlite_engine, session_factory
-from researchd.storage.models import AgentInteractionRecord, ArtifactRecord, AttemptRecord, AuditEventRecord, ResearchRunRecord, WorkspaceRecord, WorkOrderRecord
+from researchd.storage.models import AgentInteractionRecord, ArtifactRecord, AttemptRecord, AuditEventRecord, CloudInteractionGovernanceRecord, ResearchRunRecord, WorkspaceRecord, WorkOrderRecord
 from researchd.storage.transitions import TransactionalTransitionService, TransitionPreconditionFailed
 from researchd.verifier.contracts import VerificationInputs
 from researchd.verifier.engine import VerifierEngine
@@ -122,10 +125,32 @@ def plan_json() -> str:
     return json.dumps({"proposal_id": "plan-proposal-1", "hypotheses": [], "proposed_work_orders": [], "risks": [], "required_evidence": []})
 
 
-def adapter(model: QueueCloudModel | OpenAICompatibleCloudModel, fixture: CloudFixture, *, requests: int = 3, retry_backoff: float = 0.25) -> CloudLeadAdapter:
+def provider_configuration(
+    model: QueueCloudModel | OpenAICompatibleCloudModel, *, requests: int = 3,
+    retry_backoff: float = 0.25,
+) -> CloudProviderConfiguration:
+    endpoint = getattr(model, "base_url", "https://fake-cloud.example")
+    timeout = float(getattr(model, "timeout_seconds", 60))
+    return CloudProviderConfiguration(
+        configuration_id="dq03-test-provider-v1", provider=model.provider_name,
+        endpoint=endpoint, account_id="test-account", project_id="test-project",
+        region="test-region", model=model.model_name, sdk_client="httpx-0.28.1",
+        request_timeout_seconds=timeout, retry_max_requests=requests,
+        retry_backoff_seconds=retry_backoff, retry_max_backoff_seconds=8,
+        retention_policy="store=false", training_opt_out=True, privacy_mode="test-isolated",
+        structured_output_mode="json-schema-strict",
+        token_accounting_source="provider-usage", cost_accounting_source="configured-pricing",
+    )
+
+
+def adapter(
+    model: QueueCloudModel | OpenAICompatibleCloudModel, fixture: CloudFixture, *,
+    requests: int = 3, retry_backoff: float = 0.25, max_cost_usd: Decimal = Decimal("10"),
+) -> CloudLeadAdapter:
     return CloudLeadAdapter(
         model, fixture.sessions, fixture.builder,
-        budget=CloudCallBudget(max_requests=requests, max_input_bytes=200_000, max_response_bytes=50_000, max_output_tokens=1000, max_total_tokens=10_000),
+        configuration=provider_configuration(model, requests=requests, retry_backoff=retry_backoff),
+        budget=CloudCallBudget(max_requests=requests, max_input_bytes=200_000, max_response_bytes=50_000, max_output_tokens=1000, max_total_tokens=10_000, max_cost_usd=max_cost_usd),
         pricing=CloudPricing(prompt_usd_per_million=Decimal("1.5"), completion_usd_per_million=Decimal("6")),
         retry_backoff_seconds=retry_backoff,
     )
@@ -183,6 +208,11 @@ def test_repair_success_accumulates_tokens_and_cost(fixture: CloudFixture) -> No
         record = session.get(AgentInteractionRecord, result.interaction_id)
         assert record is not None and record.status == "COMPLETED"
         assert record.bundle_sha256 and record.response_json == result.output.model_dump(mode="json")
+        governance = session.get(CloudInteractionGovernanceRecord, result.interaction_id)
+        assert governance is not None and governance.provider_configuration_id == "dq03-test-provider-v1"
+        stored_configuration = CloudProviderConfiguration.model_validate(governance.provider_configuration_json)
+        assert governance.provider_configuration_sha256 == stored_configuration.snapshot_sha256()
+        assert stored_configuration.account_id == "test-account" and stored_configuration.training_opt_out
         events = session.scalars(
             select(AuditEventRecord)
             .where(AuditEventRecord.entity_id == result.interaction_id)
@@ -191,6 +221,62 @@ def test_repair_success_accumulates_tokens_and_cost(fixture: CloudFixture) -> No
         assert [event.event_type for event in events] == [
             "CLOUD_INTERACTION_STARTED", "CLOUD_INTERACTION_FINISHED",
         ]
+
+    with pytest.raises(IntegrityError, match="configuration snapshot is immutable"):
+        with fixture.sessions.begin() as session:
+            governance = session.get(CloudInteractionGovernanceRecord, result.interaction_id)
+            assert governance is not None
+            governance.provider_configuration_id = "mutated"
+
+
+def test_provider_configuration_mismatch_rejected_before_egress(fixture: CloudFixture) -> None:
+    model = QueueCloudModel([plan_json()])
+    configuration = provider_configuration(model).model_copy(update={"model": "different-model"})
+    with pytest.raises(ValueError, match="does not match"):
+        CloudLeadAdapter(
+            model, fixture.sessions, fixture.builder, configuration=configuration,
+            budget=CloudCallBudget(max_requests=3),
+            pricing=CloudPricing(prompt_usd_per_million=Decimal("0"), completion_usd_per_million=Decimal("0")),
+        )
+    assert model.requests == []
+
+
+def test_cost_budget_exhaustion_is_persisted(fixture: CloudFixture) -> None:
+    model = QueueCloudModel(
+        [plan_json()], usage=CloudUsage(prompt_tokens=1_000_000, completion_tokens=1_000_000, total_tokens=2_000_000),
+    )
+    with pytest.raises(CloudBudgetExceeded, match="budget"):
+        asyncio.run(adapter(model, fixture, max_cost_usd=Decimal("0.01")).propose_plan(CloudContextSelection(run_id="run_cloud")))
+    with fixture.sessions() as session:
+        record = session.scalar(select(AgentInteractionRecord))
+        assert record is not None and record.status == "FAILED" and record.reason_code == "CLOUD_BUDGET_EXCEEDED"
+
+
+def test_request_cancellation_is_terminal_and_auditable(fixture: CloudFixture) -> None:
+    entered = asyncio.Event()
+
+    class BlockingModel:
+        provider_name = "fake-cloud"
+        model_name = "fake-structured-v1"
+
+        async def complete(self, request: CloudModelRequest) -> CloudModelResponse:
+            del request
+            entered.set()
+            await asyncio.Future()
+            raise AssertionError("unreachable")
+
+    async def cancel_call() -> None:
+        call = asyncio.create_task(adapter(BlockingModel(), fixture).propose_plan(CloudContextSelection(run_id="run_cloud")))  # type: ignore[arg-type]
+        await entered.wait()
+        call.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await call
+
+    asyncio.run(cancel_call())
+    with fixture.sessions() as session:
+        record = session.scalar(select(AgentInteractionRecord))
+        assert record is not None and record.status == "CANCELLED" and record.reason_code == "CLOUD_CANCELLED"
+        assert record.completed_at is not None
 
 
 def test_cloud_requested_forbidden_capability_is_structured_then_policy_denies(fixture: CloudFixture) -> None:

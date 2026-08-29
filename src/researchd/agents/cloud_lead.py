@@ -20,10 +20,11 @@ from researchd.models.cloud import (
     CloudModel,
     CloudModelRequest,
     CloudPricing,
+    CloudProviderConfiguration,
     CloudProviderUnavailable,
     CloudSchemaInvalid,
 )
-from researchd.storage.models import AgentInteractionRecord, AuditEventRecord
+from researchd.storage.models import AgentInteractionRecord, AuditEventRecord, CloudInteractionGovernanceRecord
 from researchd.storage.repositories import utc_now
 
 OutputT = TypeVar("OutputT", bound=BaseModel)
@@ -41,30 +42,49 @@ class CloudLeadAdapter:
 
     def __init__(
         self, model: CloudModel, sessions: sessionmaker[Session], context_builder: ContextBuilder, *,
-        budget: CloudCallBudget, pricing: CloudPricing,
+        configuration: CloudProviderConfiguration, budget: CloudCallBudget, pricing: CloudPricing,
         retry_backoff_seconds: float = 0.25, max_retry_backoff_seconds: float = 8.0,
     ) -> None:
         self.model = model
         self.sessions = sessions
         self.context_builder = context_builder
+        self.configuration = configuration
         self.budget = budget
         self.pricing = pricing
         if retry_backoff_seconds < 0 or max_retry_backoff_seconds < retry_backoff_seconds:
             raise ValueError("invalid cloud retry backoff bounds")
         self.retry_backoff_seconds = retry_backoff_seconds
         self.max_retry_backoff_seconds = max_retry_backoff_seconds
+        self._validate_configuration()
 
     async def propose_plan(self, selection: CloudContextSelection) -> CloudLeadResult[PlanProposal]:
-        return await self._invoke(self._build(selection), PlanProposal, "PLAN")
+        return await self._invoke(self._build(selection), PlanProposal, "PLAN", selection.invocation_id)
 
     async def propose_work_order(self, selection: CloudContextSelection) -> CloudLeadResult[WorkOrderProposal]:
-        return await self._invoke(self._build(selection), WorkOrderProposal, "WORK_ORDER")
+        return await self._invoke(self._build(selection), WorkOrderProposal, "WORK_ORDER", selection.invocation_id)
 
     async def request_evidence(self, selection: CloudContextSelection) -> CloudLeadResult[EvidenceRequest]:
-        return await self._invoke(self._build(selection), EvidenceRequest, "EVIDENCE_REQUEST")
+        return await self._invoke(self._build(selection), EvidenceRequest, "EVIDENCE_REQUEST", selection.invocation_id)
 
     async def review(self, selection: CloudContextSelection) -> CloudLeadResult[ReviewDecision]:
-        return await self._invoke(self._build(selection), ReviewDecision, "REVIEW")
+        return await self._invoke(self._build(selection), ReviewDecision, "REVIEW", selection.invocation_id)
+
+    def _validate_configuration(self) -> None:
+        if self.configuration.provider != self.model.provider_name or self.configuration.model != self.model.model_name:
+            raise ValueError("provider configuration does not match the selected provider/model")
+        if self.configuration.retry_max_requests != self.budget.max_requests:
+            raise ValueError("provider configuration retry limit does not match the call budget")
+        if (
+            self.configuration.retry_backoff_seconds != self.retry_backoff_seconds
+            or self.configuration.retry_max_backoff_seconds != self.max_retry_backoff_seconds
+        ):
+            raise ValueError("provider configuration retry policy does not match the adapter")
+        endpoint = getattr(self.model, "base_url", None)
+        if endpoint is not None and str(endpoint).rstrip("/") != self.configuration.endpoint.rstrip("/"):
+            raise ValueError("provider configuration endpoint does not match the adapter")
+        timeout = getattr(self.model, "timeout_seconds", None)
+        if timeout is not None and float(timeout) != self.configuration.request_timeout_seconds:
+            raise ValueError("provider configuration timeout does not match the adapter")
 
     def _build(self, selection: CloudContextSelection) -> CloudContextBundle:
         if not isinstance(selection, CloudContextSelection):
@@ -73,6 +93,7 @@ class CloudLeadAdapter:
 
     async def _invoke(
         self, bundle: CloudContextBundle, output_type: type[OutputT], purpose: str,
+        invocation_id: str | None,
     ) -> CloudLeadResult[OutputT]:
         serialized = serialize_cloud_bundle(bundle)
         if len(serialized) > self.budget.max_input_bytes:
@@ -81,7 +102,7 @@ class CloudLeadAdapter:
         created = utc_now()
         with self.sessions.begin() as session:
             session.add(AgentInteractionRecord(
-                interaction_id=interaction_id, run_id=bundle.run_id,
+                interaction_id=interaction_id, invocation_id=invocation_id, run_id=bundle.run_id,
                 work_order_id=bundle.work_order_id, role="cloud_lead", purpose=purpose,
                 provider=self.model.provider_name, model=self.model.model_name,
                 bundle_sha256=cloud_bundle_sha256(bundle), response_type=output_type.__name__,
@@ -89,12 +110,23 @@ class CloudLeadAdapter:
                 prompt_tokens=0, completion_tokens=0, total_tokens=0, cost_usd="0",
                 provider_request_id=None, created_at=created, completed_at=None,
             ))
+            session.add(CloudInteractionGovernanceRecord(
+                interaction_id=interaction_id,
+                provider_configuration_id=self.configuration.configuration_id,
+                provider_configuration_sha256=self.configuration.snapshot_sha256(),
+                provider_configuration_json=self.configuration.model_dump(mode="json"),
+                created_at=created,
+            ))
             session.add(AuditEventRecord(
                 event_id=f"evt_{uuid4().hex}", event_type="CLOUD_INTERACTION_STARTED",
                 run_id=bundle.run_id, entity_type="agent_interaction", entity_id=interaction_id,
                 actor_type="controller", actor_id="cloud-lead-adapter", timestamp=created,
                 correlation_id=bundle.work_order_id or bundle.run_id, causation_id=None,
-                metadata_json={"purpose": purpose, "bundle_sha256": cloud_bundle_sha256(bundle)},
+                metadata_json={
+                    "purpose": purpose, "bundle_sha256": cloud_bundle_sha256(bundle),
+                    "provider_configuration_id": self.configuration.configuration_id,
+                    "provider_configuration_sha256": self.configuration.snapshot_sha256(),
+                },
             ))
         attempts = 0
         prompt_tokens = 0
@@ -112,6 +144,14 @@ class CloudLeadAdapter:
             )
             try:
                 response = await self.model.complete(request)
+            except asyncio.CancelledError:
+                self._finish(
+                    interaction_id, status="CANCELLED", reason_code="CLOUD_CANCELLED",
+                    attempts=attempts, prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens, total_tokens=total_tokens,
+                    cost=self._cost(prompt_tokens, completion_tokens), provider_request_id=provider_request_id,
+                )
+                raise
             except (CloudProviderUnavailable, TimeoutError) as error:
                 retryable = isinstance(error, CloudProviderUnavailable) and error.retryable
                 if retryable and attempts < self.budget.max_requests:
@@ -119,7 +159,16 @@ class CloudLeadAdapter:
                     delay = provider_delay if provider_delay is not None else min(
                         self.retry_backoff_seconds * (2 ** (attempts - 1)), self.max_retry_backoff_seconds,
                     )
-                    await asyncio.sleep(delay)
+                    try:
+                        await asyncio.sleep(delay)
+                    except asyncio.CancelledError:
+                        self._finish(
+                            interaction_id, status="CANCELLED", reason_code="CLOUD_CANCELLED",
+                            attempts=attempts, prompt_tokens=prompt_tokens,
+                            completion_tokens=completion_tokens, total_tokens=total_tokens,
+                            cost=self._cost(prompt_tokens, completion_tokens), provider_request_id=provider_request_id,
+                        )
+                        raise
                     continue
                 self._finish(
                     interaction_id, status="WAITING_EXTERNAL", reason_code="CLOUD_UNAVAILABLE",
@@ -136,7 +185,7 @@ class CloudLeadAdapter:
                 response.usage.prompt_tokens + response.usage.completion_tokens,
             )
             cost = self._cost(prompt_tokens, completion_tokens)
-            if total_tokens > self.budget.max_total_tokens:
+            if total_tokens > self.budget.max_total_tokens or cost > self.budget.max_cost_usd:
                 self._finish(
                     interaction_id, status="FAILED", reason_code="CLOUD_BUDGET_EXCEEDED",
                     attempts=attempts, prompt_tokens=prompt_tokens,

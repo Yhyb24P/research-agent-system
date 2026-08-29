@@ -148,6 +148,12 @@ Run the Agent runtime and invocation lifecycle qualification matrix:
 uv run pytest -q tests/qualification/test_dq02_runtime_lifecycle.py
 ```
 
+Run the provider configuration and egress-governance software matrix:
+
+```bash
+uv run pytest -q tests/qualification/test_dq03_provider_egress.py
+```
+
 Integration tests are the executable reference workflow. The repository is a
 library/modular-monolith baseline; it does not yet ship a production daemon or
 browser application bootstrap.
