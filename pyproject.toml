@@ -18,6 +18,9 @@ a2a = [
 langgraph-agent = [
   "langgraph>=1.2,<2",
 ]
+qualification = [
+  "jsonschema>=4.23,<5",
+]
 
 [project.scripts]
 researchctl = "researchd.cli.main:entrypoint"

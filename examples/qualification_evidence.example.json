@@ -3,9 +3,10 @@
   "gate_id": "IQ03",
   "candidate_commit": "df461a601929be3bc4aed10190f9ac8a05664a61",
   "candidate_tag": "v1.0.0-rc.71",
-  "environment_fingerprint": "sha256:replace-with-real-environment-fingerprint",
+  "environment_fingerprint": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
   "started_at": "2026-08-29T00:00:00Z",
   "completed_at": "2026-08-29T00:01:00Z",
+  "producer": {"actor_type": "SYSTEM", "actor_id": "qualification-template", "implementation": "scripts/qualification_validate.py"},
   "tool_versions": {"python": "3.12.x"},
   "checks": [
     {"check_id": "IQ03-02", "severity": "HARD", "expected": "resume after Last-Event-ID without a gap", "observed": "replace with measured result", "result": "INCONCLUSIVE", "log_sha256": null, "notes": "Template only; not qualification evidence."}

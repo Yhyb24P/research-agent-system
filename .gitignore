@@ -2,7 +2,11 @@
 .pytest_cache/
 .mypy_cache/
 __pycache__/
-docs/
+# Qualification procedures are the only tracked documentation tree. Other
+# local notes under docs/ remain ignored unless governance is changed explicitly.
+docs/*
+!docs/qualification/
+!docs/qualification/**
 *.py[cod]
 release-manifest.json
 *-evidence.json

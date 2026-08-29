@@ -861,6 +861,9 @@ a2a = [
 langgraph-agent = [
     { name = "langgraph" },
 ]
+qualification = [
+    { name = "jsonschema" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -875,11 +878,12 @@ requires-dist = [
     { name = "a2a-sdk", marker = "extra == 'a2a'", specifier = ">=1.0,<2" },
     { name = "alembic", specifier = ">=1.16,<2" },
     { name = "httpx", specifier = ">=0.28,<1" },
+    { name = "jsonschema", marker = "extra == 'qualification'", specifier = ">=4.23,<5" },
     { name = "langgraph", marker = "extra == 'langgraph-agent'", specifier = ">=1.2,<2" },
     { name = "pydantic", specifier = ">=2.13,<3" },
     { name = "sqlalchemy", specifier = ">=2.0,<3" },
 ]
-provides-extras = ["a2a", "langgraph-agent"]
+provides-extras = ["a2a", "langgraph-agent", "qualification"]
 
 [package.metadata.requires-dev]
 dev = [

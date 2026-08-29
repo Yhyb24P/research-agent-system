@@ -31,6 +31,20 @@ Machine-readable planning and evidence objects are defined in:
 
 - `schemas/qualification_plan.schema.json`
 - `schemas/qualification_evidence.schema.json`
+- `schemas/qualification_acceptance.schema.json`
+
+Validate the schemas and cross-record semantics with:
+
+```bash
+uv sync --frozen --extra qualification
+uv run python scripts/qualification_validate.py \
+  --plan examples/qualification_plan.example.json \
+  --evidence examples/qualification_evidence.example.json \
+  --acceptance examples/qualification_acceptance.example.json
+```
+
+A successful validator run means that the records are internally consistent.
+It does not turn an `INCONCLUSIVE` or `FAILED` observation into a Gate pass.
 
 ## Non-negotiable rule
 

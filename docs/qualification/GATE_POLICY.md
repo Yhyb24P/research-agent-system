@@ -58,8 +58,10 @@ The following always block the relevant Gate:
 Each Gate ends with a signed or otherwise attributable acceptance record containing:
 
 ```text
+acceptance_id
 gate_id
 candidate_commit
+candidate_tag
 result
 hard_failures
 major_findings
@@ -70,3 +72,6 @@ notes
 ```
 
 The acceptance record is append-only. Corrections create a superseding record.
+It must validate against `schemas/qualification_acceptance.schema.json` and be
+checked together with the plan and referenced evidence by
+`scripts/qualification_validate.py`.

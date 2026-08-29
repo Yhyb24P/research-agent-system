@@ -22,7 +22,7 @@ Bind the release candidate identity, source, dependencies, qualification evidenc
 - SBOM generated from the committed lock;
 - no runtime database or environment evidence is accidentally committed;
 - release manifest contains no secret;
-- every referenced evidence bundle reports the same candidate commit or an explicit approved compatibility/requalification record;
+- every referenced evidence bundle reports the same candidate commit or an explicit approved requalification record;
 - provenance signing/attestation status is recorded.
 
 ## Acceptance

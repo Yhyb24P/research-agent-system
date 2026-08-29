@@ -11,7 +11,12 @@ Minimum fields:
   "evidence_id": "qe_...",
   "gate_id": "IQ01",
   "candidate_commit": "40-hex-sha",
+  "candidate_tag": "v1.0.0-rc.N",
   "environment_fingerprint": "sha256:...",
+  "producer": {
+    "actor_type": "HUMAN|SYSTEM|AGENT",
+    "actor_id": "stable actor identity"
+  },
   "started_at": "UTC timestamp",
   "completed_at": "UTC timestamp",
   "tool_versions": {},
@@ -46,3 +51,16 @@ Evidence collection must not weaken the system under test.
 ## Evidence immutability
 
 Once an evidence bundle is accepted, do not edit it. A rerun creates a new `evidence_id` and may supersede an older result. RQ uses an explicit list of accepted evidence IDs.
+
+## Acceptance object
+
+Evidence describes observations; it does not approve its own Gate. A separate
+record conforming to `schemas/qualification_acceptance.schema.json` binds the
+review decision to the exact candidate and accepted evidence IDs. The evidence
+producer and reviewer must be different actors. A correction creates a new
+`acceptance_id` and points to the superseded record.
+
+`scripts/qualification_validate.py` enforces schema validity plus candidate,
+dependency, result-severity, self-approval and cross-record consistency. A
+successful run proves contract consistency only; the acceptance result remains
+`PASSED`, `FAILED` or `INCONCLUSIVE` as recorded.

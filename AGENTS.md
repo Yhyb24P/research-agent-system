@@ -19,16 +19,21 @@ protocols are subordinate to `AgentRuntime`.
   records; LangGraph may implement an Agent runtime but never orchestration.
 - Preserve append-only audit history, immutable artifacts, explicit state
   transitions, and fail-closed security behavior.
-- Keep repository usage documentation in `README.md` and `README.zh-CN.md`;
-  do not add a tracked `docs/` tree unless the user explicitly requests it.
+- Keep repository usage documentation in `README.md` and `README.zh-CN.md`.
+  Tracked documentation under `docs/` is limited to `docs/qualification/`;
+  other documentation trees require an explicit governance change.
 
 ## Commands
 
 ```bash
-uv sync --frozen --extra a2a --extra langgraph-agent
+uv sync --frozen --extra a2a --extra langgraph-agent --extra qualification
 uv run alembic upgrade head
 uv run pytest -q
 uv run mypy src tests
+uv run python scripts/qualification_validate.py \
+  --plan examples/qualification_plan.example.json \
+  --evidence examples/qualification_evidence.example.json \
+  --acceptance examples/qualification_acceptance.example.json
 git diff --check
 ```
 
