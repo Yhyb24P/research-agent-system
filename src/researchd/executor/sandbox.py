@@ -9,7 +9,7 @@ from pathlib import Path, PurePosixPath
 from typing import Protocol
 
 from researchd.domain.enums import NetworkMode
-from researchd.executor.contracts import CommandResult, CommandSpec, SandboxSpec
+from researchd.executor.contracts import CommandResult, CommandSpec, SandboxMount, SandboxSpec
 
 
 class SandboxUnavailable(RuntimeError):
@@ -97,7 +97,9 @@ class BubblewrapBackend:
             argv += ["--ro-bind", "/lib64", "/lib64"]
         argv += ["--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp", "--bind", str(workspace), "/workspace"]
         targets = {"/workspace", "/usr", "/lib", "/lib64", "/proc", "/dev", "/tmp"}
-        for mount in sandbox.mounts:
+        mounts = list(sandbox.mounts)
+        mounts.extend(self._interpreter_runtime_mounts(sandbox, command))
+        for mount in mounts:
             source = Path(mount.source).resolve(strict=True)
             target = PurePosixPath(mount.target)
             if not target.is_absolute() or ".." in target.parts or str(target) in targets:
@@ -110,6 +112,37 @@ class BubblewrapBackend:
             argv += ["--setenv", name, value]
         argv += ["--chdir", str(cwd), "--", *command.argv]
         return argv
+
+    @staticmethod
+    def _interpreter_runtime_mounts(sandbox: SandboxSpec, command: CommandSpec) -> tuple[SandboxMount, ...]:
+        """Expose a symlinked runtime interpreter's standard library.
+
+        The venv is projected into ``/runtime``.  CI and many host venvs use
+        a symlink for ``bin/python`` whose target lives outside that mount;
+        without the target's installation root Python starts but cannot find
+        its standard library.  Only the resolved interpreter distribution is
+        mounted, read-only, and only when it is not already covered by the
+        base filesystem mounts.
+        """
+        if not command.argv or not command.argv[0].startswith("/runtime/"):
+            return ()
+        runtime_mount = next((mount for mount in sandbox.mounts if mount.target == "/runtime"), None)
+        if runtime_mount is None:
+            return ()
+        relative = PurePosixPath(command.argv[0]).relative_to(PurePosixPath("/runtime"))
+        candidate = Path(runtime_mount.source) / Path(relative)
+        if not candidate.is_symlink():
+            return ()
+        try:
+            resolved = candidate.resolve(strict=True)
+        except OSError:
+            return ()
+        if not resolved.is_file():
+            return ()
+        root = next((parent for parent in (resolved.parent, *resolved.parents) if (parent / "lib").is_dir()), None)
+        if root is None or root == Path("/") or root.is_relative_to(Path("/usr")):
+            return ()
+        return (SandboxMount(source=str(root), target=str(root), read_only=True),)
 
     def _collect(self, process: subprocess.Popen[bytes], command: CommandSpec, started: float) -> tuple[bytes, bytes, bool, bool]:
         assert process.stdout is not None and process.stderr is not None
