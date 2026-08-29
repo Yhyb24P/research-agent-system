@@ -13,10 +13,13 @@ from researchd.storage.models import AgentRecord, AgentRuntimeRecord
 class AgentRegistryService:
     """Trusted registry; discovery descriptors never become enabled profiles."""
 
+    _RESERVED_SYSTEM_ROLES = frozenset({"verifier", "policy", "orchestrator", "job-manager"})
+
     def __init__(self, sessions: sessionmaker[Session]) -> None:
         self.sessions = sessions
 
     def register_profile(self, profile: AgentProfile) -> None:
+        self._validate_profile(profile)
         now = datetime.now(UTC)
         record = AgentRecord(
             agent_id=str(profile.agent_id), display_name=profile.display_name,
@@ -35,6 +38,7 @@ class AgentRegistryService:
 
     def update_profile(self, profile: AgentProfile) -> None:
         """Replace a trusted profile and advance its immutable assignment version."""
+        self._validate_profile(profile)
         now = datetime.now(UTC)
         with self.sessions.begin() as session:
             row = session.get(AgentRecord, str(profile.agent_id))
@@ -110,6 +114,12 @@ class AgentRegistryService:
 
     def discovered_descriptor(self, descriptor: DiscoveredAgentDescriptor) -> DiscoveredAgentDescriptor:
         return descriptor
+
+    @classmethod
+    def _validate_profile(cls, profile: AgentProfile) -> None:
+        reserved = cls._RESERVED_SYSTEM_ROLES.intersection(profile.roles)
+        if reserved:
+            raise ValueError(f"reserved trusted role cannot be registered as Agent: {sorted(reserved)[0]}")
 
     def heartbeat(self, runtime_id: str, *, lease_seconds: int = 30) -> None:
         if lease_seconds <= 0:

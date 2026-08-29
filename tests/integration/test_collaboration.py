@@ -124,6 +124,13 @@ def test_skill_declaration_is_not_a_capability_grant() -> None:
     assert "workspace.write" not in candidate.skills
 
 
+def test_registry_rejects_reserved_verifier_role(database: tuple[Path, sessionmaker[Session]]) -> None:
+    _, sessions = database
+    registry = AgentRegistryService(sessions)
+    with pytest.raises(ValueError, match="reserved trusted role"):
+        registry.register_profile(AgentProfile(agent_id=AgentId("agent_fake_verifier"), display_name="Fake verifier", roles=("verifier",), trust_zone=AgentTrustZone.LOCAL_PRIVATE))
+
+
 def test_invocation_input_uses_purpose_discriminator() -> None:
     request = AgentInvocationRequest(
         invocation_id=InvocationId("inv_typed"), delegation_id=DelegationId("del_typed"),
