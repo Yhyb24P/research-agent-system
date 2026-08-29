@@ -83,7 +83,7 @@ intentionally kept outside the source baseline.
 
 ## Release status
 
-The repository publishes immutable `v0.1.0-rc*` candidates; use the latest
+The repository publishes immutable `v1.0.0-rc.*` candidates; use the latest
 Git tag for the exact release. The control plane and its
 reviewed software safeguards are implemented. This repository does not claim
 production Go: target-environment runtime/transport governance, off-host backup/restore,

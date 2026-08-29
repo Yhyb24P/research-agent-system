@@ -69,7 +69,7 @@ reference workflow；控制面提供 Agents、Runs、Delegations、Approvals、A
 
 ## 发布状态
 
-仓库通过不可变的 `v0.1.0-rc*` tag 发布候选版本，具体版本以最新 Git tag 为准。控制面及已审查的软件安全措施已经实现，但本仓库
+仓库通过不可变的 `v1.0.0-rc.*` tag 发布候选版本，具体版本以最新 Git tag 为准。控制面及已审查的软件安全措施已经实现，但本仓库
 不宣称已获得生产 Go。正式部署前仍需收集目标环境的 runtime/transport 治理、异机备份/恢复和
 长时间运行 soak 证据，并完成最终部署决策。
 
