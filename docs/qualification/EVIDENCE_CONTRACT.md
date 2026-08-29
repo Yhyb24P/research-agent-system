@@ -64,3 +64,8 @@ producer and reviewer must be different actors. A correction creates a new
 dependency, result-severity, self-approval and cross-record consistency. A
 successful run proves contract consistency only; the acceptance result remains
 `PASSED`, `FAILED` or `INCONCLUSIVE` as recorded.
+
+Every artifact entry uses a bundle-relative `path`; absolute paths and URI-only
+references are not part of the current contract. When artifacts are present,
+pass the candidate evidence directory with `--artifact-root`. The validator
+opens each file, rejects traversal or symlink escape, and recomputes its SHA-256.

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from collections.abc import Iterable
 from datetime import UTC, datetime
+import hashlib
 import json
 from pathlib import Path
 import subprocess
@@ -261,6 +262,51 @@ def _validate_supersession_chain(
     return set(superseded_by)
 
 
+def _validate_artifact_files(
+    evidence_items: Iterable[dict[str, Any]], *, artifact_root: Path | None
+) -> None:
+    artifacts = [
+        (evidence["evidence_id"], artifact)
+        for evidence in evidence_items
+        for artifact in evidence["artifacts"]
+    ]
+    if not artifacts:
+        return
+    if artifact_root is None:
+        raise QualificationValidationError("artifact_root is required when evidence references artifacts")
+    try:
+        root = artifact_root.resolve(strict=True)
+    except OSError as error:
+        raise QualificationValidationError("artifact_root is unavailable") from error
+    if not root.is_dir():
+        raise QualificationValidationError("artifact_root must be a directory")
+    for evidence_id, artifact in artifacts:
+        relative = Path(artifact["path"])
+        if relative.is_absolute() or ".." in relative.parts:
+            raise QualificationValidationError(f"artifact path is not bundle-relative: {artifact['path']}")
+        try:
+            resolved = (root / relative).resolve(strict=True)
+        except OSError as error:
+            raise QualificationValidationError(
+                f"artifact file is unavailable for {evidence_id}: {artifact['path']}"
+            ) from error
+        if not resolved.is_relative_to(root) or not resolved.is_file():
+            raise QualificationValidationError(f"artifact path escapes bundle root: {artifact['path']}")
+        digest = hashlib.sha256()
+        try:
+            with resolved.open("rb") as stream:
+                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                    digest.update(chunk)
+        except OSError as error:
+            raise QualificationValidationError(
+                f"cannot hash artifact for {evidence_id}: {artifact['path']}"
+            ) from error
+        if digest.hexdigest() != artifact["sha256"]:
+            raise QualificationValidationError(
+                f"artifact hash mismatch for {evidence_id}: {artifact['path']}"
+            )
+
+
 def verify_git_candidate(repository: Path, *, commit: str, tag: str) -> None:
     try:
         resolved_commit = subprocess.check_output(
@@ -283,6 +329,7 @@ def validate_bundle(
     expected_commit: str | None = None,
     expected_tag: str | None = None,
     repository: Path | None = None,
+    artifact_root: Path | None = None,
 ) -> dict[str, Any]:
     evidence_items = list(evidence)
     acceptance_items = list(acceptances)
@@ -306,6 +353,7 @@ def validate_bundle(
         id_field="evidence_id",
         supersedes_field="supersedes_evidence_id",
     )
+    _validate_artifact_files(evidence_items, artifact_root=artifact_root)
     acceptance_by_gate: dict[str, list[dict[str, Any]]] = {}
     acceptance_by_id: dict[str, dict[str, Any]] = {}
     acceptance_ids: set[str] = set()
@@ -369,6 +417,7 @@ def main() -> int:
     parser.add_argument("--expected-commit")
     parser.add_argument("--expected-tag")
     parser.add_argument("--repository", type=Path, help="verify that candidate_tag dereferences to candidate_commit")
+    parser.add_argument("--artifact-root", type=Path, help="root directory containing all referenced evidence artifacts")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     try:
@@ -379,6 +428,7 @@ def main() -> int:
             expected_commit=args.expected_commit,
             expected_tag=args.expected_tag,
             repository=args.repository,
+            artifact_root=args.artifact_root,
         )
     except QualificationValidationError as error:
         report = {"valid": False, "error": str(error)}

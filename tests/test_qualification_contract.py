@@ -1,4 +1,5 @@
 import copy
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -113,3 +114,58 @@ def test_bundle_rejects_missing_forked_and_stale_supersession_records() -> None:
             evidence=[original, successor_a],
             acceptances=[acceptance],
         )
+
+
+def test_bundle_recomputes_artifact_hash_and_rejects_unsafe_paths(tmp_path: Path) -> None:
+    plan = _example("qualification_plan.example.json")
+    evidence = _example("qualification_evidence.example.json")
+    artifact_root = tmp_path / "bundle"
+    artifact = artifact_root / "IQ03" / "trace.json"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_bytes(b"immutable trace\n")
+    evidence["artifacts"] = [{
+        "name": "trace",
+        "sha256": hashlib.sha256(artifact.read_bytes()).hexdigest(),
+        "path": "IQ03/trace.json",
+        "classification": "PROJECT_PRIVATE",
+    }]
+    report = validate_bundle(
+        plan=plan,
+        evidence=[evidence],
+        acceptances=[],
+        artifact_root=artifact_root,
+    )
+    assert report["valid"] is True
+
+    artifact.write_bytes(b"tampered\n")
+    with pytest.raises(QualificationValidationError, match="hash mismatch"):
+        validate_bundle(plan=plan, evidence=[evidence], acceptances=[], artifact_root=artifact_root)
+
+    evidence["artifacts"][0]["path"] = "../trace.json"
+    with pytest.raises(QualificationValidationError, match="not bundle-relative"):
+        validate_bundle(plan=plan, evidence=[evidence], acceptances=[], artifact_root=artifact_root)
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    outside_artifact = outside / "trace.json"
+    outside_artifact.write_bytes(b"outside\n")
+    (artifact_root / "escape").symlink_to(outside, target_is_directory=True)
+    evidence["artifacts"][0].update({
+        "path": "escape/trace.json",
+        "sha256": hashlib.sha256(outside_artifact.read_bytes()).hexdigest(),
+    })
+    with pytest.raises(QualificationValidationError, match="escapes bundle root"):
+        validate_bundle(plan=plan, evidence=[evidence], acceptances=[], artifact_root=artifact_root)
+
+
+def test_bundle_requires_artifact_root_for_referenced_artifacts() -> None:
+    plan = _example("qualification_plan.example.json")
+    evidence = _example("qualification_evidence.example.json")
+    evidence["artifacts"] = [{
+        "name": "trace",
+        "sha256": "0" * 64,
+        "path": "IQ03/trace.json",
+        "classification": "PROJECT_PRIVATE",
+    }]
+    with pytest.raises(QualificationValidationError, match="artifact_root is required"):
+        validate_bundle(plan=plan, evidence=[evidence], acceptances=[])
