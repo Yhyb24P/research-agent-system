@@ -13,39 +13,28 @@ Agent，而不是模型 API；模型、provider、协议和运行位置都只是
 这是一个 Python 3.12 模块化单体，核心是可信控制器：
 
 ```text
-用户 / CLI
-   │
-   ▼
-可信控制器 ── SQLite WAL + 审计轨迹
-   ├── 有界编排器
-   ├── 策略、预算和人工审批
-   ├── 本地执行器 ── Bubblewrap 沙箱
-   ├── 独立验证器 ── 内容寻址 Artifact
-   └── 模型 / provider 适配器
+Human / researchctl
+        │
+        ▼
+Agent 协作面
+Registry / Runtime / Delegation / Invocation / Context
+        │
+        ▼
+可信控制面
+Run / WorkOrder / Attempt / Policy / Approval / Verification / Audit
+        │
+        ▼
+Agent Runtime 适配器
+internal / process / HTTP / A2A
 ```
 
-模型只能提出计划、工作单和审查意见。控制器负责状态转换、能力授权、数据出境
+Agent 提出计划、承担工作单并返回审查意见。控制器负责状态转换、能力授权、数据出境
 分类、审批、验证和最终接受。A2A/MCP 与模型 provider 都是可替换边界，不能取代
 ResearchRun、WorkOrder、Attempt、Job、Verification 和 AuditEvent 等权威记录。
 
 协作面提供持久化的 `AgentProfile`、`AgentRuntime`、`Delegation` 和
 `AgentInvocation`。每次计划、执行和审查都归属到具体 Agent，并保留运行时快照；
 Agent skill 只是描述信息，可信 Capability 只能由策略系统授予。
-
-## 当前部署拓扑
-
-当前通过 `aweswitch qw` 启动 Qwen agent，由远程 workstation 推理节点承担模型推理：
-
-```text
-本机：控制面 + agent client ──调用──> 远程 Qwen workstation：推理 + GPU
-```
-
-- 本机不加载模型权重，也不负责推理，因此控制面不需要 GPU。
-- GPU 和模型权重属于远程 Qwen 推理节点。
-- 仓库另有 loopback-only 的 `VLLMLocalModel`，用于同机 vLLM 服务；这不是当前
-  远程 Qwen 主路径。
-- 远程推理 endpoint 的传输、鉴权和 provider 策略需要单独审查，不能自动视为本地
-  GPU 执行。
 
 ## 已实现功能
 
@@ -56,8 +45,7 @@ Agent skill 只是描述信息，可信 Capability 只能由策略系统授予�
 - 崩溃感知的 Job 提交、operation-id 幂等、取消和重启恢复协调。
 - Bubblewrap 无网络执行、环境清理、能力代理、worktree 隔离和有界资源限制。
 - 内容寻址 Artifact、来源校验、独立验证和追加式审计事件。
-- 确定性策略、人工审批、云调用预算、成本核算，以及针对超时/429/5xx 的分类有界重试。
-- 可选的 GPU durable admission lease；后端无法执行硬件约束时失败关闭。
+- 确定性策略、人工审批、有界 runtime 调用，以及针对临时适配器故障的分类重试。
 - SQLite 在线备份、CAS 引用一致性、校验和及恢复健康检查。
 - 工作流指标、SQLite/WAL/CAS 增长和备份新鲜度观测。
 
@@ -68,11 +56,12 @@ uv sync --frozen
 uv run alembic upgrade head
 uv run pytest -q
 uv run mypy src tests
+uv run researchctl --database researchd.db agent list
 ```
 
-当前仓库提供的是库和本地控制 API，尚未提供独立 daemon 入口。集成测试是可执行的
-reference workflow；本地控制 API 提供 Agents、Runs、Delegations、Approvals、
-Artifacts 以及事件/时间线查询。
+当前仓库提供库、loopback 本地控制 API 和只读 `researchctl` 命令。集成测试是可执行的
+reference workflow；控制面提供 Agents、Runs、Delegations、Approvals、Artifacts
+以及事件/时间线查询。修改状态的命令必须显式接入控制器实例。
 
 示例 DTO 和 JSON Schema 位于 [`examples/`](examples/) 与 [`schemas/`)；可执行的
 资格辅助工具位于 [`scripts/`](scripts/)。发布 manifest、运行态数据库和资格证据
@@ -80,15 +69,11 @@ Artifacts 以及事件/时间线查询。
 
 ## 发布状态
 
-仓库通过不可变的 `v1.0.0-rc.*` tag 发布候选版本，具体版本以最新 Git tag 为准。V1 控制面及已审查的软件安全措施已经实现，但本仓库
-不宣称已获得生产 Go。正式部署前仍需收集目标环境的 provider 治理、异机备份/恢复和
+仓库通过不可变的 `v0.1.0-rc*` tag 发布候选版本，具体版本以最新 Git tag 为准。控制面及已审查的软件安全措施已经实现，但本仓库
+不宣称已获得生产 Go。正式部署前仍需收集目标环境的 runtime/transport 治理、异机备份/恢复和
 长时间运行 soak 证据，并完成最终部署决策。
-
-只有在启用本地 GPU Job 或同机 vLLM 时才需要执行 GPU 硬件资格；当前远程 Qwen 控制面
-拓扑不要求本机 GPU。
 
 ## 明确边界
 
-项目不承诺普遍意义上的分布式 exactly-once，不提供公开 A2A/MCP server，不会因本地
-模型失败而自动切换云模型，也不会仅凭逻辑 admission lease 宣称硬件 GPU 隔离。未验证
-或不安全的边界会失败关闭，并要求显式部署决策。
+项目不承诺普遍意义上的分布式 exactly-once，不提供公开 A2A/MCP server，也不会在
+Agent 之间隐式 fallback。未验证或不安全的边界会失败关闭，并要求显式部署决策。
