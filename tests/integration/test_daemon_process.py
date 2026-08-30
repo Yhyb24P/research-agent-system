@@ -407,3 +407,62 @@ def test_generic_command_crash_blocks_ready_without_replaying(tmp_path: Path) ->
         assert rejected.value.code == 409
     finally:
         _terminate(daemon)
+
+
+def test_operator_resolution_unblocks_failed_daemon(tmp_path: Path) -> None:
+    database = tmp_path / "researchd.db"
+    state = tmp_path / "state"
+    port = _free_port()
+    config = tmp_path / "researchd.json"
+    config.write_text(json.dumps({
+        "database": str(database),
+        "artifact_root": str(tmp_path / "artifacts"),
+        "state_root": str(state),
+        "repositories": {}, "job_commands": {},
+        "host": "127.0.0.1", "port": port,
+    }))
+    base = [sys.executable, "-m", "researchd.daemon.cli", "--config", str(config)]
+    assert subprocess.run([*base, "init"], check=False).returncode == 0
+    crashed = subprocess.run([
+        sys.executable,
+        str(ROOT / "tests/fixtures/daemon_command_crasher.py"),
+        str(database),
+    ], check=False)
+    assert crashed.returncode == 74
+
+    failed = _start(base)
+    restarted: subprocess.Popen[str] | None = None
+    try:
+        health = _wait_for_health(failed, port)
+        assert health["state"] == "FAILED"
+        # The recovery channel stays reachable (and authenticated) while FAILED.
+        resolved = _post(port, "/api/daemon-commands/command_generic_crash/resolve", {
+            "command_id": "command_resolve_crash",
+            "resource_ref": {"run_id": "run_unknown_outcome"},
+        }, state)
+        assert resolved["status"] == "ACCEPTED"
+        resolved_resource = cast(dict[str, object], resolved["resource"])
+        assert resolved_resource["target_status"] == "REJECTED"
+        assert resolved_resource["target_reason_code"] == "target_missing"
+        pending = cast(
+            list[dict[str, object]],
+            _get(port, "/api/daemon-commands?status=ACCEPTED", state),
+        )
+        assert pending == []
+    finally:
+        _terminate(failed)
+
+    restarted = _start(base)
+    try:
+        health = _wait_for_health(restarted, port)
+        assert health["state"] == "READY"
+        assert health["ready"] is True
+        resolved_commands = cast(
+            list[dict[str, object]],
+            _get(port, "/api/daemon-commands?status=COMPLETED", state),
+        )
+        assert [item["command_id"] for item in resolved_commands] == [
+            "command_resolve_crash",
+        ]
+    finally:
+        _terminate(restarted)

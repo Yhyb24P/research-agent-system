@@ -6,8 +6,14 @@ import json
 from pathlib import Path
 from collections.abc import Callable
 from typing import Any
+from uuid import uuid4
 
 from researchd.api.control import LocalControlAPI
+from researchd.daemon.contracts import DaemonCommandResolveCommand
+from researchd.daemon.reconciliation import (
+    DaemonCommandResolutionService,
+    build_builtin_observers,
+)
 from researchd.storage.db import create_sqlite_engine, session_factory
 
 
@@ -39,6 +45,38 @@ def build_parser() -> argparse.ArgumentParser:
     run_sub.add_parser("list")
     run_status = run_sub.add_parser("status")
     run_status.add_argument("run_id")
+    receipt = subparsers.add_parser(
+        "daemon-command",
+        help="inspect and resolve durable daemon command receipts",
+    )
+    receipt_sub = receipt.add_subparsers(dest="receipt_command", required=True)
+    receipt_list = receipt_sub.add_parser("list", help="list durable command receipts")
+    receipt_list.add_argument(
+        "--status",
+        choices=["ACCEPTED", "COMPLETED", "REJECTED"],
+        help="filter by receipt status",
+    )
+    receipt_resolve = receipt_sub.add_parser(
+        "resolve",
+        help="converge an ACCEPTED receipt through command-specific observation",
+    )
+    receipt_resolve.add_argument("target_command_id")
+    receipt_resolve.add_argument(
+        "--resource-ref",
+        action="append",
+        metavar="KEY=VALUE",
+        help="family-specific resource identity, repeatable",
+    )
+    receipt_resolve.add_argument(
+        "--abandon",
+        action="store_true",
+        help="abandon an undetermined outcome (OPERATOR_ABANDONED)",
+    )
+    receipt_resolve.add_argument(
+        "--command-id",
+        dest="command_id",
+        help="stable identity for idempotent retries",
+    )
     return parser
 
 
@@ -60,8 +98,46 @@ def dispatch(api: LocalControlAPI, argv: list[str] | None = None) -> dict[str, A
     return _dispatch_args(api, build_parser().parse_args(argv))
 
 
-def main(api_factory: Callable[[], LocalControlAPI] | None = None) -> int:
-    args = build_parser().parse_args()
+def _parse_resource_ref(items: list[str] | None) -> dict[str, str]:
+    resource_ref: dict[str, str] = {}
+    for item in items or []:
+        key, separator, value = item.partition("=")
+        if not separator or not key:
+            raise SystemExit("--resource-ref expects KEY=VALUE")
+        resource_ref[key] = value
+    return resource_ref
+
+
+def _daemon_command(args: argparse.Namespace) -> int:
+    database = Path(args.database)
+    if not database.is_file():
+        raise SystemExit(f"controller database does not exist: {database}")
+    sessions = session_factory(create_sqlite_engine(database))
+    if args.receipt_command == "list":
+        payload = LocalControlAPI(sessions).daemon_commands(args.status)
+        print(json.dumps(payload, sort_keys=True, ensure_ascii=False))
+        return 0
+    command = DaemonCommandResolveCommand(
+        command_id=args.command_id or f"resolve_{uuid4().hex}",
+        actor_type="HUMAN",
+        actor_id="researchctl",
+        target_command_id=args.target_command_id,
+        resource_ref=_parse_resource_ref(args.resource_ref),
+        abandon=args.abandon,
+    )
+    service = DaemonCommandResolutionService(sessions, build_builtin_observers(sessions))
+    result = service.resolve(command)
+    print(json.dumps(result.model_dump(mode="json"), sort_keys=True, ensure_ascii=False))
+    return 0 if result.status == "ACCEPTED" else 1
+
+
+def main(
+    api_factory: Callable[[], LocalControlAPI] | None = None,
+    argv: list[str] | None = None,
+) -> int:
+    args = build_parser().parse_args(argv)
+    if args.command == "daemon-command":
+        return _daemon_command(args)
     if api_factory is None:
         database = Path(args.database)
         if not database.is_file():

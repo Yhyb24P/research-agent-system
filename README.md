@@ -244,7 +244,13 @@ state is resolved.
 uv run researchctl --database researchd.db run list
 uv run researchctl --database researchd.db agent list
 uv run researchctl --database researchd.db events <run-id> --after <stream-offset>
+uv run researchctl --database researchd.db daemon-command list --status ACCEPTED
+uv run researchctl --database researchd.db daemon-command resolve <command-id> --resource-ref run_id=<run-id>
 ```
+
+`daemon-command resolve` converges an interrupted `ACCEPTED` receipt through
+the same command-specific observation as the HTTP route; add `--abandon` to
+abandon an undetermined outcome and `--command-id` for idempotent retries.
 
 For a deliberately read-only projection without daemon mutations, embed only
 the local API:
@@ -291,13 +297,22 @@ internal command. An accepted dispatch returns `202` with the versioned
 | `POST` | `/api/runs/{run_id}/cancel` | — |
 | `POST` | `/api/work-orders/{work_order_id}/approve` | `grant_id` |
 | `POST` | `/api/work-orders/{work_order_id}/human-decision` | `action` (`abort` or `revise`; `revise` requires `objective`) |
+| `POST` | `/api/daemon-commands/{command_id}/resolve` | `resource_ref` (family-specific key/value pairs), `abandon` (optional) |
 
 Migration `0021` reserves a durable generic receipt before dispatch. Reusing
 the same command identity and request replays its completed or rejected result
 without repeating the side effect; reusing the identity with different input
 is rejected. A receipt left `ACCEPTED` by an interrupted dispatch is never
 replayed automatically: it remains visible through `/api/daemon-commands` and
-blocks READY until an operator reconciliation mechanism resolves it.
+blocks READY until the operator converges it. The recovery channel is
+`POST /api/daemon-commands/{command_id}/resolve` (or `researchctl
+daemon-command resolve`): a command-specific observer first observes the
+family's authoritative state, and the operator may only abandon an
+undetermined outcome (`OPERATOR_ABANDONED`) — there is no free-form terminal
+override. The target receipt, the resolution receipt and the audit events
+commit in one transaction, and a terminal target can only be replayed, never
+re-resolved. The route stays reachable while the daemon is FAILED, but still
+requires the Bearer token.
 
 The local token authenticates the owner client while server-side actor binding
 prevents payload attribution. This is the PX00 MVP boundary; later native peer

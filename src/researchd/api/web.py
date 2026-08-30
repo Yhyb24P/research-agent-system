@@ -14,6 +14,8 @@ from researchd.api.agui import AGUIProjectionAdapter
 from researchd.api.control import LocalControlAPI
 from researchd.daemon.runtime import ResearchDaemon
 from researchd.daemon.contracts import (
+    DaemonCommandResolveCommand,
+    ExternalDaemonCommandResolveRequest,
     ExternalHumanDecisionRequest,
     ExternalRunCancelRequest,
     ExternalWorkOrderApproveRequest,
@@ -21,6 +23,7 @@ from researchd.daemon.contracts import (
     RunCancelCommand,
     WorkOrderApproveCommand,
 )
+from researchd.daemon.reconciliation import DaemonCommandResolutionService
 from researchd.domain.base import DomainModel
 from researchd.domain.ids import RuntimeSessionId
 from researchd.runtime_sessions.contracts import (
@@ -102,11 +105,13 @@ class ControlCommandRouter:
         *,
         human_actor_id: str = "local-control-client",
         launch_profiles: RuntimeLaunchProfileAuthority | None = None,
+        resolution: DaemonCommandResolutionService | None = None,
     ) -> None:
         self.api = api
         self.daemon = daemon
         self.human_actor_id = human_actor_id
         self.launch_profiles = launch_profiles
+        self.resolution = resolution
 
     async def post(self, path: str, payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
         parts = [unquote(item) for item in urlparse(path).path.split("/") if item]
@@ -177,6 +182,17 @@ class ControlCommandRouter:
                 objective=decision_request.objective,
             )
             return await self._execute(decision_command)
+        if len(parts) == 4 and parts[:2] == ["api", "daemon-commands"] and parts[3] == "resolve":
+            resolve_request = ExternalDaemonCommandResolveRequest.model_validate(payload)
+            resolve_command = DaemonCommandResolveCommand(
+                command_id=resolve_request.command_id,
+                actor_type="HUMAN",
+                actor_id=self.human_actor_id,
+                target_command_id=parts[2],
+                resource_ref=resolve_request.resource_ref,
+                abandon=resolve_request.abandon,
+            )
+            return self._resolve(resolve_command)
         return 404, {"error": "unknown command"}
 
     async def _execute(self, command: DomainModel) -> tuple[int, dict[str, Any]]:
@@ -187,6 +203,16 @@ class ControlCommandRouter:
             result = await result
         if not isinstance(result, BaseModel):
             raise TypeError("daemon command result must be a typed model")
+        response = result.model_dump(mode="json")
+        return (409 if response.get("status") == "REJECTED" else 202), response
+
+    def _resolve(self, command: DaemonCommandResolveCommand) -> tuple[int, dict[str, Any]]:
+        # Narrow recovery channel: it is deliberately reachable while the
+        # daemon is non-ready, because an unknown receipt is what blocks READY.
+        # It stays behind the same Bearer authentication as every other route.
+        if self.resolution is None:
+            raise RuntimeError("receipt resolution is not configured")
+        result = self.resolution.resolve(command)
         response = result.model_dump(mode="json")
         return (409 if response.get("status") == "REJECTED" else 202), response
 
@@ -202,9 +228,15 @@ def make_handler(
     *,
     control_token: str | None = None,
     launch_profiles: RuntimeLaunchProfileAuthority | None = None,
+    resolution: DaemonCommandResolutionService | None = None,
 ) -> type[BaseHTTPRequestHandler]:
     router = ControlResourceRouter(api)
-    commands = ControlCommandRouter(api, daemon, launch_profiles=launch_profiles)
+    commands = ControlCommandRouter(
+        api,
+        daemon,
+        launch_profiles=launch_profiles,
+        resolution=resolution,
+    )
     projection = AGUIProjectionAdapter(api)
 
     class Handler(BaseHTTPRequestHandler):
@@ -326,6 +358,7 @@ def serve_local_control(
     port: int = 8788,
     control_token: str | None = None,
     launch_profiles: RuntimeLaunchProfileAuthority | None = None,
+    resolution: DaemonCommandResolutionService | None = None,
 ) -> ThreadingHTTPServer:
     if host not in {"127.0.0.1", "localhost", "::1"}:
         raise ValueError("control HTTP server must bind loopback")
@@ -338,6 +371,7 @@ def serve_local_control(
             daemon,
             control_token=control_token,
             launch_profiles=launch_profiles,
+            resolution=resolution,
         ),
     )
     return server

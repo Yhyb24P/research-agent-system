@@ -256,6 +256,19 @@ The productization branch now contains the first LP01/LP02 foundation:
   excluded from database, audit, backup, inspect and Agent context surfaces.
   Migration `0022` also closes the public launch-spec surface with a
   server-owned RuntimeLaunchProfile and persisted resolved-spec/hash snapshot.
+- PX00 operator reconciliation: an interrupted `ACCEPTED` generic receipt no
+  longer wedges the daemon. A narrow, authenticated recovery route
+  `POST /api/daemon-commands/{command_id}/resolve` stays reachable while the
+  daemon is FAILED (it bypasses the readiness gate but keeps Bearer-token
+  authentication and persists the operator command identity). A
+  command-specific observer first observes the family's authoritative state;
+  the operator may only abandon an undetermined outcome
+  (`OPERATOR_ABANDONED`) — there is no free-form terminal override. The
+  target receipt, the resolution receipt and the audit events commit in one
+  transaction, so a crash can never leave a resolution half-applied, and a
+  terminal target can only be replayed, never re-resolved to a different
+  result. `researchctl daemon-command list/resolve` offers the same channel
+  offline against the SQLite database.
 
 产品化分支现已实现首批 LP01/LP02 基础：持久化运行实例和类型化命令凭证、拒绝
 PID 复用的 PROCESS supervisor、受限 REMOTE_HTTP attach、先 intent 后副作用的审计
@@ -283,6 +296,14 @@ HUMAN actor，调用方自报的 `SYSTEM` 或 actor attribution 会在派发前�
 和 mutation 都在路由前认证。凭据不会进入数据库、审计、备份、inspect 或 Agent context。
 Migration `0022` 还以 server-owned RuntimeLaunchProfile 和持久化的解析规格/hash snapshot
 关闭了公开 launch-spec 输入面。
+PX00 operator 回执协调：中断遗留的 `ACCEPTED` 通用回执不再永久卡死 daemon。一条窄的、
+带认证的恢复路由 `POST /api/daemon-commands/{command_id}/resolve` 在 daemon FAILED 时
+仍然可达（绕过 readiness gate，但保留 Bearer token 认证，并持久化 operator 命令身份）。
+命令族专属 observer 先观察权威状态；operator 只能放弃无法判定的结果
+（`OPERATOR_ABANDONED`），不存在自由改写终态的入口。目标回执、resolution 回执与审计
+事件在同一事务提交，crash 不可能留下半应用的 resolution；已终态的目标只能重放，
+不能被再次解析出不同结果。`researchctl daemon-command list/resolve` 提供同一通道的
+离线 SQLite 入口。
 
 This is still an implementation milestone, not completion of the productized
 launcher. The daily `research` client and LP03 managed Agent pilot remain open.
@@ -307,6 +328,7 @@ the frozen requirements. The current evidence is:
 | every existing HTTP mutation crosses `ResearchDaemon.execute()` | PASS | run cancel, work-order approve and human-decision routes dispatch typed commands through the daemon readiness gate (`api/web.py`, gate tests) |
 | versioned accepted/rejected result envelope for every command family | PASS | `daemon/contracts.py`, `DaemonCommandDispatcher` and envelope assertions in daemon web/AG-UI tests |
 | durable generic command receipt with idempotency persistence | PASS | migration `0021`, `DurableDaemonCommandService`, `/api/daemon-commands`, replay/conflict tests and independent-process crash-window test |
+| explicit operator resolution command for interrupted generic receipts | PASS | `daemon/reconciliation.py` (command-family observers, atomic convergence, guarded UPDATE), non-ready-reachable authenticated `POST /api/daemon-commands/{id}/resolve` in `api/web.py`, `researchctl daemon-command list/resolve`, observer/idempotency/conflict tests in `tests/integration/test_daemon_resolution.py` and the failed-daemon recovery test in `tests/integration/test_daemon_process.py` |
 | Workspace, ResearchTask, Approval and Backup typed command families | OPEN | not yet implemented at the daemon boundary |
 
 Therefore LP02's durable runtime/supervision slice is implemented, while LP01
@@ -314,18 +336,16 @@ as a complete trusted mutation host is **not frozen complete**. The shared
 command/result contract, the migration of the existing HTTP mutations through
 the readiness gate, and the real Orchestrator/policy/approval injection into
 the composition root are done; the remaining gaps are the Workspace,
-ResearchTask, Approval and Backup typed command families, an explicit operator
-resolution command for interrupted generic receipts, a real
+ResearchTask, Approval and Backup typed command families, a real
 `VerificationDriver` wiring, and the cloud/executor Agent adapters (LP03/LP04).
 LP03 must not paper over these LP01 gaps with a pilot-only bypass. The next
-implementation order is: the remaining typed command families and operator
-reconciliation path plus the verification driver, then the managed Agent
-pilot.
+implementation order is: the remaining typed command families plus the
+verification driver, then the managed Agent pilot.
 
 审计结论：LP02 的持久化运行实例与 supervision 切片已经实现；LP01 作为完整可信
 mutation host 尚未冻结完成。统一命令合同、现有 HTTP mutation 经 readiness gate 的迁移，
 以及组合根中真实 Orchestrator/Policy/Approval 的注入均已完成；剩余缺口为 Workspace、
-ResearchTask、Approval、Backup 类型化命令族、中断后通用回执的显式 operator resolution
-命令、真实 `VerificationDriver` 接线，以及 cloud/executor Agent adapter（LP03/LP04）。
-LP03 不得用 pilot 专用旁路掩盖这些缺口；下一步顺序为：实现剩余类型化命令族与 operator
-reconciliation 路径、接通验证 driver，最后进入 pilot。
+ResearchTask、Approval、Backup 类型化命令族、真实 `VerificationDriver` 接线，以及
+cloud/executor Agent adapter（LP03/LP04）。
+LP03 不得用 pilot 专用旁路掩盖这些缺口；下一步顺序为：实现剩余类型化命令族、接通验证
+driver，最后进入 pilot。

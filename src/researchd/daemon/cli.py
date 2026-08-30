@@ -67,6 +67,7 @@ def main(argv: list[str] | None = None) -> int:
         application.api,
         daemon=application.daemon,
         launch_profiles=application.launch_profiles,
+        resolution=application.resolution,
         host=config.host,
         port=config.port,
         control_token=control_token,

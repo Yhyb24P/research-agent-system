@@ -17,6 +17,10 @@ from researchd.collaboration.registry import AgentRegistryService
 from researchd.collaboration.selector import AgentSelector
 from researchd.daemon.dispatcher import DaemonCommandDispatcher
 from researchd.daemon.command_service import DurableDaemonCommandService
+from researchd.daemon.reconciliation import (
+    DaemonCommandResolutionService,
+    build_builtin_observers,
+)
 from researchd.daemon.runtime import ResearchDaemon
 from researchd.daemon.startup import build_startup_barrier
 from researchd.domain.base import DomainModel
@@ -130,6 +134,7 @@ class DaemonApplication:
     daemon: ResearchDaemon
     api: LocalControlAPI
     launch_profiles: RuntimeLaunchProfileService
+    resolution: DaemonCommandResolutionService
 
 
 def compose_daemon(config: DaemonConfig) -> DaemonApplication:
@@ -196,11 +201,13 @@ def compose_daemon(config: DaemonConfig) -> DaemonApplication:
     api = LocalControlAPI(sessions, orchestrator)
     dispatcher = DaemonCommandDispatcher(supervisor, api)
     daemon = ResearchDaemon(barrier, DurableDaemonCommandService(sessions, dispatcher))
+    resolution = DaemonCommandResolutionService(sessions, build_builtin_observers(sessions))
     return DaemonApplication(
         config=config,
         daemon=daemon,
         api=api,
         launch_profiles=launch_profiles,
+        resolution=resolution,
     )
 
 

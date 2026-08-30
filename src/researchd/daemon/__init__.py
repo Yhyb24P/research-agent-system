@@ -5,6 +5,10 @@ from researchd.daemon.command_service import (
     DaemonCommandConflict,
     DurableDaemonCommandService,
 )
+from researchd.daemon.reconciliation import (
+    DaemonCommandResolutionService,
+    build_builtin_observers,
+)
 from researchd.daemon.startup import StartupBarrier, StartupPhase, StartupReport
 from researchd.daemon.composition import (
     DaemonApplication,
@@ -15,8 +19,9 @@ from researchd.daemon.composition import (
 
 __all__ = [
     "DaemonApplication",
-    "DaemonConfig",
     "DaemonCommandConflict",
+    "DaemonCommandResolutionService",
+    "DaemonConfig",
     "DaemonNotReady",
     "DurableDaemonCommandService",
     "JobCommandConfig",
@@ -24,5 +29,6 @@ __all__ = [
     "StartupBarrier",
     "StartupPhase",
     "StartupReport",
+    "build_builtin_observers",
     "compose_daemon",
 ]

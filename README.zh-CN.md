@@ -221,7 +221,12 @@ snapshot、配置 inspect 或 Agent context。
 uv run researchctl --database researchd.db run list
 uv run researchctl --database researchd.db agent list
 uv run researchctl --database researchd.db events <run-id> --after <stream-offset>
+uv run researchctl --database researchd.db daemon-command list --status ACCEPTED
+uv run researchctl --database researchd.db daemon-command resolve <command-id> --resource-ref run_id=<run-id>
 ```
+
+`daemon-command resolve` 通过命令族专属观察收敛中断遗留的 `ACCEPTED` 回执，
+与 HTTP 路由同源；`--abandon` 用于放弃无法判定的结果，`--command-id` 支持幂等重试。
 
 如需明确不允许 daemon mutation 的只读投影，可只嵌入 local API：
 
@@ -264,11 +269,17 @@ HUMAN 身份，再构造内部命令。接受后的派发返回 `202` 以及带�
 | `POST` | `/api/runs/{run_id}/cancel` | — |
 | `POST` | `/api/work-orders/{work_order_id}/approve` | `grant_id` |
 | `POST` | `/api/work-orders/{work_order_id}/human-decision` | `action`（`abort` 或 `revise`；`revise` 必须带 `objective`） |
+| `POST` | `/api/daemon-commands/{command_id}/resolve` | `resource_ref`（命令族专属 key/value）、`abandon`（可选） |
 
 Migration `0021` 会在派发前预留通用持久化回执。同一命令身份和请求再次到达时，只重放
 已完成或已拒绝的结果，不重复执行副作用；用不同输入复用同一身份会被拒绝。若派发中断后
 回执仍为 `ACCEPTED`，系统绝不会自动重放；该回执会通过 `/api/daemon-commands` 保持可见，
-并阻止 daemon 进入 READY，直到后续的 operator reconciliation 机制明确处置。
+并阻止 daemon 进入 READY，直到 operator 将其收敛。恢复通道为
+`POST /api/daemon-commands/{command_id}/resolve`（或 `researchctl daemon-command resolve`）：
+命令族专属 observer 先观察权威状态，operator 只能放弃无法判定的结果
+（`OPERATOR_ABANDONED`），不存在自由改写终态的入口。目标回执、resolution 回执与审计
+事件在同一事务提交，已终态的目标只能重放、不能被再次解析出不同结果。该路由在 daemon
+FAILED 时仍然可达，但仍要求 Bearer token 认证。
 
 本地 token 负责认证 owner client，服务端 actor 绑定则阻止 payload 伪造 attribution；
 二者共同构成 PX00 MVP。未来可用 native peer credential 替换 token，而不改变内部命令权威。

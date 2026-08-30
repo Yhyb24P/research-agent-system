@@ -40,6 +40,13 @@ class ExternalHumanDecisionRequest(ExternalCommandRequest):
         return self
 
 
+class ExternalDaemonCommandResolveRequest(ExternalCommandRequest):
+    """Operator reconciliation intent; the target receipt comes from the path."""
+
+    resource_ref: dict[str, str] = Field(default_factory=dict)
+    abandon: bool = False
+
+
 class RunCancelCommand(DaemonCommand):
     run_id: str = Field(min_length=1, max_length=128)
 
@@ -61,6 +68,19 @@ class HumanDecisionCommand(DaemonCommand):
         return self
 
 
+class DaemonCommandResolveCommand(DaemonCommand):
+    """Operator reconciliation of an interrupted ACCEPTED receipt.
+
+    The outcome is derived from command-specific observation of the
+    authoritative state; ``abandon`` only applies when that observation is
+    undetermined and records an explicit operator decision.
+    """
+
+    target_command_id: str = Field(min_length=1, max_length=128)
+    resource_ref: dict[str, str] = Field(default_factory=dict)
+    abandon: bool = False
+
+
 class DaemonCommandResult(DomainModel):
     command_version: Literal[1] = 1
     command_id: str
@@ -72,8 +92,10 @@ class DaemonCommandResult(DomainModel):
 
 __all__ = [
     "DaemonCommand",
+    "DaemonCommandResolveCommand",
     "DaemonCommandResult",
     "ExternalCommandRequest",
+    "ExternalDaemonCommandResolveRequest",
     "ExternalHumanDecisionRequest",
     "ExternalRunCancelRequest",
     "ExternalWorkOrderApproveRequest",

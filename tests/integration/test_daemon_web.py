@@ -2,11 +2,16 @@ import asyncio
 from pathlib import Path
 import pytest
 from pydantic import ValidationError
+from sqlalchemy.orm import Session, sessionmaker
 
 from researchd.api.control import LocalControlAPI
 from researchd.api.web import ControlCommandRouter
 from researchd.daemon.contracts import DaemonCommandResult
-from researchd.daemon.runtime import DaemonNotReady, ResearchDaemon
+from researchd.daemon.reconciliation import (
+    DaemonCommandResolutionService,
+    build_builtin_observers,
+)
+from researchd.daemon.runtime import DaemonNotReady, DaemonState, ResearchDaemon
 from researchd.daemon.startup import StartupBarrier, StartupPhase
 from researchd.domain.base import DomainModel
 from researchd.runtime_sessions.contracts import (
@@ -204,3 +209,101 @@ def test_control_mutations_require_daemon(
 
     with pytest.raises(RuntimeError, match="requires researchd"):
         asyncio.run(router.post(path, payload))
+
+
+def _failed_barrier() -> StartupBarrier:
+    def action(phase: StartupPhase) -> None:
+        if phase is StartupPhase.AUDIT_STREAM_HEALTH:
+            raise RuntimeError("daemon command outcome requires operator reconciliation")
+
+    return StartupBarrier({phase: (lambda current=phase: action(current)) for phase in StartupPhase})
+
+
+def _no_dispatch(command: DomainModel) -> None:
+    raise AssertionError("readiness-gated dispatcher must not serve resolutions")
+
+
+def _seeded_resolution(tmp_path: Path) -> tuple[sessionmaker[Session], DaemonCommandResolutionService]:
+    from tests.integration.test_daemon_resolution import (
+        _seed_receipt,
+        _seed_run,
+        _sessions,
+    )
+
+    sessions = _sessions(tmp_path)
+    _seed_run(sessions, "run_web", state="CANCELLED", cancellation_requested=True)
+    _seed_receipt(sessions, "cmd_web_lost", "RunCancelCommand")
+    service = DaemonCommandResolutionService(sessions, build_builtin_observers(sessions))
+    return sessions, service
+
+
+def test_resolve_route_is_reachable_while_daemon_failed(tmp_path: Path) -> None:
+    sessions, service = _seeded_resolution(tmp_path)
+    daemon = ResearchDaemon(_failed_barrier(), _no_dispatch)
+    assert daemon.start().ready is False
+    router = ControlCommandRouter(LocalControlAPI(sessions), daemon, resolution=service)
+
+    status, payload = asyncio.run(router.post(
+        "/api/daemon-commands/cmd_web_lost/resolve",
+        {"command_id": "cmd_resolve_web", "resource_ref": {"run_id": "run_web"}},
+    ))
+
+    assert status == 202
+    assert payload["command_type"] == "DaemonCommandResolve"
+    assert payload["status"] == "ACCEPTED"
+    assert payload["resource"]["target_status"] == "COMPLETED"
+    assert payload["resource"]["target_command_id"] == "cmd_web_lost"
+    assert daemon.state is DaemonState.FAILED
+
+
+def test_resolve_route_rejects_terminal_and_missing_targets(tmp_path: Path) -> None:
+    sessions, service = _seeded_resolution(tmp_path)
+    daemon = ResearchDaemon(_failed_barrier(), _no_dispatch)
+    daemon.start()
+    router = ControlCommandRouter(LocalControlAPI(sessions), daemon, resolution=service)
+
+    asyncio.run(router.post(
+        "/api/daemon-commands/cmd_web_lost/resolve",
+        {"command_id": "cmd_resolve_first", "resource_ref": {"run_id": "run_web"}},
+    ))
+    status, payload = asyncio.run(router.post(
+        "/api/daemon-commands/cmd_web_lost/resolve",
+        {"command_id": "cmd_resolve_second", "resource_ref": {"run_id": "run_web"}},
+    ))
+    assert status == 409
+    assert payload["reason_code"] == "receipt_not_pending"
+
+    status, payload = asyncio.run(router.post(
+        "/api/daemon-commands/cmd_ghost/resolve",
+        {"command_id": "cmd_resolve_ghost", "resource_ref": {"run_id": "run_web"}},
+    ))
+    assert status == 409
+    assert payload["reason_code"] == "target_missing"
+
+
+def test_resolve_route_rejects_untrusted_request_fields(tmp_path: Path) -> None:
+    sessions, service = _seeded_resolution(tmp_path)
+    daemon = ResearchDaemon(_failed_barrier(), _no_dispatch)
+    daemon.start()
+    router = ControlCommandRouter(LocalControlAPI(sessions), daemon, resolution=service)
+    payload = {
+        "command_id": "cmd_resolve_forged",
+        "resource_ref": {"run_id": "run_web"},
+        "actor_type": "SYSTEM",
+        "actor_id": "forged-system",
+    }
+
+    with pytest.raises(ValidationError):
+        asyncio.run(router.post("/api/daemon-commands/cmd_web_lost/resolve", payload))
+
+
+def test_resolve_route_requires_resolution_service(tmp_path: Path) -> None:
+    sessions = session_factory(create_sqlite_engine(tmp_path / "unused.db"))
+    daemon = ResearchDaemon(_failed_barrier(), _no_dispatch)
+    router = ControlCommandRouter(LocalControlAPI(sessions), daemon)
+
+    with pytest.raises(RuntimeError, match="receipt resolution is not configured"):
+        asyncio.run(router.post(
+            "/api/daemon-commands/cmd_x/resolve",
+            {"command_id": "cmd_resolve_none", "resource_ref": {}},
+        ))
