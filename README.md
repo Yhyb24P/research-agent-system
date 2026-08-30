@@ -175,8 +175,10 @@ off-host and primary-loss drill required for DQ04 acceptance.
 Integration tests are the executable reference workflow. The repository now
 ships the concrete `researchd` composition root and CLI around the durable
 RuntimeSession/Supervisor services. The daily `research` client now covers
-the lifecycle surface (`init`, `status`, interactive entry); its first
-shell commands and the browser application bootstrap remain open.
+the lifecycle surface (`init`, `status`, interactive entry) and the first
+shell command batch (`status`, agent working set, `run list`,
+`task create`/`task cancel`, `msg`, `events watch`, `approve`, `reject`);
+the browser application bootstrap remains open.
 
 An embedding composition must register its trusted services and use
 `build_startup_barrier(...)`. The barrier verifies migration `0022` and live
@@ -267,7 +269,11 @@ document with reachability and readiness. Without a subcommand, `research`
 probes the daemon and, when none is reachable, spawns `researchd serve` as a
 child process that is terminated when the interactive shell exits. The shell
 is entered only after the daemon reports READY — a non-ready daemon is
-surfaced with its failed startup phase, never bypassed.
+surfaced with its failed startup phase, never bypassed. The first shell
+batch offers `status`, `agent list` / `agent use` / `agent remove`,
+`run list`, `task create`, `task cancel`, `msg`, `events watch`,
+`approve`, `reject` and `quit`; every command crosses the authenticated
+transport, and `agent remove` only clears the session-local working set.
 
 For a deliberately read-only projection without daemon mutations, embed only
 the local API:

@@ -236,7 +236,7 @@ def test_interactive_entry_enters_the_shell_of_a_ready_daemon(
         )
         assert code == 0
         assert any("interactive shell" in line for line in lines)
-        assert "unknown command: frobnicate" in lines
+        assert "parse error: unknown command: frobnicate" in lines
     finally:
         server.shutdown()
         server.server_close()

@@ -329,6 +329,15 @@ The productization branch now contains the first LP01/LP02 foundation:
   terminated when the interactive shell exits. The shell is entered only
   after the health probe reports READY — a FAILED or still-starting daemon
   is surfaced with its failed startup phase, never bypassed.
+- PX02-04 Line shell: the interactive entry now runs a line-oriented shell
+  with the first command batch — `status`, `agent list` / `agent use` /
+  `agent remove` (a session-local working set; the client never mutates
+  registered agents), `run list`, `task create`, `task cancel`, `msg`,
+  `events watch` (SSE follow, Ctrl-C stops), `approve`, `reject` and
+  `quit`. Lines parse through a strict parser (quoted arguments,
+  `--key value` options, per-command arity); every command crosses the
+  authenticated transport, and parse or transport errors are reported
+  without killing the shell.
 
 产品化分支现已实现首批 LP01/LP02 基础：持久化运行实例和类型化命令凭证、拒绝
 PID 复用的 PROCESS supervisor、受限 REMOTE_HTTP attach、先 intent 后副作用的审计
@@ -405,6 +414,13 @@ PX02-03 research lifecycle：`research init` 将 bootstrap 委托给受信
 （日志落 `<state_root>/daemon.log`），交互 shell 退出时终止该子进程。
 只有健康探测报告 READY 后才进入 shell——FAILED 或仍在启动中的 daemon
 会连同其失败阶段一起呈现，绝不被绕过。
+PX02-04 行式 shell：交互入口现为行式 shell，首批命令——`status`、
+`agent list`/`agent use`/`agent remove`（会话本地工作集；client 从不
+变更已注册 agent）、`run list`、`task create`、`task cancel`、`msg`、
+`events watch`（SSE follow，Ctrl-C 停止）、`approve`、`reject` 与
+`quit`。行经严格 parser 解析（引号参数、`--key value` 选项、逐命令
+参数个数校验）；每条命令都走认证 transport，解析或传输错误只报告、
+不终止 shell。
 
 This is still an implementation milestone, not completion of the productized
 launcher. The daily `research` client and LP03 managed Agent pilot remain open.

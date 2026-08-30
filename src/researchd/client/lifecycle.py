@@ -15,6 +15,7 @@ from pathlib import Path
 
 import httpx
 
+from researchd.client.shell import run_shell
 from researchd.client.transport import (
     ResearchClient,
     TransportError,
@@ -191,19 +192,16 @@ def interactive_entry(
                 print_fn(f"researchd is not ready: {error}")
                 return 1
         try:
-            load_owner_token(config.state_root)
+            token = load_owner_token(config.state_root)
         except ControlCredentialError as error:
             print_fn(f"cannot load the control credential: {error}")
             return 1
-        print_fn("research interactive shell; type quit to exit")
-        while True:
-            try:
-                line = input_fn().strip()
-            except EOFError:
-                break
-            if line in {"quit", "exit"}:
-                break
-            print_fn(f"unknown command: {line}")
+        client = ResearchClient(base_url_for(config), token)
+        try:
+            print_fn("research interactive shell; type quit to exit")
+            run_shell(client, input_fn=input_fn, print_fn=print_fn)
+        finally:
+            client.close()
         return 0
     finally:
         terminate_daemon(spawned)
