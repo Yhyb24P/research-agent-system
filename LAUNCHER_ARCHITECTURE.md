@@ -244,3 +244,34 @@ launcher. The daily `research` client and LP03 managed Agent pilot remain open.
 
 这仍是实现里程碑，不代表产品化 Launcher 已完成。日常 `research` client 和 LP03
 managed Agent pilot 仍未完成。
+
+## 11. LP01/LP02 completion audit / 完成度审计
+
+Audit date: **2026-08-30**. A green test suite is not used as a substitute for
+the frozen requirements. The current evidence is:
+
+| Requirement | Status | Authoritative evidence |
+|---|---|---|
+| exact schema check, DB/CAS sanity and eight ordered recovery phases | PASS | `daemon/startup.py`, migration `0020`, daemon integration tests |
+| non-ready mutation rejection and visible loopback health | PASS | `ResearchDaemon.execute`, `/api/health`, failed-start independent-process test |
+| unresolved runtime/workspace/worktree/job/invocation recovery blocks READY | PASS | fail-closed post-recovery checks in `daemon/startup.py` |
+| durable RuntimeSession and idempotent START/ATTACH/STOP receipts | PASS | migration `0020`, `runtime_sessions/service.py`, concurrency/replay tests |
+| PROCESS identity, PID-reuse rejection, restart reattach and crash windows | PASS | supervisor driver and independent-process restart/crash tests |
+| constrained REMOTE_HTTP attach through existing AgentRuntime | PASS | `RemoteHttpDriver`, registry endpoint checks and integration tests |
+| `researchd` owns existing orchestrator/policy/approval/backup command paths | OPEN | composition currently wires recovery authorities and RuntimeSession commands only |
+| every existing HTTP mutation crosses `ResearchDaemon.execute()` | OPEN | run cancellation and approval routes still call `LocalControlAPI` directly |
+| versioned accepted/rejected result envelope for every command family | OPEN | RuntimeSession routes currently return the resulting aggregate directly |
+| Workspace, ResearchTask, Approval and Backup typed command families | OPEN | not yet implemented at the daemon boundary |
+
+Therefore LP02's durable runtime/supervision slice is implemented, while LP01
+as a complete trusted mutation host is **not frozen complete**. LP03 must not
+paper over these LP01 gaps with a pilot-only bypass. The next implementation
+order is: shared command/result contracts, existing orchestrator/policy
+composition, migration of current mutations through the readiness gate, then
+the managed Agent pilot.
+
+审计结论：LP02 的持久化运行实例与 supervision 切片已经实现；LP01 作为完整可信
+mutation host 尚未冻结完成。当前 run cancel / approval 等 mutation 仍未统一经过
+`ResearchDaemon.execute()`，且 Workspace、ResearchTask、Approval、Backup 命令族与统一
+accepted/rejected result envelope 仍缺失。LP03 不得用 pilot 专用旁路掩盖这些缺口；
+应先统一命令合同、组合既有 Orchestrator/Policy，再迁移现有 mutation，最后进入 pilot。

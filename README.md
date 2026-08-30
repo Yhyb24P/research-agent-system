@@ -223,6 +223,11 @@ fails closed. An empty `job_commands` map intentionally disables job submission.
 prints its SHA256 and a non-secret projection: fixed command arguments are
 represented only by their count and are never echoed.
 
+If recovery leaves an unresolved RuntimeSession, workspace, worktree, job, or
+invocation, `researchd` remains running only to expose its non-ready health and
+read projections. Every daemon-routed mutation is rejected until the unsafe
+state is resolved.
+
 `researchctl` opens an existing database without constructing an orchestrator:
 
 ```bash

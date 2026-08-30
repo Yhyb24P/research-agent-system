@@ -5,8 +5,10 @@ import sys
 import time
 from pathlib import Path
 from typing import cast
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+
+import pytest
 
 from researchd.collaboration.contracts import AgentProfile, AgentRuntime
 from researchd.collaboration.registry import AgentRegistryService
@@ -41,10 +43,14 @@ def _wait_for_health(process: subprocess.Popen[str], port: int) -> dict[str, obj
         try:
             with urlopen(f"http://127.0.0.1:{port}/api/health", timeout=1) as response:
                 return cast(dict[str, object], json.load(response))
+        except HTTPError as error:
+            if error.code == 503:
+                return cast(dict[str, object], json.load(error))
+            raise
         except (URLError, TimeoutError, ConnectionError):
             time.sleep(0.05)
-    error = process.stderr.read() if process.stderr else ""
-    raise AssertionError(f"researchd failed before READY: {error}")
+    failure_output = process.stderr.read() if process.stderr else ""
+    raise AssertionError(f"researchd failed before READY: {failure_output}")
 
 
 def _post(port: int, path: str, payload: dict[str, object]) -> dict[str, object]:
@@ -235,12 +241,24 @@ def test_start_intent_crash_never_relaunches_uncertain_process(tmp_path: Path) -
         health = _wait_for_health(daemon, port)
         startup = cast(dict[str, object], health["startup"])
         phases = cast(list[dict[str, object]], startup["phases"])
-        assert phases[4]["affected_count"] == 1
+        assert health["state"] == "FAILED"
+        assert health["ready"] is False
+        assert phases[4]["status"] == "FAIL"
+        assert phases[4]["error_type"] == "RuntimeError"
         with urlopen(f"http://127.0.0.1:{port}/api/runtime-sessions") as response:
             session = json.load(response)[0]
         assert session["supervisor_state"] == "RECONCILIATION_REQUIRED"
         assert session["external_identity"] is None
         assert session["exit_reason"] == "missing_external_identity"
+        with pytest.raises(HTTPError) as rejected:
+            _post(port, "/api/runtime-sessions/start", {
+                "command_id": "command_must_be_rejected",
+                "runtime_session_id": "runtime_session_rejected",
+                "runtime_id": "runtime_crash_test",
+                "actor_type": "SYSTEM", "actor_id": "crash-test",
+                "launch_spec": {"argv": ["/usr/bin/true"], "cwd": str(tmp_path)},
+            })
+        assert rejected.value.code == 409
     finally:
         _terminate(daemon)
 

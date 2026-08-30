@@ -11,10 +11,19 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from researchd.backup import check_restored_snapshot
 from researchd.collaboration.invocation import InvocationService
-from researchd.domain.enums import InvocationStatus
+from researchd.domain.enums import InvocationStatus, JobState
 from researchd.executor.jobs import JobManager
 from researchd.executor.worktree import WorktreeManager
-from researchd.storage.models import AgentInvocationRecord
+from researchd.storage.models import (
+    AgentInvocationRecord,
+    AttemptWorktreeRecord,
+    JobRecord,
+    RuntimeSessionRecord,
+    WorkspaceGrantRecord,
+)
+from researchd.runtime_sessions.contracts import SupervisorState
+from researchd.executor.worktree import WorktreeState
+from researchd.workspace.contracts import CleanupState, WorkspaceGrantState
 from researchd.supervisor.runtime import RuntimeSupervisor
 from researchd.workspace.service import WorkspaceDelegationService
 
@@ -130,10 +139,18 @@ def build_startup_barrier(
             database,
             artifact_root,
         ),
-        StartupPhase.WORKSPACE_RECOVERY: workspace.recover_incomplete,
-        StartupPhase.WORKTREE_RECOVERY: lambda: worktrees.recover_incomplete(repositories),
-        StartupPhase.RUNTIME_RECONCILIATION: supervisor.reconcile_sessions,
-        StartupPhase.JOB_RECONCILIATION: jobs.reconcile,
+        StartupPhase.WORKSPACE_RECOVERY: lambda: recover_workspaces_safely(
+            sessions, workspace,
+        ),
+        StartupPhase.WORKTREE_RECOVERY: lambda: recover_worktrees_safely(
+            sessions, worktrees, repositories,
+        ),
+        StartupPhase.RUNTIME_RECONCILIATION: lambda: reconcile_runtimes_safely(
+            sessions, supervisor,
+        ),
+        StartupPhase.JOB_RECONCILIATION: lambda: reconcile_jobs_safely(
+            sessions, jobs,
+        ),
         StartupPhase.INVOCATION_RECONCILIATION: lambda: recover_invocations(
             sessions,
             invocations,
@@ -176,7 +193,72 @@ def recover_invocations(
     recovered: list[str] = []
     for run_id in run_ids:
         recovered.extend(invocations.recover_run(run_id))
+    with sessions() as session:
+        unresolved = session.scalar(select(AgentInvocationRecord.invocation_id).where(
+            AgentInvocationRecord.status == InvocationStatus.RUNNING.value,
+        ).limit(1))
+    if unresolved is not None:
+        raise RuntimeError("invocation recovery requires operator reconciliation")
     return tuple(recovered)
+
+
+def recover_workspaces_safely(
+    sessions: sessionmaker[Session],
+    workspace: WorkspaceDelegationService,
+) -> tuple[str, ...]:
+    recovered = workspace.recover_incomplete()
+    with sessions() as session:
+        unresolved = session.scalar(select(WorkspaceGrantRecord.workspace_grant_id).where(
+            (WorkspaceGrantRecord.state == WorkspaceGrantState.RECOVERING.value)
+            | (WorkspaceGrantRecord.cleanup_state == CleanupState.FAILED.value),
+        ).limit(1))
+    if unresolved is not None:
+        raise RuntimeError("workspace recovery left an unsafe grant")
+    return recovered
+
+
+def recover_worktrees_safely(
+    sessions: sessionmaker[Session],
+    worktrees: WorktreeManager,
+    repositories: Mapping[str, Path],
+) -> tuple[str, ...]:
+    recovered = worktrees.recover_incomplete(repositories)
+    with sessions() as session:
+        unresolved = session.scalar(select(AttemptWorktreeRecord.attempt_id).where(
+            AttemptWorktreeRecord.state == WorktreeState.CLEANUP_FAILED,
+        ).limit(1))
+    if unresolved is not None:
+        raise RuntimeError("worktree recovery left an unsafe worktree")
+    return recovered
+
+
+def reconcile_runtimes_safely(
+    sessions: sessionmaker[Session],
+    supervisor: RuntimeSupervisor,
+) -> tuple[object, ...]:
+    reconciled = supervisor.reconcile_sessions()
+    with sessions() as session:
+        unresolved = session.scalar(select(RuntimeSessionRecord.runtime_session_id).where(
+            RuntimeSessionRecord.supervisor_state
+            == SupervisorState.RECONCILIATION_REQUIRED.value,
+        ).limit(1))
+    if unresolved is not None:
+        raise RuntimeError("runtime recovery requires operator reconciliation")
+    return reconciled
+
+
+def reconcile_jobs_safely(
+    sessions: sessionmaker[Session],
+    jobs: JobManager,
+) -> tuple[object, ...]:
+    reconciled = tuple(jobs.reconcile())
+    with sessions() as session:
+        unresolved = session.scalar(select(JobRecord.job_id).where(
+            JobRecord.state == JobState.LOST.value,
+        ).limit(1))
+    if unresolved is not None:
+        raise RuntimeError("job recovery requires operator reconciliation")
+    return reconciled
 
 
 def verify_audit_stream(engine: Engine) -> None:

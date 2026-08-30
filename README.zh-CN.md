@@ -203,6 +203,10 @@ curl http://127.0.0.1:8788/api/health
 `validate` 只解析合同，不接触状态；`inspect` 还会输出配置 SHA256 和非 secret 投影，
 固定命令参数只显示数量，不回显内容。
 
+如果恢复后仍存在未解决的 RuntimeSession、workspace、worktree、job 或 invocation，
+`researchd` 只保持运行以暴露 non-ready health 和只读投影；所有经过 daemon 的 mutation
+都会继续被拒绝，直到不安全状态被解决。
+
 `researchctl` 会打开已有数据库，但不会构造 Orchestrator：
 
 ```bash

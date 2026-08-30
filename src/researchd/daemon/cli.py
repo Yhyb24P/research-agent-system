@@ -52,9 +52,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     application = compose_daemon(config)
-    report = application.daemon.start()
-    if not report.ready:
-        raise SystemExit("researchd startup barrier failed")
+    application.daemon.start()
     server = serve_local_control(
         application.api,
         daemon=application.daemon,
