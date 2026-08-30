@@ -181,7 +181,7 @@ shell command batch (`status`, agent working set, `run list`,
 the browser application bootstrap remains open.
 
 An embedding composition must register its trusted services and use
-`build_startup_barrier(...)`. The barrier verifies migration `0024` and live
+`build_startup_barrier(...)`. The barrier verifies migration `0025` and live
 DB/CAS state, then invokes the existing workspace, worktree, RuntimeSession,
 job, and invocation recovery paths in the frozen order. A failed or skipped
 phase leaves `ResearchDaemon` non-ready; callers cannot bypass that state with
@@ -271,8 +271,9 @@ controller process that remains independent when the interactive shell exits.
 The shell is entered only after the daemon reports READY — a non-ready daemon is
 surfaced with its failed startup phase, never bypassed. The first shell
 batch offers `status`, `agent list` / `agent use` / `agent remove`,
-`run list`, `task create`, `task cancel`, `msg`, `events watch`,
-`approve`, `reject` and `quit`; every command crosses the authenticated
+`run list`, `task create`, `task cancel`, `msg`, `handoff list` /
+`handoff accept` / `handoff reject`, `events watch`, `approve`, `reject` and
+`quit`; every command crosses the authenticated
 transport, and `agent remove` only clears the session-local working set.
 
 Managed PROCESS Agent invocation is resolved dynamically through the installed
@@ -479,7 +480,7 @@ package semantic version. Use the latest Git tag and its exact commit when
 reproducing a candidate.
 
 The repository does not claim universal distributed exactly-once execution, a
-public control/A2A service, or a completed interactive Web/TUI product.
+public control/A2A service, or a completed browser control tower.
 Operational release approval still requires evidence tied to the exact commit,
 including a green CI run, backup/restore validation, transport governance, and
 the intended soak/acceptance checks.

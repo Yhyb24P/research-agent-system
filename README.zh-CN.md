@@ -160,11 +160,12 @@ commit/tag。旧快照格式和旧数据库 schema 会被直接拒绝，不做�
 集成测试是当前可执行 reference workflow。仓库现已提供围绕持久化 RuntimeSession /
 Supervisor 的具体 `researchd` composition root 和 CLI；日常 `research` client 现已
 覆盖 lifecycle 面（`init`、`status`、交互入口）与首批 shell 命令（`status`、
-agent 工作集、`run list`、`task create`/`task cancel`、`msg`、`events watch`、
-`approve`、`reject`）；浏览器应用启动入口仍未完成。
+agent 工作集、`run list`、`task create`/`task cancel`、`msg`、`handoff list`/
+`handoff accept`/`handoff reject`、`events watch`、`approve`、`reject`）；浏览器
+应用启动入口仍未完成。
 
 嵌入式 composition 必须注册可信服务并使用 `build_startup_barrier(...)`。该屏障先验证
-migration `0024` 和实时 DB/CAS 状态，再按冻结顺序调用已有 workspace、worktree、
+migration `0025` 和实时 DB/CAS 状态，再按冻结顺序调用已有 workspace、worktree、
 RuntimeSession、job 和 invocation 恢复路径。任一阶段失败或跳过都会让
 `ResearchDaemon` 保持 non-ready；调用方不能用 free-text 或直接 SQL mutation 绕过。
 
@@ -415,5 +416,5 @@ Migration `0022` 为已有 `AgentRuntime` 增加一对一、server-owned 的
 package semantic version 有意分离。复现候选版本时必须使用最新 tag 及其精确 commit。
 
 项目不承诺普遍意义的分布式 exactly-once，不提供公开 control/A2A service，也尚未完成
-交互式 Web/TUI 产品。正式运行批准仍需要绑定精确 commit 的证据，包括绿色 CI、
+浏览器 control tower。正式运行批准仍需要绑定精确 commit 的证据，包括绿色 CI、
 backup/restore 验证、transport 治理和计划中的 soak/acceptance 检查。
