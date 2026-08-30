@@ -12,6 +12,7 @@ from researchd.api.control import LocalControlAPI
 from researchd.artifacts import ArtifactService, ContentAddressedArtifactStore
 from researchd.backup.commands import BackupCommandService
 from researchd.collaboration.delegation import DelegationService
+from researchd.collaboration.action_broker import AgentActionBroker
 from researchd.collaboration.gateway import CollaborationGateway
 from researchd.collaboration.heterogeneous import (
     HttpAgentClient,
@@ -225,6 +226,7 @@ def compose_daemon(
         command_limits=config.executor_command_limits,
         inline_output_bytes=0,
     )
+    action_broker = AgentActionBroker(sessions)
     catalog = AgentAdapterCatalog(sessions)
     catalog.register(
         AgentAdapterKind.PROCESS,
@@ -233,6 +235,7 @@ def compose_daemon(
             launch_profiles,
             agent_client or HttpxAgentClient(),
             capability_broker,
+            action_broker,
         ),
     )
     orchestrator = ResearchOrchestrator(

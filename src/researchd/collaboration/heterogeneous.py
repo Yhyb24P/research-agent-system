@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 from researchd.adapters.a2a.adapter import A2AAdapter
 from researchd.adapters.a2a.codec import A2ACodecError, decode_executor_result, encode_granted_work_order
+from researchd.collaboration.action_broker import AgentActionBroker, AgentMessageAction
 from researchd.collaboration.contracts import AgentHealth, AgentInvocationRequest, AgentInvocationResult, AgentRuntime, EvidenceInvocationInput, ExecuteInvocationInput, PlanInvocationInput, ReviewInvocationInput
 from researchd.domain.enums import InvocationStatus
 from researchd.domain.base import DomainModel
@@ -45,6 +46,11 @@ class ManagedAgentTurnRequest(DomainModel):
     invocation_id: str
     attempt_id: str
     request: LocalAgentRequest
+
+
+class ManagedAgentTurnResponse(DomainModel):
+    execution: LocalAgentResponse
+    agent_actions: tuple[AgentMessageAction, ...] = ()
 
 
 def _request_payload(request: AgentInvocationRequest) -> dict[str, Any] | None:
@@ -238,11 +244,13 @@ class ManagedProcessAgentAdapter:
         launch_profiles: RuntimeLaunchProfileService,
         client: HttpAgentClient,
         broker: CapabilityBroker,
+        action_broker: AgentActionBroker,
     ) -> None:
         self.sessions = sessions
         self.launch_profiles = launch_profiles
         self.client = client
         self.broker = broker
+        self.action_broker = action_broker
 
     def _require_live(self, runtime_id: object) -> str:
         profile = self.launch_profiles.resolve_process(str(runtime_id))
@@ -316,15 +324,17 @@ class ManagedProcessAgentAdapter:
             async def complete(inner_self, model_request: LocalAgentRequest) -> LocalAgentResponse:
                 del inner_self
                 try:
-                    response = await self.client.invoke(
+                    response = ManagedAgentTurnResponse.model_validate(await self.client.invoke(
                         endpoint,
                         ManagedAgentTurnRequest(
                             invocation_id=str(request.invocation_id),
                             attempt_id=work_order.attempt_id,
                             request=model_request,
                         ).model_dump(mode="json"),
-                    )
-                    return LocalAgentResponse.model_validate(response)
+                    ))
+                    for action in response.agent_actions:
+                        self.action_broker.submit_message(request.invocation_id, action)
+                    return response.execution
                 except Exception as error:
                     raise LocalModelUnavailable(type(error).__name__) from error
 

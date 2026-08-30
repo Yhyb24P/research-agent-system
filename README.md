@@ -308,6 +308,11 @@ for the projection-only workspace with Collab, Agents, Tasks, Approvals and
 System tabs. Refresh and layout state stay client-local; the TUI has no direct
 database or business-logic path.
 
+Agent-origin messages enter through `AgentActionBroker`. Managed turn responses
+contain only an action ID, content, purpose, classification and optional
+recipient/reply. The broker derives sender, run, WorkOrder, Delegation, Agent
+and runtime from the live Invocation and rejects stale leases or ownership.
+
 For a deliberately read-only projection without daemon mutations, embed only
 the local API:
 

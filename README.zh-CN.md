@@ -272,6 +272,11 @@ reply/delegation/invocation 关联。展示投影会遮蔽 `LOCAL_ONLY` 与 `SEC
 包含 Collab、Agents、Tasks、Approvals、System 的只读投影工作区。刷新与布局
 状态仅存在于 client；TUI 不直连数据库，也不承载业务逻辑。
 
+Agent-origin message 统一进入 `AgentActionBroker`。managed turn response 只含
+action ID、内容、purpose、classification 及可选 recipient/reply；Broker 从
+live Invocation 推导 sender、run、WorkOrder、Delegation、Agent 与 runtime，
+并拒绝过期 lease 或失效 ownership。
+
 如需明确不允许 daemon mutation 的只读投影，可只嵌入 local API：
 
 ```bash

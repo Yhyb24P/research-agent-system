@@ -6,7 +6,7 @@ import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
-from researchd.collaboration.heterogeneous import ManagedAgentTurnRequest
+from researchd.collaboration.heterogeneous import ManagedAgentTurnRequest, ManagedAgentTurnResponse
 from researchd.domain.enums import Capability
 from researchd.executor.contracts import CapabilityRequest, LocalAgentResponse
 
@@ -30,7 +30,7 @@ class PilotCoderHandler(BaseHTTPRequestHandler):
                 raise ValueError("invalid request size")
             payload = json.loads(self.rfile.read(length))
             turn = ManagedAgentTurnRequest.model_validate(payload)
-            response = self._complete(turn)
+            response = ManagedAgentTurnResponse(execution=self._complete(turn))
         except (ValueError, json.JSONDecodeError) as error:
             self._json(422, {"error": type(error).__name__})
             return
