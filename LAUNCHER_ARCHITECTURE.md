@@ -301,6 +301,15 @@ The productization branch now contains the first LP01/LP02 foundation:
   identity, so a replayed command maps to the same session. The arbitrary
   public `/api/runtime-sessions/start` and `/api/runtime-sessions/attach`
   routes are disabled; the per-session stop route remains.
+- PX01-04 Agent aliases: `AgentAliasService` resolves an operator-typed
+  alias through the trusted `AgentProfile.labels["cli_alias"]` label.
+  Case normalization is documented and enforced: both the stored label
+  and the queried alias are stripped and lower-cased before comparison,
+  so alias matching is case- and surrounding-whitespace-insensitive.
+  Only enabled profiles participate; when two or more enabled profiles
+  claim the same normalized alias, resolution is rejected as ambiguous
+  (`AgentAliasAmbiguous`), and an unclaimed alias raises
+  `AgentAliasNotFound`.
 
 产品化分支现已实现首批 LP01/LP02 基础：持久化运行实例和类型化命令凭证、拒绝
 PID 复用的 PROCESS supervisor、受限 REMOTE_HTTP attach、先 intent 后副作用的审计
@@ -358,6 +367,12 @@ spec，再向 supervisor 派发内部 `RuntimeSessionStart`/`RuntimeSessionAttac
 命令；runtime session 身份由命令身份派生，同一命令重放映射到同一会话。
 原先任意的公开 `/api/runtime-sessions/start` 与 `/api/runtime-sessions/attach`
 路由已禁用，按会话的 stop 路由保留。
+PX01-04 Agent aliases：`AgentAliasService` 经受信
+`AgentProfile.labels["cli_alias"]` 标签解析 operator 输入的别名。大小写
+归一化已文档化并强制执行：存储标签与查询别名均先去除首尾空白并转小写
+再比较，即别名匹配对大小写与首尾空白不敏感。仅启用中的 profile 参与
+解析；两个及以上启用 profile 声称同一归一化别名时，解析以歧义拒绝
+（`AgentAliasAmbiguous`）；无人声称的别名抛出 `AgentAliasNotFound`。
 
 This is still an implementation milestone, not completion of the productized
 launcher. The daily `research` client and LP03 managed Agent pilot remain open.

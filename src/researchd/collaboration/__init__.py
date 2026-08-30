@@ -1,6 +1,13 @@
 """Trusted Agent Collaboration Plane contracts and registry."""
 
 from researchd.collaboration.agent_definitions import AgentDefinition
+from researchd.collaboration.aliases import (
+    AgentAliasAmbiguous,
+    AgentAliasError,
+    AgentAliasNotFound,
+    AgentAliasService,
+    CLI_ALIAS_LABEL,
+)
 from researchd.collaboration.install import AgentInstallation, AgentInstallService
 from researchd.collaboration.registry import (
     AgentRegistryService,
@@ -17,4 +24,4 @@ from researchd.collaboration.heterogeneous import A2ARemoteAgentAdapter, HttpAge
 from researchd.collaboration.runtime import AgentAdapterCatalog
 from researchd.collaboration.langgraph_runtime import LangGraphAgentAdapter
 
-__all__ = ["AgentDefinition", "AgentInstallation", "AgentInstallService", "AgentRegistryService", "RuntimeLeaseConflict", "RuntimeLeaseInvalid", "DelegationService", "InvocationService", "StaleInvocationResult", "CloudLeadAgentAdapter", "LocalExecutorAgentAdapter", "CollaborationGateway", "AgentSelector", "AgentSelection", "CollaborationMessageService", "A2ARemoteAgentAdapter", "HttpAgentAdapter", "LocalProcessAgentAdapter", "AgentAdapterCatalog", "LangGraphAgentAdapter"]
+__all__ = ["AgentAliasAmbiguous", "AgentAliasError", "AgentAliasNotFound", "AgentAliasService", "AgentDefinition", "AgentInstallation", "AgentInstallService", "AgentRegistryService", "CLI_ALIAS_LABEL", "RuntimeLeaseConflict", "RuntimeLeaseInvalid", "DelegationService", "InvocationService", "StaleInvocationResult", "CloudLeadAgentAdapter", "LocalExecutorAgentAdapter", "CollaborationGateway", "AgentSelector", "AgentSelection", "CollaborationMessageService", "A2ARemoteAgentAdapter", "HttpAgentAdapter", "LocalProcessAgentAdapter", "AgentAdapterCatalog", "LangGraphAgentAdapter"]
