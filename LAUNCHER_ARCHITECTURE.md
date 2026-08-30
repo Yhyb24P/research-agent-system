@@ -244,10 +244,9 @@ The productization branch now contains the first LP01/LP02 foundation:
   (delegations/invocations/selector), `RecordingPolicyEngine` over
   `DeterministicPolicyEngine`, `ApprovalService` and `JobManager`, with empty
   capabilities — so gate-dispatched control mutations execute against the
-  trusted controller. Two slots stay deliberately open and fail closed: no
-  verification driver satisfies the `VerificationDriver` protocol yet, and the
-  cloud/executor Agent adapters remain unwired until managed Agents attach
-  (LP03/LP04).
+  trusted controller. The verification driver slot is filled by the concrete
+  `LocalVerificationDriver` (PX03-01); the cloud/executor Agent adapters
+  remain unwired until managed Agents attach (LP03/LP04).
 - PX00 external request DTOs now exclude trusted actor fields. The HTTP adapter
   derives a HUMAN actor before constructing internal commands, and rejects
   caller-supplied `SYSTEM`/actor attribution before dispatch. `researchd init`
@@ -338,6 +337,17 @@ The productization branch now contains the first LP01/LP02 foundation:
   `--key value` options, per-command arity); every command crosses the
   authenticated transport, and parse or transport errors are reported
   without killing the shell.
+- PX03-01 VerificationDriver: `LocalVerificationDriver` fills the
+  orchestrator's verification slot. It extracts the acceptance criteria
+  from the WorkOrder contract (an empty acceptance list is refused — zero
+  criteria would auto-pass with no evidence), maps the attempt's
+  trusted `metrics`/`reproducibility` CAS artifacts onto the criteria,
+  refuses results that reference unknown artifacts, and delegates the
+  judgment to the `VerifierEngine`. The executor cannot self-verify: the
+  outcome derives from hash-verified immutable artifacts and trusted
+  execution-step records; executor-reported claims are recorded as claims
+  and never become verifier inputs. `compose_daemon` now wires the
+  driver, so verification no longer fails closed for lack of a verifier.
 
 产品化分支现已实现首批 LP01/LP02 基础：持久化运行实例和类型化命令凭证、拒绝
 PID 复用的 PROCESS supervisor、受限 REMOTE_HTTP attach、先 intent 后副作用的审计
@@ -356,9 +366,9 @@ work-order approve 和 human-decision 三个 HTTP 路由与 RuntimeSession 命�
 注入真实 `ResearchOrchestrator`——仅由现有权威构成：`CollaborationGateway`
 （delegations/invocations/selector）、基于 `DeterministicPolicyEngine` 的
 `RecordingPolicyEngine`、`ApprovalService` 与 `JobManager`，capabilities 默认为空——
-因此经 gate 派发的控制面 mutation 均由可信 controller 真实执行。两个槽位刻意留空并失败
-关闭：尚无可满足 `VerificationDriver` 协议的验证 driver；cloud/executor Agent adapter
-待受管 Agent 接入（LP03/LP04）。
+因此经 gate 派发的控制面 mutation 均由可信 controller 真实执行。验证 driver 槽位
+已由具体的 `LocalVerificationDriver` 填充（PX03-01）；cloud/executor Agent
+adapter 仍待受管 Agent 接入（LP03/LP04）。
 PX00 外部请求 DTO 现已排除可信 actor 字段；HTTP adapter 在构造内部命令前由服务端绑定
 HUMAN actor，调用方自报的 `SYSTEM` 或 actor attribution 会在派发前被拒绝。
 `researchd init` 现会生成 owner-only 256-bit 本地凭据；除 health 外的 HTTP 读取、stream
@@ -421,6 +431,14 @@ PX02-04 行式 shell：交互入口现为行式 shell，首批命令——`statu
 `quit`。行经严格 parser 解析（引号参数、`--key value` 选项、逐命令
 参数个数校验）；每条命令都走认证 transport，解析或传输错误只报告、
 不终止 shell。
+PX03-01 VerificationDriver：`LocalVerificationDriver` 填上 orchestrator
+的验证槽位。它从 WorkOrder 合同提取验收标准（空验收列表被拒绝——零
+标准会无证据自动通过），把 attempt 名下受信的 `metrics`/
+`reproducibility` CAS 产物映射到对应标准，拒绝引用未知产物的执行
+结果，判断本身交给 `VerifierEngine`。executor 不得自我验证：结果
+派生自经 hash 校验的不可变产物与受信执行步骤记录；executor 上报的
+claims 只作为 claims 记录，永不成 verifier 输入。`compose_daemon` 已
+接线该 driver，验证不再因缺少 verifier 而失败关闭。
 
 This is still an implementation milestone, not completion of the productized
 launcher. The daily `research` client and LP03 managed Agent pilot remain open.
@@ -441,7 +459,7 @@ the frozen requirements. The current evidence is:
 | durable RuntimeSession and idempotent START/ATTACH/STOP receipts | PASS | migration `0020`, `runtime_sessions/service.py`, concurrency/replay tests |
 | PROCESS identity, PID-reuse rejection, restart reattach and crash windows | PASS | supervisor driver and independent-process restart/crash tests |
 | constrained REMOTE_HTTP attach through existing AgentRuntime | PASS | `RemoteHttpDriver`, registry endpoint checks and integration tests |
-| `researchd` owns existing orchestrator/policy/approval command paths | PASS | `compose_daemon` builds the real `ResearchOrchestrator` from `CollaborationGateway`, `RecordingPolicyEngine(DeterministicPolicyEngine())`, `ApprovalService` and `JobManager` with empty capabilities; gate-dispatched cancel/approve/human-decision mutations execute against it (`daemon/composition.py`, composed-daemon mutation tests in `tests/integration/test_daemon.py`); the verification driver and cloud/executor adapters remain deliberate fail-closed gaps |
+| `researchd` owns existing orchestrator/policy/approval command paths | PASS | `compose_daemon` builds the real `ResearchOrchestrator` from `CollaborationGateway`, `RecordingPolicyEngine(DeterministicPolicyEngine())`, `ApprovalService` and `JobManager` with empty capabilities; gate-dispatched cancel/approve/human-decision mutations execute against it (`daemon/composition.py`, composed-daemon mutation tests in `tests/integration/test_daemon.py`); the verification driver slot is filled by `LocalVerificationDriver` (PX03-01, `tests/integration/test_verification_driver.py`), while the cloud/executor adapters remain a deliberate gap |
 | every existing HTTP mutation crosses `ResearchDaemon.execute()` | PASS | run cancel, work-order approve and human-decision routes dispatch typed commands through the daemon readiness gate (`api/web.py`, gate tests) |
 | versioned accepted/rejected result envelope for every command family | PASS | `daemon/contracts.py`, `DaemonCommandDispatcher` and envelope assertions in daemon web/AG-UI tests |
 | durable generic command receipt with idempotency persistence | PASS | migration `0021`, `DurableDaemonCommandService`, `/api/daemon-commands`, replay/conflict tests and independent-process crash-window test |
@@ -453,14 +471,16 @@ as a complete trusted mutation host is **not frozen complete**. The shared
 command/result contract, the migration of the existing HTTP mutations through
 the readiness gate, the real Orchestrator/policy/approval injection into the
 composition root, and the Workspace, ResearchTask, Approval and Backup typed
-command families are done; the remaining gaps are a real `VerificationDriver`
-wiring and the cloud/executor Agent adapters (LP03/LP04). LP03 must not paper
-over these LP01 gaps with a pilot-only bypass. The next implementation order
-is: the verification driver, then the managed Agent pilot.
+command families are done; the `VerificationDriver` wiring is filled by
+`LocalVerificationDriver` (PX03-01), and the remaining gap is the
+cloud/executor Agent adapters (LP03/LP04). LP03 must not paper over these
+LP01 gaps with a pilot-only bypass. The next implementation order is: the
+managed Agent pilot.
 
 审计结论：LP02 的持久化运行实例与 supervision 切片已经实现；LP01 作为完整可信
 mutation host 尚未冻结完成。统一命令合同、现有 HTTP mutation 经 readiness gate 的迁移、
 组合根中真实 Orchestrator/Policy/Approval 的注入，以及 Workspace、ResearchTask、
-Approval、Backup 类型化命令族均已完成；剩余缺口为真实 `VerificationDriver` 接线，
-以及 cloud/executor Agent adapter（LP03/LP04）。
-LP03 不得用 pilot 专用旁路掩盖这些缺口；下一步顺序为：接通验证 driver，最后进入 pilot。
+Approval、Backup 类型化命令族均已完成；`VerificationDriver` 接线已由
+`LocalVerificationDriver`（PX03-01）填充，剩余缺口为 cloud/executor Agent
+adapter（LP03/LP04）。
+LP03 不得用 pilot 专用旁路掩盖这些缺口；下一步顺序为：进入受管 Agent pilot。

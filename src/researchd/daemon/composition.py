@@ -35,6 +35,7 @@ from researchd.runtime_sessions.launch_profiles import RuntimeLaunchProfileServi
 from researchd.runtime_sessions.managed_start import ManagedAgentStartService
 from researchd.storage.db import create_sqlite_engine, session_factory
 from researchd.supervisor.runtime import RuntimeSupervisor
+from researchd.verifier.driver import LocalVerificationDriver
 from researchd.workspace.service import WorkspaceDelegationService
 from researchd.workspace.transports import ArchiveWorkspaceTransport, GitWorktreeTransport
 
@@ -149,7 +150,8 @@ def compose_daemon(config: DaemonConfig) -> DaemonApplication:
 
     engine = create_sqlite_engine(database)
     sessions = session_factory(engine)
-    artifact_service = ArtifactService(ContentAddressedArtifactStore(artifacts_path), sessions)
+    store = ContentAddressedArtifactStore(artifacts_path)
+    artifact_service = ArtifactService(store, sessions)
     workspace = WorkspaceDelegationService(
         sessions,
         artifact_service,
@@ -184,11 +186,12 @@ def compose_daemon(config: DaemonConfig) -> DaemonApplication:
     )
     # The real trusted controller is composed here from existing authorities
     # only. Capabilities default to empty (fail-closed grants); budget and
-    # iteration limits use the orchestrator constructor defaults. Two slots are
-    # deliberately left open: no verification driver satisfies the
-    # VerificationDriver protocol yet, so verification fails closed, and the
-    # cloud/executor Agent adapters stay unwired until managed Agents attach
-    # (LP03/LP04).
+    # iteration limits use the orchestrator constructor defaults. The
+    # verification driver is the concrete LocalVerificationDriver over the
+    # trusted verifier domain (immutable attempt artifacts, executor claims
+    # never fed to the verifier); the cloud/executor Agent adapters stay
+    # unwired until managed Agents attach (LP03/LP04).
+    verifier_driver = LocalVerificationDriver(sessions, store)
     orchestrator = ResearchOrchestrator(
         sessions,
         collaboration=CollaborationGateway(
@@ -197,7 +200,7 @@ def compose_daemon(config: DaemonConfig) -> DaemonApplication:
             selector=AgentSelector(sessions),
         ),
         policy=RecordingPolicyEngine(DeterministicPolicyEngine(), sessions),
-        verifier=None,
+        verifier=verifier_driver,
         approvals=ApprovalService(sessions),
         jobs=jobs,
     )
