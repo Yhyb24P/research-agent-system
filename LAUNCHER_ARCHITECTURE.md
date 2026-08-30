@@ -320,6 +320,15 @@ The productization branch now contains the first LP01/LP02 foundation:
   envelope from a 409 that only means the daemon is not ready or the
   command identity was reused with a different request, and resumes SSE
   streams from the last observed `id:` offset.
+- PX02-03 research lifecycle: `research init` delegates bootstrap to the
+  trusted `researchd init` executable (the client itself never initializes
+  or migrates the database), and `research status` prints one JSON document
+  with reachability and readiness. Without a subcommand, `research` probes
+  the daemon and, when none is reachable, spawns `researchd serve` as a
+  child process whose log lands in `<state_root>/daemon.log`; the child is
+  terminated when the interactive shell exits. The shell is entered only
+  after the health probe reports READY — a FAILED or still-starting daemon
+  is surfaced with its failed startup phase, never bypassed.
 
 产品化分支现已实现首批 LP01/LP02 基础：持久化运行实例和类型化命令凭证、拒绝
 PID 复用的 PROCESS supervisor、受限 REMOTE_HTTP attach、先 intent 后副作用的审计
@@ -389,6 +398,13 @@ PX02-02 客户端传输层：`researchd.client.transport.ResearchClient` 是日�
 命令身份（`cmd_<32位hex>`）POST 类型化外部请求，因此重试走重放而非重复
 执行。传输层将持久的 `REJECTED` envelope 与仅表示 daemon 未就绪或命令身份
 被不同请求复用的 409 区分开，并能从最后观察到的 `id:` offset 续读 SSE 流。
+PX02-03 research lifecycle：`research init` 将 bootstrap 委托给受信
+`researchd init` 可执行文件（client 自身从不初始化或迁移数据库）；
+`research status` 输出一份含可达性与就绪状态的 JSON 文档。不带子命令时，
+`research` 探测 daemon；无 daemon 可达则以子进程 spawn `researchd serve`
+（日志落 `<state_root>/daemon.log`），交互 shell 退出时终止该子进程。
+只有健康探测报告 READY 后才进入 shell——FAILED 或仍在启动中的 daemon
+会连同其失败阶段一起呈现，绝不被绕过。
 
 This is still an implementation milestone, not completion of the productized
 launcher. The daily `research` client and LP03 managed Agent pilot remain open.

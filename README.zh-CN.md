@@ -158,8 +158,9 @@ commit/tag。旧快照格式和旧数据库 schema 会被直接拒绝，不做�
 软件矩阵不能替代 DQ04 验收所需的真实异地存储与 primary-loss 演练。
 
 集成测试是当前可执行 reference workflow。仓库现已提供围绕持久化 RuntimeSession /
-Supervisor 的具体 `researchd` composition root 和 CLI；日常 `research` client 与浏览器
-应用启动入口仍未完成。
+Supervisor 的具体 `researchd` composition root 和 CLI；日常 `research` client 现已
+覆盖 lifecycle 面（`init`、`status`、交互入口），其首批 shell 命令与浏览器应用
+启动入口仍未完成。
 
 嵌入式 composition 必须注册可信服务并使用 `build_startup_barrier(...)`。该屏障先验证
 migration `0022` 和实时 DB/CAS 状态，再按冻结顺序调用已有 workspace、worktree、
@@ -227,6 +228,20 @@ uv run researchctl --database researchd.db daemon-command resolve <command-id> -
 
 `daemon-command resolve` 通过命令族专属观察收敛中断遗留的 `ACCEPTED` 回执，
 与 HTTP 路由同源；`--abandon` 用于放弃无法判定的结果，`--command-id` 支持幂等重试。
+
+日常 `research` client 经由同一认证 HTTP 面驱动控制面，从不打开数据库：
+
+```bash
+uv run research --config researchd.json init
+uv run research --config researchd.json status
+uv run research --config researchd.json
+```
+
+`init` 将 bootstrap 委托给 `researchd init`；`status` 输出一份包含可达性与
+就绪状态的 JSON 文档。不带子命令时，`research` 探测 daemon；若无 daemon 可达，
+则以子进程 spawn `researchd serve`，并在交互 shell 退出时终止该子进程。
+只有 daemon 报告 READY 之后才进入 shell——non-ready daemon 会连同其失败的
+启动阶段一起呈现，绝不被绕过。
 
 如需明确不允许 daemon mutation 的只读投影，可只嵌入 local API：
 

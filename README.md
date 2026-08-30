@@ -174,8 +174,9 @@ off-host and primary-loss drill required for DQ04 acceptance.
 
 Integration tests are the executable reference workflow. The repository now
 ships the concrete `researchd` composition root and CLI around the durable
-RuntimeSession/Supervisor services. The daily `research` client and browser
-application bootstrap remain open.
+RuntimeSession/Supervisor services. The daily `research` client now covers
+the lifecycle surface (`init`, `status`, interactive entry); its first
+shell commands and the browser application bootstrap remain open.
 
 An embedding composition must register its trusted services and use
 `build_startup_barrier(...)`. The barrier verifies migration `0022` and live
@@ -251,6 +252,22 @@ uv run researchctl --database researchd.db daemon-command resolve <command-id> -
 `daemon-command resolve` converges an interrupted `ACCEPTED` receipt through
 the same command-specific observation as the HTTP route; add `--abandon` to
 abandon an undetermined outcome and `--command-id` for idempotent retries.
+
+The daily `research` client drives the same control plane over the
+authenticated HTTP surface and never opens the database:
+
+```bash
+uv run research --config researchd.json init
+uv run research --config researchd.json status
+uv run research --config researchd.json
+```
+
+`init` delegates bootstrap to `researchd init`; `status` prints one JSON
+document with reachability and readiness. Without a subcommand, `research`
+probes the daemon and, when none is reachable, spawns `researchd serve` as a
+child process that is terminated when the interactive shell exits. The shell
+is entered only after the daemon reports READY — a non-ready daemon is
+surfaced with its failed startup phase, never bypassed.
 
 For a deliberately read-only projection without daemon mutations, embed only
 the local API:
