@@ -272,6 +272,17 @@ reply/delegation/invocation 关联。展示投影会遮蔽 `LOCAL_ONLY` 与 `SEC
 包含 Collab、Agents、Tasks、Approvals、System 的只读投影工作区。刷新与布局
 状态仅存在于 client；TUI 不直连数据库，也不承载业务逻辑。
 
+同一个 daemon 也可由相互独立的终端 client 观察：
+
+```bash
+research --config researchd.json console collab --run run_example
+research --config researchd.json console agent agent_coder --run run_example
+research --config researchd.json console system
+```
+
+每个 console 都是可随时关闭的投影 client；关闭其中一个不会停止 Agent、runtime
+session 或 daemon。
+
 Agent-origin message 统一进入 `AgentActionBroker`。managed turn response 只含
 action ID、内容、purpose、classification 及可选 recipient/reply；Broker 从
 live Invocation 推导 sender、run、WorkOrder、Delegation、Agent 与 runtime，

@@ -22,6 +22,10 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("init", help="bootstrap state via researchd init")
     subparsers.add_parser("status", help="report daemon reachability and readiness")
     subparsers.add_parser("tui", help="open the optional collaboration workspace")
+    console = subparsers.add_parser("console", help="open a detached projection console")
+    console.add_argument("kind", choices=("collab", "agent", "system"))
+    console.add_argument("agent_id", nargs="?")
+    console.add_argument("--run", dest="run_id")
     return parser
 
 
@@ -35,6 +39,14 @@ def main(argv: list[str] | None = None) -> int:
         from researchd.client.tui import tui_entry
 
         return tui_entry(args.config)
+    if args.command == "console":
+        from researchd.client.console import console_entry
+
+        if args.kind != "agent" and args.agent_id is not None:
+            parser.error("only the agent console accepts an Agent ID")
+        return console_entry(
+            args.config, args.kind, agent_id=args.agent_id, run_id=args.run_id,
+        )
     return interactive_entry(args.config)
 
 

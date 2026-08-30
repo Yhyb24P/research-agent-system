@@ -308,6 +308,17 @@ for the projection-only workspace with Collab, Agents, Tasks, Approvals and
 System tabs. Refresh and layout state stay client-local; the TUI has no direct
 database or business-logic path.
 
+The same daemon can be observed through independent terminal clients:
+
+```bash
+research --config researchd.json console collab --run run_example
+research --config researchd.json console agent agent_coder --run run_example
+research --config researchd.json console system
+```
+
+Each console is a disposable projection client; quitting one never stops an
+Agent, a runtime session, or the daemon.
+
 Agent-origin messages enter through `AgentActionBroker`. Managed turn responses
 contain only an action ID, content, purpose, classification and optional
 recipient/reply. The broker derives sender, run, WorkOrder, Delegation, Agent
