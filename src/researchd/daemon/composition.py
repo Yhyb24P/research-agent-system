@@ -2,8 +2,9 @@
 
 from dataclasses import dataclass
 from pathlib import Path
+import re
 
-from pydantic import ConfigDict, Field
+from pydantic import ConfigDict, Field, field_validator, model_validator
 
 from researchd.api.control import LocalControlAPI
 from researchd.artifacts import ArtifactService, ContentAddressedArtifactStore
@@ -22,6 +23,21 @@ from researchd.workspace.service import WorkspaceDelegationService
 from researchd.workspace.transports import ArchiveWorkspaceTransport, GitWorktreeTransport
 
 
+_CONFIGURATION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+
+
+class JobCommandConfig(DomainModel):
+    argv: tuple[str, ...] = Field(min_length=1, max_length=128)
+
+    @model_validator(mode="after")
+    def validate_argv(self) -> "JobCommandConfig":
+        if not Path(self.argv[0]).is_absolute():
+            raise ValueError("job executable must be an absolute path")
+        if any(not item or "\x00" in item for item in self.argv):
+            raise ValueError("job argv contains an invalid argument")
+        return self
+
+
 class DaemonConfig(DomainModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
@@ -29,8 +45,43 @@ class DaemonConfig(DomainModel):
     artifact_root: Path
     state_root: Path
     repositories: dict[str, Path] = Field(default_factory=dict)
+    job_commands: dict[str, JobCommandConfig] = Field(default_factory=dict)
     host: str = "127.0.0.1"
     port: int = Field(default=8788, ge=0, le=65_535)
+
+    @field_validator("database", "artifact_root", "state_root")
+    @classmethod
+    def core_paths_are_absolute(cls, value: Path) -> Path:
+        if not value.is_absolute():
+            raise ValueError("daemon paths must be absolute")
+        return value
+
+    @field_validator("repositories")
+    @classmethod
+    def validate_repositories(cls, value: dict[str, Path]) -> dict[str, Path]:
+        for repository_id, path in value.items():
+            if _CONFIGURATION_ID.fullmatch(repository_id) is None:
+                raise ValueError("repository ID is invalid")
+            if not path.is_absolute():
+                raise ValueError("repository paths must be absolute")
+        return value
+
+    @field_validator("job_commands")
+    @classmethod
+    def validate_job_types(
+        cls,
+        value: dict[str, JobCommandConfig],
+    ) -> dict[str, JobCommandConfig]:
+        if any(_CONFIGURATION_ID.fullmatch(job_type) is None for job_type in value):
+            raise ValueError("job type is invalid")
+        return value
+
+    @field_validator("host")
+    @classmethod
+    def host_is_loopback(cls, value: str) -> str:
+        if value not in {"127.0.0.1", "localhost", "::1"}:
+            raise ValueError("researchd host must be loopback")
+        return value
 
 
 @dataclass(frozen=True)
@@ -60,7 +111,12 @@ def compose_daemon(config: DaemonConfig) -> DaemonApplication:
         ),
     )
     worktrees = WorktreeManager(state / "worktrees", sessions)
-    jobs = JobManager(sessions, LocalDurableJobBackend(state / "jobs", {}))
+    repositories = {key: value.resolve(strict=True) for key, value in config.repositories.items()}
+    for repository_id, repository in repositories.items():
+        if not (repository / ".git").exists():
+            raise ValueError(f"configured repository is not a Git repository: {repository_id}")
+    commands = {key: value.argv for key, value in config.job_commands.items()}
+    jobs = JobManager(sessions, LocalDurableJobBackend(state / "jobs", commands))
     invocations = InvocationService(sessions)
     registry = AgentRegistryService(sessions)
     supervisor = RuntimeSupervisor(RuntimeSessionService(sessions, registry))
@@ -71,7 +127,7 @@ def compose_daemon(config: DaemonConfig) -> DaemonApplication:
         artifact_root=artifacts_path,
         workspace=workspace,
         worktrees=worktrees,
-        repositories={key: value.resolve() for key, value in config.repositories.items()},
+        repositories=repositories,
         supervisor=supervisor,
         jobs=jobs,
         invocations=invocations,
@@ -80,4 +136,4 @@ def compose_daemon(config: DaemonConfig) -> DaemonApplication:
     return DaemonApplication(config=config, daemon=daemon, api=LocalControlAPI(sessions))
 
 
-__all__ = ["DaemonApplication", "DaemonConfig", "compose_daemon"]
+__all__ = ["DaemonApplication", "DaemonConfig", "JobCommandConfig", "compose_daemon"]

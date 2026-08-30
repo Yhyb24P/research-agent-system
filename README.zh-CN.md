@@ -175,18 +175,29 @@ uv run python scripts/dq01_filesystem_probe.py --root <deployment-root>
 
 ## 查看控制面
 
-创建全新的当前 schema 数据库，然后启动 loopback daemon：
+先创建一份严格配置。所有路径必须是绝对路径；repository 映射到明确的 Git 根目录，
+job type 映射到固定 argv 数组，禁止传入 shell 文本：
 
 ```bash
-uv run researchd --database researchd.db --artifact-root artifacts \
-  --state-root .researchd init
-uv run researchd --database researchd.db --artifact-root artifacts \
-  --state-root .researchd serve --port 8788
+cat > researchd.json <<'JSON'
+{
+  "database": "/absolute/path/researchd.db",
+  "artifact_root": "/absolute/path/artifacts",
+  "state_root": "/absolute/path/state",
+  "repositories": {"main": "/absolute/path/source-repository"},
+  "job_commands": {"typed-check": {"argv": ["/usr/bin/true"]}},
+  "host": "127.0.0.1",
+  "port": 8788
+}
+JSON
+uv run researchd --config researchd.json init
+uv run researchd --config researchd.json serve
 curl http://127.0.0.1:8788/api/health
 ```
 
 `serve` 不会迁移已有数据库。只有冻结的八阶段恢复屏障全部通过才会进入 READY；
-非当前 schema 会失败关闭。
+非当前 schema、缺失 repository、未知配置字段、相对路径或非 loopback 监听都会失败关闭。
+`job_commands` 为空时会有意禁用 job submission。
 
 `researchctl` 会打开已有数据库，但不会构造 Orchestrator：
 

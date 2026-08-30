@@ -217,11 +217,19 @@ The productization branch now contains the first LP01/LP02 foundation:
 - the concrete `researchd init` / `researchd serve` lifecycle composes the
   trusted services once, exposes loopback health and typed RuntimeSession
   commands, and is covered by an independent-process startup test.
+- a single strict JSON configuration supplies absolute authoritative paths,
+  named Git repositories and fixed typed-job argv arrays; unknown fields,
+  shell strings and non-loopback binds are rejected.
+- an independent restart test proves live PROCESS reattachment and monotonic
+  audit offsets across daemon replacement before issuing a typed STOP.
 
 产品化分支现已实现首批 LP01/LP02 基础：持久化运行实例和类型化命令凭证、拒绝
 PID 复用的 PROCESS supervisor、受限 REMOTE_HTTP attach、先 intent 后副作用的审计
 顺序，以及八阶段全部通过后才 READY 的 daemon gate；具体 `researchd init` / `serve`
 生命周期现已完成，并由独立进程启动测试覆盖。
+单一严格 JSON 配置负责绝对路径、具名 Git repository 和固定 job argv；未知字段、
+shell 字符串及非 loopback 监听均被拒绝。独立重启测试还证明了存活 PROCESS 的重新
+附着和 daemon 更替前后的审计 offset 连续性。
 
 This is still an implementation milestone, not completion of the productized
 launcher. The daily `research` client and LP03 managed Agent pilot remain open.

@@ -28,8 +28,8 @@ protocols are subordinate to `AgentRuntime`.
 ```bash
 uv sync --frozen --extra a2a --extra langgraph-agent --extra qualification
 uv run alembic upgrade head
-uv run researchd --database researchd.db --artifact-root artifacts --state-root .researchd init
-uv run researchd --database researchd.db --artifact-root artifacts --state-root .researchd serve
+uv run researchd --config researchd.json init
+uv run researchd --config researchd.json serve
 uv run pytest -q
 uv run mypy src tests
 uv run python scripts/qualification_validate.py \
@@ -42,6 +42,8 @@ git diff --check
 Use `researchd init` only for a fresh database and `researchd serve` for the
 readiness-gated loopback daemon. Normal startup never upgrades a schema. Use
 `researchctl --database <path>` for the local read-only inspection surface.
+The JSON daemon configuration rejects unknown fields and requires absolute
+paths, loopback binding, repository IDs, and fixed argv arrays for job types.
 
 ## Structure
 

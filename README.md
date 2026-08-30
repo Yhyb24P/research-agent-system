@@ -193,18 +193,30 @@ uv run python scripts/dq01_filesystem_probe.py --root <deployment-root>
 
 ## Inspect the control plane
 
-Create a fresh current-schema database, then start the loopback daemon:
+Create one strict configuration file. Paths must be absolute; repositories are
+identified Git roots and job types map to fixed argv arrays, never shell text:
 
 ```bash
-uv run researchd --database researchd.db --artifact-root artifacts \
-  --state-root .researchd init
-uv run researchd --database researchd.db --artifact-root artifacts \
-  --state-root .researchd serve --port 8788
+cat > researchd.json <<'JSON'
+{
+  "database": "/absolute/path/researchd.db",
+  "artifact_root": "/absolute/path/artifacts",
+  "state_root": "/absolute/path/state",
+  "repositories": {"main": "/absolute/path/source-repository"},
+  "job_commands": {"typed-check": {"argv": ["/usr/bin/true"]}},
+  "host": "127.0.0.1",
+  "port": 8788
+}
+JSON
+uv run researchd --config researchd.json init
+uv run researchd --config researchd.json serve
 curl http://127.0.0.1:8788/api/health
 ```
 
 `serve` never migrates an existing database. It reaches READY only after the
-frozen eight-stage recovery barrier passes; a non-current schema fails closed.
+frozen eight-stage recovery barrier passes; a non-current schema, missing
+repository, unknown configuration field, relative path, or non-loopback bind
+fails closed. An empty `job_commands` map intentionally disables job submission.
 
 `researchctl` opens an existing database without constructing an orchestrator:
 

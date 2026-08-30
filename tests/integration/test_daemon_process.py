@@ -4,8 +4,15 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import cast
 from urllib.error import URLError
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
+
+from researchd.collaboration.contracts import AgentProfile, AgentRuntime
+from researchd.collaboration.registry import AgentRegistryService
+from researchd.domain.enums import AgentAdapterKind, AgentTrustZone
+from researchd.domain.ids import AgentId, AgentRuntimeId
+from researchd.storage.db import create_sqlite_engine, session_factory
 
 
 def _free_port() -> int:
@@ -14,20 +21,69 @@ def _free_port() -> int:
         return int(listener.getsockname()[1])
 
 
+def _start(base: list[str]) -> subprocess.Popen[str]:
+    return subprocess.Popen(
+        [*base, "serve"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+
+def _wait_for_health(process: subprocess.Popen[str], port: int) -> dict[str, object]:
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            break
+        try:
+            with urlopen(f"http://127.0.0.1:{port}/api/health", timeout=1) as response:
+                return cast(dict[str, object], json.load(response))
+        except (URLError, TimeoutError, ConnectionError):
+            time.sleep(0.05)
+    error = process.stderr.read() if process.stderr else ""
+    raise AssertionError(f"researchd failed before READY: {error}")
+
+
+def _post(port: int, path: str, payload: dict[str, object]) -> dict[str, object]:
+    request = Request(
+        f"http://127.0.0.1:{port}{path}",
+        data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urlopen(request, timeout=5) as response:
+        return cast(dict[str, object], json.load(response))
+
+
+def _terminate(process: subprocess.Popen[str]) -> None:
+    process.terminate()
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=5)
+
+
 def test_researchd_starts_as_independent_process(tmp_path: Path) -> None:
     database = tmp_path / "researchd.db"
     artifacts = tmp_path / "artifacts"
     state = tmp_path / "state"
+    config = tmp_path / "researchd.json"
+    config.write_text(json.dumps({
+        "database": str(database),
+        "artifact_root": str(artifacts),
+        "state_root": str(state),
+        "repositories": {},
+        "job_commands": {},
+        "host": "127.0.0.1",
+        "port": _free_port(),
+    }))
     base = [
         sys.executable,
         "-m",
         "researchd.daemon.cli",
-        "--database",
-        str(database),
-        "--artifact-root",
-        str(artifacts),
-        "--state-root",
-        str(state),
+        "--config",
+        str(config),
     ]
     initialized = subprocess.run(
         [*base, "init"],
@@ -38,33 +94,111 @@ def test_researchd_starts_as_independent_process(tmp_path: Path) -> None:
     )
     assert initialized.returncode == 0, initialized.stderr
 
-    port = _free_port()
-    process = subprocess.Popen(
-        [*base, "serve", "--port", str(port)],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
+    port = int(json.loads(config.read_text())["port"])
+    process = _start(base)
     try:
-        deadline = time.monotonic() + 15
-        health: dict[str, object] | None = None
-        while time.monotonic() < deadline:
-            if process.poll() is not None:
-                break
-            try:
-                with urlopen(f"http://127.0.0.1:{port}/api/health", timeout=1) as response:
-                    health = json.load(response)
-                    break
-            except (URLError, TimeoutError, ConnectionError):
-                time.sleep(0.05)
-        assert process.poll() is None, process.stderr.read() if process.stderr else ""
-        assert health is not None
+        health = _wait_for_health(process, port)
         assert health["state"] == "READY"
         assert health["ready"] is True
     finally:
-        process.terminate()
-        try:
-            process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait(timeout=5)
+        _terminate(process)
+
+
+def test_researchd_restart_reattaches_live_runtime_and_preserves_audit_order(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "researchd.db"
+    port = _free_port()
+    config = tmp_path / "researchd.json"
+    config.write_text(json.dumps({
+        "database": str(database),
+        "artifact_root": str(tmp_path / "artifacts"),
+        "state_root": str(tmp_path / "state"),
+        "repositories": {},
+        "job_commands": {},
+        "host": "127.0.0.1",
+        "port": port,
+    }))
+    base = [sys.executable, "-m", "researchd.daemon.cli", "--config", str(config)]
+    initialized = subprocess.run(
+        [*base, "init"], check=False, capture_output=True, text=True, timeout=30
+    )
+    assert initialized.returncode == 0, initialized.stderr
+
+    registry = AgentRegistryService(session_factory(create_sqlite_engine(database)))
+    registry.register_profile(AgentProfile(
+        agent_id=AgentId("agent_restart_test"),
+        display_name="Restart test Agent",
+        roles=("executor",),
+        skills=("runtime.test",),
+        trust_zone=AgentTrustZone.LOCAL_PRIVATE,
+    ))
+    registry.register_runtime(AgentRuntime(
+        runtime_id=AgentRuntimeId("runtime_restart_test"),
+        agent_id=AgentId("agent_restart_test"),
+        adapter_kind=AgentAdapterKind.PROCESS,
+        runtime_name="Restart test process",
+    ))
+
+    first = _start(base)
+    second: subprocess.Popen[str] | None = None
+    runtime_pid: int | None = None
+    try:
+        _wait_for_health(first, port)
+        started = _post(port, "/api/runtime-sessions/start", {
+            "command_id": "command_restart_start",
+            "runtime_session_id": "runtime_session_restart_test",
+            "runtime_id": "runtime_restart_test",
+            "actor_type": "SYSTEM",
+            "actor_id": "restart-test",
+            "launch_spec": {"argv": ["/usr/bin/sleep", "60"], "cwd": str(tmp_path)},
+        })
+        assert started["supervisor_state"] == "HEALTHY"
+        identity = cast(dict[str, object], started["external_identity"])
+        runtime_pid = int(cast(int, identity["pid"]))
+
+        with urlopen(f"http://127.0.0.1:{port}/api/system-events?after=0") as response:
+            before = json.load(response)["events"]
+        before_offsets = [item["stream_offset"] for item in before]
+        _terminate(first)
+
+        second = _start(base)
+        health = _wait_for_health(second, port)
+        startup = cast(dict[str, object], health["startup"])
+        phases = cast(list[dict[str, object]], startup["phases"])
+        runtime_phase = phases[4]
+        assert runtime_phase["phase"] == "RUNTIME_RECONCILIATION"
+        assert runtime_phase["affected_count"] == 1
+        with urlopen(f"http://127.0.0.1:{port}/api/runtime-sessions") as response:
+            session = json.load(response)[0]
+        assert session["supervisor_state"] == "HEALTHY"
+        assert session["reattach_state"] == "ATTACHED"
+
+        with urlopen(f"http://127.0.0.1:{port}/api/system-events?after=0") as response:
+            after = json.load(response)["events"]
+        after_offsets = [item["stream_offset"] for item in after]
+        assert after_offsets == list(range(1, len(after_offsets) + 1))
+        assert after_offsets[:len(before_offsets)] == before_offsets
+
+        stopped = _post(port, "/api/runtime-sessions/runtime_session_restart_test/stop", {
+            "command_id": "command_restart_stop",
+            "runtime_id": "runtime_restart_test",
+            "actor_type": "SYSTEM",
+            "actor_id": "restart-test",
+            "expected_version": session["version"],
+        })
+        assert stopped["supervisor_state"] == "STOPPED"
+        runtime_pid = None
+    finally:
+        if first.poll() is None:
+            _terminate(first)
+        if second is not None and second.poll() is None:
+            _terminate(second)
+        if runtime_pid is not None:
+            import os
+            import signal
+
+            try:
+                os.kill(runtime_pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
