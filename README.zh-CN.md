@@ -157,9 +157,9 @@ uv run pytest -q tests/qualification/test_dq04_backup_restore.py
 commit/tag。旧快照格式和旧数据库 schema 会被直接拒绝，不做就地升级或兼容补丁。
 软件矩阵不能替代 DQ04 验收所需的真实异地存储与 primary-loss 演练。
 
-集成测试是当前可执行 reference workflow。仓库已经包含持久化 RuntimeSession、
-Supervisor 和带 readiness gate 的 daemon 基础，但尚未提供最终 `researchd` composition
-CLI、日常 `research` client 或浏览器应用启动入口。
+集成测试是当前可执行 reference workflow。仓库现已提供围绕持久化 RuntimeSession /
+Supervisor 的具体 `researchd` composition root 和 CLI；日常 `research` client 与浏览器
+应用启动入口仍未完成。
 
 嵌入式 composition 必须注册可信服务并使用 `build_startup_barrier(...)`。该屏障先验证
 migration `0020` 和实时 DB/CAS 状态，再按冻结顺序调用已有 workspace、worktree、
@@ -175,6 +175,19 @@ uv run python scripts/dq01_filesystem_probe.py --root <deployment-root>
 
 ## 查看控制面
 
+创建全新的当前 schema 数据库，然后启动 loopback daemon：
+
+```bash
+uv run researchd --database researchd.db --artifact-root artifacts \
+  --state-root .researchd init
+uv run researchd --database researchd.db --artifact-root artifacts \
+  --state-root .researchd serve --port 8788
+curl http://127.0.0.1:8788/api/health
+```
+
+`serve` 不会迁移已有数据库。只有冻结的八阶段恢复屏障全部通过才会进入 READY；
+非当前 schema 会失败关闭。
+
 `researchctl` 会打开已有数据库，但不会构造 Orchestrator：
 
 ```bash
@@ -183,7 +196,7 @@ uv run researchctl --database researchd.db agent list
 uv run researchctl --database researchd.db events <run-id> --after <stream-offset>
 ```
 
-为已有数据库启动 loopback 只读 API：
+如需明确不允许 daemon mutation 的只读投影，可只嵌入 local API：
 
 ```bash
 uv run python - <<'PY'

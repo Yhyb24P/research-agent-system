@@ -10,6 +10,13 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 
 from researchd.api.agui import AGUIProjectionAdapter
 from researchd.api.control import LocalControlAPI
+from researchd.daemon.runtime import ResearchDaemon
+from researchd.domain.base import DomainModel
+from researchd.runtime_sessions.contracts import (
+    RuntimeSessionAttachCommand,
+    RuntimeSessionStartCommand,
+    RuntimeSessionStopCommand,
+)
 
 
 class _ControlCommand(BaseModel):
@@ -88,11 +95,22 @@ class ControlResourceRouter:
 class ControlCommandRouter:
     """Narrow command adapter; arbitrary UI events have no mutation path."""
 
-    def __init__(self, api: LocalControlAPI) -> None:
+    def __init__(self, api: LocalControlAPI, daemon: ResearchDaemon | None = None) -> None:
         self.api = api
+        self.daemon = daemon
 
     async def post(self, path: str, payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
         parts = [unquote(item) for item in urlparse(path).path.split("/") if item]
+        if parts == ["api", "runtime-sessions", "start"]:
+            return 200, self._execute(RuntimeSessionStartCommand.model_validate(payload))
+        if parts == ["api", "runtime-sessions", "attach"]:
+            return 200, self._execute(RuntimeSessionAttachCommand.model_validate(payload))
+        if len(parts) == 4 and parts[:2] == ["api", "runtime-sessions"] and parts[3] == "stop":
+            command = RuntimeSessionStopCommand.model_validate({
+                **payload,
+                "runtime_session_id": parts[2],
+            })
+            return 200, self._execute(command)
         if len(parts) == 4 and parts[:2] == ["api", "runs"] and parts[3] == "cancel":
             CancelRunCommand.model_validate(payload)
             return 200, await self.api.cancel_run(parts[2])
@@ -104,10 +122,21 @@ class ControlCommandRouter:
             return 200, self.api.resolve_human(parts[2], action=decision.action, objective=decision.objective)
         return 404, {"error": "unknown command"}
 
+    def _execute(self, command: DomainModel) -> dict[str, Any]:
+        if self.daemon is None:
+            raise RuntimeError("runtime mutation requires researchd")
+        result = self.daemon.execute(command)
+        if not isinstance(result, BaseModel):
+            raise TypeError("daemon command result must be a typed model")
+        return result.model_dump(mode="json")
 
-def make_handler(api: LocalControlAPI) -> type[BaseHTTPRequestHandler]:
+
+def make_handler(
+    api: LocalControlAPI,
+    daemon: ResearchDaemon | None = None,
+) -> type[BaseHTTPRequestHandler]:
     router = ControlResourceRouter(api)
-    commands = ControlCommandRouter(api)
+    commands = ControlCommandRouter(api, daemon)
     projection = AGUIProjectionAdapter(api)
 
     class Handler(BaseHTTPRequestHandler):
@@ -116,6 +145,9 @@ def make_handler(api: LocalControlAPI) -> type[BaseHTTPRequestHandler]:
         def do_GET(self) -> None:  # noqa: N802
             parsed = urlparse(self.path)
             parts = [unquote(item) for item in parsed.path.split("/") if item]
+            if parts == ["api", "health"] and daemon is not None:
+                self._send_json(200 if daemon.health()["ready"] else 503, daemon.health())
+                return
             if len(parts) == 4 and parts[:2] == ["api", "runs"] and parts[3] == "stream":
                 self._send_event_stream(parts[2], parse_qs(parsed.query))
                 return
@@ -197,10 +229,16 @@ def make_handler(api: LocalControlAPI) -> type[BaseHTTPRequestHandler]:
     return Handler
 
 
-def serve_local_control(api: LocalControlAPI, *, host: str = "127.0.0.1", port: int = 8788) -> ThreadingHTTPServer:
+def serve_local_control(
+    api: LocalControlAPI,
+    *,
+    daemon: ResearchDaemon | None = None,
+    host: str = "127.0.0.1",
+    port: int = 8788,
+) -> ThreadingHTTPServer:
     if host not in {"127.0.0.1", "localhost", "::1"}:
         raise ValueError("control HTTP server must bind loopback")
-    server = ThreadingHTTPServer((host, port), make_handler(api))
+    server = ThreadingHTTPServer((host, port), make_handler(api, daemon))
     return server
 
 

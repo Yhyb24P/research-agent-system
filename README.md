@@ -173,9 +173,9 @@ than upgraded in place. The software matrix does not replace the actual
 off-host and primary-loss drill required for DQ04 acceptance.
 
 Integration tests are the executable reference workflow. The repository now
-contains the durable RuntimeSession/Supervisor services and readiness-gated
-daemon foundation, but it does not yet ship the final `researchd` composition
-CLI, daily `research` client, or browser application bootstrap.
+ships the concrete `researchd` composition root and CLI around the durable
+RuntimeSession/Supervisor services. The daily `research` client and browser
+application bootstrap remain open.
 
 An embedding composition must register its trusted services and use
 `build_startup_barrier(...)`. The barrier verifies migration `0020` and live
@@ -193,6 +193,19 @@ uv run python scripts/dq01_filesystem_probe.py --root <deployment-root>
 
 ## Inspect the control plane
 
+Create a fresh current-schema database, then start the loopback daemon:
+
+```bash
+uv run researchd --database researchd.db --artifact-root artifacts \
+  --state-root .researchd init
+uv run researchd --database researchd.db --artifact-root artifacts \
+  --state-root .researchd serve --port 8788
+curl http://127.0.0.1:8788/api/health
+```
+
+`serve` never migrates an existing database. It reaches READY only after the
+frozen eight-stage recovery barrier passes; a non-current schema fails closed.
+
 `researchctl` opens an existing database without constructing an orchestrator:
 
 ```bash
@@ -201,7 +214,8 @@ uv run researchctl --database researchd.db agent list
 uv run researchctl --database researchd.db events <run-id> --after <stream-offset>
 ```
 
-Start the loopback read API for an existing database:
+For a deliberately read-only projection without daemon mutations, embed only
+the local API:
 
 ```bash
 uv run python - <<'PY'

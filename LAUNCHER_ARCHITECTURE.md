@@ -214,14 +214,17 @@ The productization branch now contains the first LP01/LP02 foundation:
 - restart reconciliation never relaunches an uncertain persisted intent;
 - `ResearchDaemon` remains non-ready until all eight frozen recovery phases
   pass.
+- the concrete `researchd init` / `researchd serve` lifecycle composes the
+  trusted services once, exposes loopback health and typed RuntimeSession
+  commands, and is covered by an independent-process startup test.
 
 产品化分支现已实现首批 LP01/LP02 基础：持久化运行实例和类型化命令凭证、拒绝
 PID 复用的 PROCESS supervisor、受限 REMOTE_HTTP attach、先 intent 后副作用的审计
-顺序，以及八阶段全部通过后才 READY 的 daemon gate。
+顺序，以及八阶段全部通过后才 READY 的 daemon gate；具体 `researchd init` / `serve`
+生命周期现已完成，并由独立进程启动测试覆盖。
 
 This is still an implementation milestone, not completion of the productized
-launcher. The final `researchd` composition CLI, daily `research` client, and
-LP03 managed Agent pilot remain open.
+launcher. The daily `research` client and LP03 managed Agent pilot remain open.
 
-这仍是实现里程碑，不代表产品化 Launcher 已完成。最终 `researchd` composition CLI、
-日常 `research` client 和 LP03 managed Agent pilot 仍未完成。
+这仍是实现里程碑，不代表产品化 Launcher 已完成。日常 `research` client 和 LP03
+managed Agent pilot 仍未完成。

@@ -1,0 +1,93 @@
+import asyncio
+from pathlib import Path
+import pytest
+
+from researchd.api.control import LocalControlAPI
+from researchd.api.web import ControlCommandRouter
+from researchd.daemon.runtime import DaemonNotReady, ResearchDaemon
+from researchd.daemon.startup import StartupBarrier, StartupPhase
+from researchd.domain.base import DomainModel
+from researchd.runtime_sessions.contracts import RuntimeSession, RuntimeSessionStartCommand
+from researchd.storage.db import create_sqlite_engine, session_factory
+
+
+class RecordingDispatcher:
+    def __init__(self, result: RuntimeSession) -> None:
+        self.result = result
+        self.commands: list[DomainModel] = []
+
+    def __call__(self, command: DomainModel) -> RuntimeSession:
+        self.commands.append(command)
+        return self.result
+
+
+def _barrier() -> StartupBarrier:
+    return StartupBarrier({phase: lambda: None for phase in StartupPhase})
+
+
+def _payload(tmp_path: Path) -> dict[str, object]:
+    return {
+        "command_id": "cmd_start_1",
+        "runtime_session_id": "runtime_session_test_1",
+        "runtime_id": "runtime_test_1",
+        "actor_type": "HUMAN",
+        "actor_id": "operator",
+        "launch_spec": {"argv": ["/usr/bin/true"], "cwd": str(tmp_path)},
+    }
+
+
+def _result(tmp_path: Path) -> RuntimeSession:
+    from datetime import UTC, datetime
+
+    now = datetime.now(UTC)
+    return RuntimeSession.model_validate({
+        "runtime_session_id": "runtime_session_test_1",
+        "runtime_id": "runtime_test_1",
+        "launch_mode": "PROCESS",
+        "supervisor_state": "HEALTHY",
+        "launch_spec": {"argv": ["/usr/bin/true"], "cwd": str(tmp_path)},
+        "external_identity": {"pid": 123},
+        "started_at": now,
+        "last_health_at": now,
+        "stopped_at": None,
+        "exit_reason": None,
+        "reattach_state": "NOT_APPLICABLE",
+        "version": 2,
+        "created_at": now,
+        "updated_at": now,
+    })
+
+
+def test_runtime_http_command_is_rejected_before_daemon_ready(tmp_path: Path) -> None:
+    sessions = session_factory(create_sqlite_engine(tmp_path / "unused.db"))
+    dispatcher = RecordingDispatcher(_result(tmp_path))
+    daemon = ResearchDaemon(_barrier(), dispatcher)
+    router = ControlCommandRouter(LocalControlAPI(sessions), daemon)
+
+    with pytest.raises(DaemonNotReady):
+        asyncio.run(router.post("/api/runtime-sessions/start", _payload(tmp_path)))
+    assert dispatcher.commands == []
+
+
+def test_runtime_http_command_crosses_typed_ready_gate(tmp_path: Path) -> None:
+    sessions = session_factory(create_sqlite_engine(tmp_path / "unused.db"))
+    dispatcher = RecordingDispatcher(_result(tmp_path))
+    daemon = ResearchDaemon(_barrier(), dispatcher)
+    assert daemon.start().ready
+    router = ControlCommandRouter(LocalControlAPI(sessions), daemon)
+
+    status, response = asyncio.run(
+        router.post("/api/runtime-sessions/start", _payload(tmp_path))
+    )
+
+    assert status == 200
+    assert response["runtime_session_id"] == "runtime_session_test_1"
+    assert isinstance(dispatcher.commands[0], RuntimeSessionStartCommand)
+
+
+def test_runtime_http_command_requires_daemon(tmp_path: Path) -> None:
+    sessions = session_factory(create_sqlite_engine(tmp_path / "unused.db"))
+    router = ControlCommandRouter(LocalControlAPI(sessions))
+
+    with pytest.raises(RuntimeError, match="requires researchd"):
+        asyncio.run(router.post("/api/runtime-sessions/start", _payload(tmp_path)))

@@ -25,6 +25,7 @@ qualification = [
 
 [project.scripts]
 researchctl = "researchd.cli.main:entrypoint"
+researchd = "researchd.daemon.cli:entrypoint"
 
 [dependency-groups]
 dev = [
