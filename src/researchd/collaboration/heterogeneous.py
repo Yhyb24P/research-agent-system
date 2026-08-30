@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from researchd.adapters.a2a.adapter import A2AAdapter
 from researchd.adapters.a2a.codec import A2ACodecError, decode_executor_result, encode_granted_work_order
 from researchd.collaboration.action_broker import AgentActionBroker, AgentMessageAction
+from researchd.collaboration.handoff import HandoffProposalAction
 from researchd.collaboration.contracts import AgentHealth, AgentInvocationRequest, AgentInvocationResult, AgentRuntime, EvidenceInvocationInput, ExecuteInvocationInput, PlanInvocationInput, ReviewInvocationInput
 from researchd.domain.enums import InvocationStatus
 from researchd.domain.base import DomainModel
@@ -50,7 +51,7 @@ class ManagedAgentTurnRequest(DomainModel):
 
 class ManagedAgentTurnResponse(DomainModel):
     execution: LocalAgentResponse
-    agent_actions: tuple[AgentMessageAction, ...] = ()
+    agent_actions: tuple[AgentMessageAction | HandoffProposalAction, ...] = ()
 
 
 def _request_payload(request: AgentInvocationRequest) -> dict[str, Any] | None:
@@ -333,7 +334,10 @@ class ManagedProcessAgentAdapter:
                         ).model_dump(mode="json"),
                     ))
                     for action in response.agent_actions:
-                        self.action_broker.submit_message(request.invocation_id, action)
+                        if isinstance(action, AgentMessageAction):
+                            self.action_broker.submit_message(request.invocation_id, action)
+                        else:
+                            self.action_broker.submit_handoff(request.invocation_id, action)
                     return response.execution
                 except Exception as error:
                     raise LocalModelUnavailable(type(error).__name__) from error

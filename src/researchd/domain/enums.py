@@ -154,6 +154,18 @@ class CollaborationPurpose(StrEnum):
     NOTICE = "NOTICE"
 
 
+class HandoffMode(StrEnum):
+    CONTINUE = "CONTINUE"
+    REVISE = "REVISE"
+
+
+class HandoffStatus(StrEnum):
+    PROPOSED = "PROPOSED"
+    ACCEPTED = "ACCEPTED"
+    REJECTED = "REJECTED"
+    SUPERSEDED = "SUPERSEDED"
+
+
 class DelegationState(StrEnum):
     PENDING = "PENDING"
     ASSIGNED = "ASSIGNED"

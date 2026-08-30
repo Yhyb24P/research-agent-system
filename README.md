@@ -181,7 +181,7 @@ shell command batch (`status`, agent working set, `run list`,
 the browser application bootstrap remains open.
 
 An embedding composition must register its trusted services and use
-`build_startup_barrier(...)`. The barrier verifies migration `0023` and live
+`build_startup_barrier(...)`. The barrier verifies migration `0024` and live
 DB/CAS state, then invokes the existing workspace, worktree, RuntimeSession,
 job, and invocation recovery paths in the frozen order. A failed or skipped
 phase leaves `ResearchDaemon` non-ready; callers cannot bypass that state with
@@ -312,6 +312,11 @@ Agent-origin messages enter through `AgentActionBroker`. Managed turn responses
 contain only an action ID, content, purpose, classification and optional
 recipient/reply. The broker derives sender, run, WorkOrder, Delegation, Agent
 and runtime from the live Invocation and rejects stale leases or ownership.
+
+Handoff is a separate non-authoritative `HandoffProposal`, never message text.
+An Agent may propose `CONTINUE` or `REVISE` through the same invocation-bound
+broker; source identity and scope are derived, and all referenced artifacts or
+observations must belong to that run. Only the Controller may accept it.
 
 For a deliberately read-only projection without daemon mutations, embed only
 the local API:

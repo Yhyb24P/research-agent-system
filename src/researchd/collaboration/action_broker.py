@@ -4,10 +4,12 @@ from datetime import UTC, datetime
 import hashlib
 
 from pydantic import Field
+from typing import Literal
 from sqlalchemy.orm import Session, sessionmaker
 
 from researchd.collaboration.contracts import CollaborationMessage
 from researchd.collaboration.messages import CollaborationMessageService
+from researchd.collaboration.handoff import HandoffProposal, HandoffProposalAction, HandoffProposalService
 from researchd.domain.base import DomainModel
 from researchd.domain.enums import CollaborationPurpose, DataClassification, InvocationStatus
 from researchd.domain.ids import AgentId, DelegationId, InvocationId, MessageId
@@ -15,6 +17,7 @@ from researchd.storage.models import AgentInvocationRecord, AgentRecord, AgentRu
 
 
 class AgentMessageAction(DomainModel):
+    kind: Literal["message"] = "message"
     action_id: str = Field(min_length=1, max_length=128)
     recipient_agent_id: AgentId | None = None
     purpose: CollaborationPurpose
@@ -80,6 +83,22 @@ class AgentActionBroker:
             )
             CollaborationMessageService.append_in_session(session, message, now=now)
             return message
+
+    def submit_handoff(
+        self,
+        invocation_id: InvocationId,
+        action: HandoffProposalAction,
+    ) -> HandoffProposal:
+        now = datetime.now(UTC)
+        with self.sessions.begin() as session:
+            invocation, delegation = self._require_authority(session, str(invocation_id), now)
+            digest = hashlib.sha256(
+                f"{invocation.invocation_id}:{action.action_id}".encode()
+            ).hexdigest()[:32]
+            return HandoffProposalService.propose_in_session(
+                session, proposal_id=f"handoff_{digest}", invocation=invocation,
+                delegation=delegation, action=action, now=now,
+            )
 
     @staticmethod
     def _stored_message(row: CollaborationMessageRecord) -> CollaborationMessage:

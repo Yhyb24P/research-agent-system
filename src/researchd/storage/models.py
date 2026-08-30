@@ -448,6 +448,41 @@ class CollaborationMessageRecord(Base):
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
 
 
+class HandoffProposalRecord(Base):
+    __tablename__ = "handoff_proposals"
+    __table_args__ = (
+        CheckConstraint(
+            "requested_mode IN ('CONTINUE','REVISE')",
+            name="ck_handoff_mode",
+        ),
+        CheckConstraint(
+            "status IN ('PROPOSED','ACCEPTED','REJECTED','SUPERSEDED')",
+            name="ck_handoff_status",
+        ),
+        Index("ix_handoff_run_created", "run_id", "created_at"),
+        Index("ix_handoff_status_created", "status", "created_at"),
+    )
+    proposal_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    action_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    run_id: Mapped[str] = mapped_column(ForeignKey("research_runs.run_id"), nullable=False)
+    work_order_id: Mapped[str] = mapped_column(ForeignKey("work_orders.work_order_id"), nullable=False)
+    source_delegation_id: Mapped[str] = mapped_column(ForeignKey("delegations.delegation_id"), nullable=False)
+    source_invocation_id: Mapped[str] = mapped_column(ForeignKey("agent_invocations.invocation_id"), nullable=False)
+    source_agent_id: Mapped[str] = mapped_column(ForeignKey("agents.agent_id"), nullable=False)
+    proposed_target_agent_id: Mapped[str | None] = mapped_column(ForeignKey("agents.agent_id"))
+    requested_mode: Mapped[str] = mapped_column(String(16), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    continuation_objective: Mapped[str | None] = mapped_column(Text)
+    artifact_ids_json: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    observation_ids_json: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    decided_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    decision_actor_type: Mapped[str | None] = mapped_column(String(32))
+    decision_actor_id: Mapped[str | None] = mapped_column(String(128))
+    decision_reason: Mapped[str | None] = mapped_column(Text)
+
+
 class ArtifactRecord(Base):
     __tablename__ = "artifacts"
     __table_args__ = (
