@@ -12,7 +12,7 @@ from researchd.collaboration.contracts import AgentHealth, AgentInvocationReques
 from researchd.domain.enums import InvocationStatus
 from researchd.executor.contracts import ExecutorResult
 from researchd.runtime_sessions.launch_profiles import RuntimeLaunchProfileService
-from researchd.storage.models import RuntimeSessionRecord
+from researchd.storage.models import AgentRecord, AgentRuntimeRecord, RuntimeSessionRecord
 
 
 class HttpAgentClient(Protocol):
@@ -218,8 +218,20 @@ class ManagedProcessAgentAdapter:
         self.launch_profiles = launch_profiles
         self.delegate = HttpAgentAdapter(client)
 
-    def _require_live(self, runtime_id: object, endpoint: str | None) -> None:
+    def _require_live(self, runtime_id: object) -> str:
         profile = self.launch_profiles.resolve_process(str(runtime_id))
+        with self.sessions() as session:
+            runtime = session.scalar(select(AgentRuntimeRecord).join(
+                AgentRecord,
+                AgentRecord.agent_id == AgentRuntimeRecord.agent_id,
+            ).where(
+                AgentRuntimeRecord.runtime_id == str(runtime_id),
+                AgentRuntimeRecord.enabled.is_(True),
+                AgentRecord.enabled.is_(True),
+            ))
+        if runtime is None:
+            raise ValueError("managed PROCESS runtime is disabled or missing")
+        endpoint = runtime.endpoint_ref
         parsed = urlparse(endpoint or "")
         if (
             parsed.scheme != "http"
@@ -238,24 +250,27 @@ class ManagedProcessAgentAdapter:
             ).order_by(RuntimeSessionRecord.started_at.desc()).limit(1))
         if row is None:
             raise ValueError("managed PROCESS runtime has no matching HEALTHY session")
+        assert endpoint is not None
+        return endpoint
 
     async def health(self, runtime: AgentRuntime) -> AgentHealth:
         try:
-            self._require_live(runtime.runtime_id, runtime.endpoint_ref)
+            endpoint = self._require_live(runtime.runtime_id)
         except ValueError as error:
             return AgentHealth(healthy=False, reason=str(error))
-        return await self.delegate.health(runtime)
+        return await self.delegate.health(runtime.model_copy(update={"endpoint_ref": endpoint}))
 
     async def invoke(self, request: AgentInvocationRequest) -> AgentInvocationResult:
         try:
-            self._require_live(request.runtime_id, request.endpoint_ref)
+            endpoint = self._require_live(request.runtime_id)
         except ValueError:
             return AgentInvocationResult(
                 invocation_id=request.invocation_id,
                 status=InvocationStatus.FAILED,
                 reason_code="PROCESS_RUNTIME_UNAVAILABLE",
             )
-        return await self.delegate.invoke(request)
+        trusted = request.model_copy(update={"endpoint_ref": endpoint})
+        return await self.delegate.invoke(trusted)
 
     async def cancel(self, invocation_id: str) -> None:
         await self.delegate.cancel(invocation_id)

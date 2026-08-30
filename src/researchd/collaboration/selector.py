@@ -3,7 +3,7 @@ from pydantic import Field
 from sqlalchemy import exists, func, select
 from sqlalchemy.orm import Session, sessionmaker
 from researchd.collaboration.contracts import AgentProfile
-from researchd.domain.enums import AgentTrustZone, DelegationState
+from researchd.domain.enums import AgentAdapterKind, AgentTrustZone, DelegationState
 from researchd.domain.ids import AgentId, AgentRuntimeId
 from researchd.storage.models import (
     AgentRecord,
@@ -28,9 +28,13 @@ class AgentSelector:
         sessions: sessionmaker[Session],
         *,
         require_supervised_session: bool = False,
+        allowed_adapter_kinds: frozenset[AgentAdapterKind] = frozenset(),
+        required_launch_mode: str | None = None,
     ) -> None:
         self.sessions = sessions
         self.require_supervised_session = require_supervised_session
+        self.allowed_adapter_kinds = allowed_adapter_kinds
+        self.required_launch_mode = required_launch_mode
 
     def select(self, *, required_roles: tuple[str, ...] = (), required_skills: tuple[str, ...] = (), required_trust_zones: tuple[AgentTrustZone, ...] = (), now: datetime | None = None) -> AgentSelection | None:
         reference = now or datetime.now(UTC)
@@ -41,8 +45,13 @@ class AgentSelector:
             ).where(
                 AgentRecord.enabled.is_(True),
                 AgentRuntimeRecord.enabled.is_(True),
+                AgentRuntimeRecord.runtime_lease_id.is_not(None),
                 AgentRuntimeRecord.lease_expires_at > reference,
             )
+            if self.allowed_adapter_kinds:
+                query = query.where(AgentRuntimeRecord.adapter_kind.in_(
+                    tuple(kind.value for kind in self.allowed_adapter_kinds)
+                ))
             if self.require_supervised_session:
                 query = query.where(exists().where(
                     RuntimeSessionRecord.runtime_id == AgentRuntimeRecord.runtime_id,
@@ -52,6 +61,13 @@ class AgentSelector:
                     RuntimeSessionRecord.launch_profile_sha256
                     == RuntimeLaunchProfileRecord.spec_sha256,
                 ))
+                if self.required_launch_mode is not None:
+                    query = query.where(exists().where(
+                        RuntimeLaunchProfileRecord.runtime_id
+                        == AgentRuntimeRecord.runtime_id,
+                        RuntimeLaunchProfileRecord.launch_mode
+                        == self.required_launch_mode,
+                    ))
             rows = session.execute(query.order_by(
                 AgentRecord.agent_id,
                 AgentRuntimeRecord.runtime_id,

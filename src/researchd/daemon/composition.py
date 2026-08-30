@@ -221,7 +221,12 @@ def compose_daemon(
         collaboration=CollaborationGateway(
             delegations=DelegationService(sessions),
             invocations=invocations,
-            selector=AgentSelector(sessions, require_supervised_session=True),
+            selector=AgentSelector(
+                sessions,
+                require_supervised_session=True,
+                allowed_adapter_kinds=frozenset({AgentAdapterKind.PROCESS}),
+                required_launch_mode="PROCESS",
+            ),
             catalog=catalog,
         ),
         policy=RecordingPolicyEngine(DeterministicPolicyEngine(), sessions),
