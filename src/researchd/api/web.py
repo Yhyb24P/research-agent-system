@@ -5,7 +5,7 @@ import hmac
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import time
-from typing import Any
+from typing import Any, Protocol
 from urllib.parse import parse_qs, unquote, urlparse
 
 from pydantic import BaseModel, ValidationError
@@ -27,10 +27,17 @@ from researchd.runtime_sessions.contracts import (
     ExternalRuntimeSessionAttachRequest,
     ExternalRuntimeSessionStartRequest,
     ExternalRuntimeSessionStopRequest,
+    ResolvedProcessLaunch,
+    ResolvedRemoteHttpLaunch,
     RuntimeSessionAttachCommand,
     RuntimeSessionStartCommand,
     RuntimeSessionStopCommand,
 )
+
+
+class RuntimeLaunchProfileAuthority(Protocol):
+    def resolve_process(self, runtime_id: str) -> ResolvedProcessLaunch: ...
+    def resolve_remote_http(self, runtime_id: str) -> ResolvedRemoteHttpLaunch: ...
 
 
 class ControlResourceRouter:
@@ -94,32 +101,40 @@ class ControlCommandRouter:
         daemon: ResearchDaemon | None = None,
         *,
         human_actor_id: str = "local-control-client",
+        launch_profiles: RuntimeLaunchProfileAuthority | None = None,
     ) -> None:
         self.api = api
         self.daemon = daemon
         self.human_actor_id = human_actor_id
+        self.launch_profiles = launch_profiles
 
     async def post(self, path: str, payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
         parts = [unquote(item) for item in urlparse(path).path.split("/") if item]
         if parts == ["api", "runtime-sessions", "start"]:
             start_request = ExternalRuntimeSessionStartRequest.model_validate(payload)
+            start_launch = self._launch_profiles().resolve_process(str(start_request.runtime_id))
             return await self._execute(RuntimeSessionStartCommand(
                 command_id=start_request.command_id,
                 runtime_session_id=start_request.runtime_session_id,
                 runtime_id=start_request.runtime_id,
                 actor_type="HUMAN",
                 actor_id=self.human_actor_id,
-                launch_spec=start_request.launch_spec,
+                launch_spec=start_launch.launch_spec,
+                launch_profile_sha256=start_launch.spec_sha256,
             ))
         if parts == ["api", "runtime-sessions", "attach"]:
             attach_request = ExternalRuntimeSessionAttachRequest.model_validate(payload)
+            attach_launch = self._launch_profiles().resolve_remote_http(
+                str(attach_request.runtime_id)
+            )
             return await self._execute(RuntimeSessionAttachCommand(
                 command_id=attach_request.command_id,
                 runtime_session_id=attach_request.runtime_session_id,
                 runtime_id=attach_request.runtime_id,
                 actor_type="HUMAN",
                 actor_id=self.human_actor_id,
-                launch_spec=attach_request.launch_spec,
+                launch_spec=attach_launch.launch_spec,
+                launch_profile_sha256=attach_launch.spec_sha256,
             ))
         if len(parts) == 4 and parts[:2] == ["api", "runtime-sessions"] and parts[3] == "stop":
             stop_request = ExternalRuntimeSessionStopRequest.model_validate(payload)
@@ -175,15 +190,21 @@ class ControlCommandRouter:
         response = result.model_dump(mode="json")
         return (409 if response.get("status") == "REJECTED" else 202), response
 
+    def _launch_profiles(self) -> RuntimeLaunchProfileAuthority:
+        if self.launch_profiles is None:
+            raise RuntimeError("runtime launch profile authority is not configured")
+        return self.launch_profiles
+
 
 def make_handler(
     api: LocalControlAPI,
     daemon: ResearchDaemon | None = None,
     *,
     control_token: str | None = None,
+    launch_profiles: RuntimeLaunchProfileAuthority | None = None,
 ) -> type[BaseHTTPRequestHandler]:
     router = ControlResourceRouter(api)
-    commands = ControlCommandRouter(api, daemon)
+    commands = ControlCommandRouter(api, daemon, launch_profiles=launch_profiles)
     projection = AGUIProjectionAdapter(api)
 
     class Handler(BaseHTTPRequestHandler):
@@ -304,13 +325,20 @@ def serve_local_control(
     host: str = "127.0.0.1",
     port: int = 8788,
     control_token: str | None = None,
+    launch_profiles: RuntimeLaunchProfileAuthority | None = None,
 ) -> ThreadingHTTPServer:
     if host not in {"127.0.0.1", "localhost", "::1"}:
         raise ValueError("control HTTP server must bind loopback")
     if daemon is not None and control_token is None:
         raise ValueError("mutable control server requires a local credential")
     server = ThreadingHTTPServer(
-        (host, port), make_handler(api, daemon, control_token=control_token)
+        (host, port),
+        make_handler(
+            api,
+            daemon,
+            control_token=control_token,
+            launch_profiles=launch_profiles,
+        ),
     )
     return server
 

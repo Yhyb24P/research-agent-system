@@ -209,6 +209,10 @@ The productization branch now contains the first LP01/LP02 foundation:
 - migration `0021` persists a generic daemon command receipt before dispatch,
   replays terminal results without repeating side effects, and leaves an
   interrupted `ACCEPTED` receipt fail-closed for operator reconciliation;
+- migration `0022` persists a one-to-one trusted RuntimeLaunchProfile for each
+  managed AgentRuntime. Public runtime requests cannot carry launch details;
+  the daemon verifies the stored profile digest and snapshots the resolved
+  specification plus profile hash on the RuntimeSession before side effects;
 - PROCESS supervision uses PID, process start ticks, and host boot identity to
   reject PID reuse; REMOTE_HTTP accepts only HTTPS or loopback HTTP endpoints
   registered on the existing `AgentRuntime`;
@@ -250,7 +254,8 @@ The productization branch now contains the first LP01/LP02 foundation:
   now creates an owner-only 256-bit local credential and every non-health HTTP
   read, stream and mutation authenticates it before routing. The credential is
   excluded from database, audit, backup, inspect and Agent context surfaces.
-  The server-owned RuntimeLaunchProfile remains the next P0 gap.
+  Migration `0022` also closes the public launch-spec surface with a
+  server-owned RuntimeLaunchProfile and persisted resolved-spec/hash snapshot.
 
 产品化分支现已实现首批 LP01/LP02 基础：持久化运行实例和类型化命令凭证、拒绝
 PID 复用的 PROCESS supervisor、受限 REMOTE_HTTP attach、先 intent 后副作用的审计
@@ -276,7 +281,8 @@ PX00 外部请求 DTO 现已排除可信 actor 字段；HTTP adapter 在构造�
 HUMAN actor，调用方自报的 `SYSTEM` 或 actor attribution 会在派发前被拒绝。
 `researchd init` 现会生成 owner-only 256-bit 本地凭据；除 health 外的 HTTP 读取、stream
 和 mutation 都在路由前认证。凭据不会进入数据库、审计、备份、inspect 或 Agent context。
-server-owned RuntimeLaunchProfile 是下一项 P0 缺口。
+Migration `0022` 还以 server-owned RuntimeLaunchProfile 和持久化的解析规格/hash snapshot
+关闭了公开 launch-spec 输入面。
 
 This is still an implementation milestone, not completion of the productized
 launcher. The daily `research` client and LP03 managed Agent pilot remain open.
@@ -291,7 +297,7 @@ the frozen requirements. The current evidence is:
 
 | Requirement | Status | Authoritative evidence |
 |---|---|---|
-| exact schema check, DB/CAS sanity and eight ordered recovery phases | PASS | `daemon/startup.py`, migration `0021`, daemon integration tests |
+| exact schema check, DB/CAS sanity and eight ordered recovery phases | PASS | `daemon/startup.py`, migration `0022`, daemon integration tests |
 | non-ready mutation rejection and visible loopback health | PASS | `ResearchDaemon.execute`, `/api/health`, failed-start independent-process test |
 | unresolved runtime/workspace/worktree/job/invocation recovery blocks READY | PASS | fail-closed post-recovery checks in `daemon/startup.py` |
 | durable RuntimeSession and idempotent START/ATTACH/STOP receipts | PASS | migration `0020`, `runtime_sessions/service.py`, concurrency/replay tests |

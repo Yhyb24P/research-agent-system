@@ -72,6 +72,30 @@ class ProcessLaunchSpec(DomainModel):
         return self
 
 
+class ProcessLaunchConfiguration(DomainModel):
+    launch_spec: ProcessLaunchSpec
+
+
+class RemoteHttpLaunchConfiguration(DomainModel):
+    health_path: str = Field(default="/health", min_length=1, max_length=256)
+
+    @field_validator("health_path")
+    @classmethod
+    def health_path_is_absolute(cls, value: str) -> str:
+        if not value.startswith("/") or "?" in value or "#" in value:
+            raise ValueError("health_path must be an absolute URL path")
+        return value
+
+
+class RuntimeLaunchProfile(DomainModel):
+    runtime_id: AgentRuntimeId
+    launch_mode: LaunchMode
+    configuration: dict[str, object]
+    spec_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    enabled: bool = True
+    version: PositiveInt = 1
+
+
 class RemoteHttpAttachSpec(DomainModel):
     endpoint: str = Field(min_length=1, max_length=2048)
     health_path: str = Field(default="/health", min_length=1, max_length=256)
@@ -91,6 +115,16 @@ class RemoteHttpAttachSpec(DomainModel):
         if not self.health_path.startswith("/") or "?" in self.health_path or "#" in self.health_path:
             raise ValueError("health_path must be an absolute URL path")
         return self
+
+
+class ResolvedProcessLaunch(DomainModel):
+    launch_spec: ProcessLaunchSpec
+    spec_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class ResolvedRemoteHttpLaunch(DomainModel):
+    launch_spec: RemoteHttpAttachSpec
+    spec_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
 class _RuntimeSessionCommand(DomainModel):
@@ -119,10 +153,12 @@ class _RuntimeSessionCommand(DomainModel):
 
 class RuntimeSessionStartCommand(_RuntimeSessionCommand):
     launch_spec: ProcessLaunchSpec
+    launch_profile_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
 class RuntimeSessionAttachCommand(_RuntimeSessionCommand):
     launch_spec: RemoteHttpAttachSpec
+    launch_profile_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
 class RuntimeSessionStopCommand(_RuntimeSessionCommand):
@@ -130,13 +166,12 @@ class RuntimeSessionStopCommand(_RuntimeSessionCommand):
 
 
 class ExternalRuntimeSessionStartRequest(DomainModel):
-    """Temporary external start intent; launch specs move server-side in PX00-03."""
+    """Untrusted intent selecting a server-owned PROCESS launch profile."""
 
     request_version: Literal[1] = 1
     command_id: str = Field(min_length=1, max_length=128)
     runtime_session_id: RuntimeSessionId
     runtime_id: AgentRuntimeId
-    launch_spec: ProcessLaunchSpec
 
 
 class ExternalRuntimeSessionAttachRequest(DomainModel):
@@ -144,7 +179,6 @@ class ExternalRuntimeSessionAttachRequest(DomainModel):
     command_id: str = Field(min_length=1, max_length=128)
     runtime_session_id: RuntimeSessionId
     runtime_id: AgentRuntimeId
-    launch_spec: RemoteHttpAttachSpec
 
 
 class ExternalRuntimeSessionStopRequest(DomainModel):
@@ -160,6 +194,7 @@ class RuntimeSession(DomainModel):
     launch_mode: LaunchMode
     supervisor_state: SupervisorState
     launch_spec: dict[str, object]
+    launch_profile_sha256: str | None = None
     external_identity: dict[str, object] | None = None
     started_at: datetime | None = None
     last_health_at: datetime | None = None

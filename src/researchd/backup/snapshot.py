@@ -28,7 +28,7 @@ _MANIFEST_KEYS = {
     "created_at_utc",
 }
 
-# Every authoritative table created by migrations 0001-0021 (alembic_version
+# Every authoritative table created by migrations 0001-0022 (alembic_version
 # excluded). A migration that changes this set must update the restore gate.
 AUTHORITATIVE_TABLES: tuple[str, ...] = (
     "agent_interactions",
@@ -59,6 +59,7 @@ AUTHORITATIVE_TABLES: tuple[str, ...] = (
     "research_runs",
     "review_decisions",
     "runtime_session_commands",
+    "runtime_launch_profiles",
     "runtime_sessions",
     "verification_results",
     "work_orders",

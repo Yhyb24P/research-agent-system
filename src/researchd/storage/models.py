@@ -157,6 +157,26 @@ class AgentRuntimeLeaseEventRecord(Base):
     observed_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
 
 
+class RuntimeLaunchProfileRecord(Base, VersionedTimestamps):
+    """Trusted one-to-one launch configuration for an existing AgentRuntime."""
+
+    __tablename__ = "runtime_launch_profiles"
+    __table_args__ = (
+        CheckConstraint(
+            "launch_mode IN ('PROCESS', 'REMOTE_HTTP')",
+            name="ck_runtime_launch_profiles_mode",
+        ),
+        Index("ix_runtime_launch_profiles_enabled", "enabled"),
+    )
+    runtime_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_runtimes.runtime_id"), primary_key=True,
+    )
+    launch_mode: Mapped[str] = mapped_column(String(32), nullable=False)
+    configuration_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    spec_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    enabled: Mapped[bool] = mapped_column(nullable=False, default=True)
+
+
 class RuntimeSessionRecord(Base, VersionedTimestamps):
     """One concrete supervised instance of an existing AgentRuntime."""
 
@@ -195,6 +215,7 @@ class RuntimeSessionRecord(Base, VersionedTimestamps):
     launch_mode: Mapped[str] = mapped_column(String(32), nullable=False)
     supervisor_state: Mapped[str] = mapped_column(String(32), nullable=False)
     launch_spec_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    launch_profile_sha256: Mapped[str | None] = mapped_column(String(64))
     external_identity_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     started_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     last_health_at: Mapped[datetime | None] = mapped_column(UTCDateTime())

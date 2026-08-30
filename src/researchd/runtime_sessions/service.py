@@ -160,6 +160,7 @@ class RuntimeSessionService:
                     launch_mode=launch_mode.value,
                     supervisor_state=SupervisorState.STARTING.value,
                     launch_spec_json=launch_spec,
+                    launch_profile_sha256=command.launch_profile_sha256,
                     external_identity_json=None,
                     started_at=None,
                     last_health_at=None,
@@ -506,6 +507,7 @@ class RuntimeSessionService:
             launch_mode=LaunchMode(record.launch_mode),
             supervisor_state=SupervisorState(record.supervisor_state),
             launch_spec=dict(record.launch_spec_json),
+            launch_profile_sha256=record.launch_profile_sha256,
             external_identity=(
                 dict(record.external_identity_json)
                 if record.external_identity_json is not None

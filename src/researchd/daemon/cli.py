@@ -66,6 +66,7 @@ def main(argv: list[str] | None = None) -> int:
     server = serve_local_control(
         application.api,
         daemon=application.daemon,
+        launch_profiles=application.launch_profiles,
         host=config.host,
         port=config.port,
         control_token=control_token,

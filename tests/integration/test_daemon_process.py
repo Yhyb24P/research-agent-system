@@ -15,6 +15,8 @@ from researchd.collaboration.registry import AgentRegistryService
 from researchd.domain.enums import AgentAdapterKind, AgentTrustZone
 from researchd.domain.ids import AgentId, AgentRuntimeId
 from researchd.storage.db import create_sqlite_engine, session_factory
+from researchd.runtime_sessions.contracts import ProcessLaunchSpec
+from researchd.runtime_sessions.launch_profiles import RuntimeLaunchProfileService
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -96,7 +98,8 @@ def _terminate(process: subprocess.Popen[str]) -> None:
 
 
 def _register_process_runtime(database: Path) -> None:
-    registry = AgentRegistryService(session_factory(create_sqlite_engine(database)))
+    sessions = session_factory(create_sqlite_engine(database))
+    registry = AgentRegistryService(sessions)
     registry.register_profile(AgentProfile(
         agent_id=AgentId("agent_restart_test"),
         display_name="Restart test Agent",
@@ -110,6 +113,10 @@ def _register_process_runtime(database: Path) -> None:
         adapter_kind=AgentAdapterKind.PROCESS,
         runtime_name="Restart test process",
     ))
+    RuntimeLaunchProfileService(sessions, registry).register_process(
+        "runtime_crash_test",
+        ProcessLaunchSpec(argv=("/usr/bin/sleep", "60"), cwd=str(database.parent)),
+    )
 def test_researchd_starts_as_independent_process(tmp_path: Path) -> None:
     database = tmp_path / "researchd.db"
     artifacts = tmp_path / "artifacts"
@@ -183,11 +190,23 @@ def test_researchd_restart_reattaches_live_runtime_and_preserves_audit_order(
             "command_id": "command_restart_start",
             "runtime_session_id": "runtime_session_restart_test",
             "runtime_id": "runtime_crash_test",
-            "launch_spec": {"argv": ["/usr/bin/sleep", "60"], "cwd": str(tmp_path)},
         }, state)
         started_resource = cast(dict[str, object], started["resource"])
         assert started["status"] == "ACCEPTED"
         assert started_resource["supervisor_state"] == "HEALTHY"
+        assert started_resource["launch_spec"] == {
+            "argv": ["/usr/bin/sleep", "60"],
+            "cwd": str(tmp_path),
+        }
+        profile_sessions = session_factory(create_sqlite_engine(database))
+        profile_service = RuntimeLaunchProfileService(
+            profile_sessions,
+            AgentRegistryService(profile_sessions),
+        )
+        assert (
+            started_resource["launch_profile_sha256"]
+            == profile_service.get("runtime_crash_test").spec_sha256
+        )
         identity = cast(dict[str, object], started_resource["external_identity"])
         runtime_pid = int(cast(int, identity["pid"]))
 
@@ -277,7 +296,6 @@ def test_start_intent_crash_never_relaunches_uncertain_process(tmp_path: Path) -
                 "command_id": "command_must_be_rejected",
                 "runtime_session_id": "runtime_session_rejected",
                 "runtime_id": "runtime_crash_test",
-                "launch_spec": {"argv": ["/usr/bin/true"], "cwd": str(tmp_path)},
             }, state)
         assert rejected.value.code == 409
     finally:
@@ -308,7 +326,6 @@ def test_stop_intent_crash_is_finished_by_restart_reconciliation(tmp_path: Path)
             "command_id": "command_normal_start",
             "runtime_session_id": "runtime_session_crash_test",
             "runtime_id": "runtime_crash_test",
-            "launch_spec": {"argv": ["/usr/bin/sleep", "60"], "cwd": str(tmp_path)},
         }, state)
         started_resource = cast(dict[str, object], started["resource"])
         assert started["status"] == "ACCEPTED"

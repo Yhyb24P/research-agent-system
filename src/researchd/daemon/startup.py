@@ -28,7 +28,7 @@ from researchd.supervisor.runtime import RuntimeSupervisor
 from researchd.workspace.service import WorkspaceDelegationService
 
 
-EXPECTED_SCHEMA_REVISION = "0021"
+EXPECTED_SCHEMA_REVISION = "0022"
 
 
 class StartupPhase(StrEnum):

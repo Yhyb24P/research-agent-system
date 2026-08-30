@@ -11,6 +11,7 @@ from researchd.runtime_sessions.contracts import (
     SupervisorState,
 )
 from researchd.runtime_sessions.service import RuntimeSessionService
+from researchd.runtime_sessions.launch_profiles import RuntimeLaunchProfileService
 
 __all__ = [
     "LaunchMode",
@@ -21,5 +22,6 @@ __all__ = [
     "RuntimeSessionService",
     "RuntimeSessionStartCommand",
     "RuntimeSessionStopCommand",
+    "RuntimeLaunchProfileService",
     "SupervisorState",
 ]

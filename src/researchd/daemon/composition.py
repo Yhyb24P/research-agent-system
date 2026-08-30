@@ -26,6 +26,7 @@ from researchd.orchestrator.engine import ResearchOrchestrator
 from researchd.policy.approval import ApprovalService
 from researchd.policy.engine import DeterministicPolicyEngine, RecordingPolicyEngine
 from researchd.runtime_sessions.service import RuntimeSessionService
+from researchd.runtime_sessions.launch_profiles import RuntimeLaunchProfileService
 from researchd.storage.db import create_sqlite_engine, session_factory
 from researchd.supervisor.runtime import RuntimeSupervisor
 from researchd.workspace.service import WorkspaceDelegationService
@@ -128,6 +129,7 @@ class DaemonApplication:
     config: DaemonConfig
     daemon: ResearchDaemon
     api: LocalControlAPI
+    launch_profiles: RuntimeLaunchProfileService
 
 
 def compose_daemon(config: DaemonConfig) -> DaemonApplication:
@@ -158,6 +160,7 @@ def compose_daemon(config: DaemonConfig) -> DaemonApplication:
     jobs = JobManager(sessions, LocalDurableJobBackend(state / "jobs", commands))
     invocations = InvocationService(sessions)
     registry = AgentRegistryService(sessions)
+    launch_profiles = RuntimeLaunchProfileService(sessions, registry)
     supervisor = RuntimeSupervisor(RuntimeSessionService(sessions, registry))
     barrier = build_startup_barrier(
         engine=engine,
@@ -193,7 +196,12 @@ def compose_daemon(config: DaemonConfig) -> DaemonApplication:
     api = LocalControlAPI(sessions, orchestrator)
     dispatcher = DaemonCommandDispatcher(supervisor, api)
     daemon = ResearchDaemon(barrier, DurableDaemonCommandService(sessions, dispatcher))
-    return DaemonApplication(config=config, daemon=daemon, api=api)
+    return DaemonApplication(
+        config=config,
+        daemon=daemon,
+        api=api,
+        launch_profiles=launch_profiles,
+    )
 
 
 __all__ = ["DaemonApplication", "DaemonConfig", "JobCommandConfig", "compose_daemon"]

@@ -178,7 +178,7 @@ RuntimeSession/Supervisor services. The daily `research` client and browser
 application bootstrap remain open.
 
 An embedding composition must register its trusted services and use
-`build_startup_barrier(...)`. The barrier verifies migration `0021` and live
+`build_startup_barrier(...)`. The barrier verifies migration `0022` and live
 DB/CAS state, then invokes the existing workspace, worktree, RuntimeSession,
 job, and invocation recovery paths in the frozen order. A failed or skipped
 phase leaves `ResearchDaemon` non-ready; callers cannot bypass that state with
@@ -285,6 +285,9 @@ internal command. An accepted dispatch returns `202` with the versioned
 
 | Method | Route | Route-specific body fields |
 |---|---|---|
+| `POST` | `/api/runtime-sessions/start` | `runtime_session_id`, `runtime_id` |
+| `POST` | `/api/runtime-sessions/attach` | `runtime_session_id`, `runtime_id` |
+| `POST` | `/api/runtime-sessions/{runtime_session_id}/stop` | `runtime_id`, `expected_version` |
 | `POST` | `/api/runs/{run_id}/cancel` | — |
 | `POST` | `/api/work-orders/{work_order_id}/approve` | `grant_id` |
 | `POST` | `/api/work-orders/{work_order_id}/human-decision` | `action` (`abort` or `revise`; `revise` requires `objective`) |
@@ -299,6 +302,15 @@ blocks READY until an operator reconciliation mechanism resolves it.
 The local token authenticates the owner client while server-side actor binding
 prevents payload attribution. This is the PX00 MVP boundary; later native peer
 credentials may replace the token without changing internal command authority.
+
+Migration `0022` adds a one-to-one, server-owned `RuntimeLaunchProfile` for an
+existing `AgentRuntime`. Public start/attach requests contain no executable,
+argv, cwd, endpoint, or health override. The daemon resolves the enabled
+profile, verifies its canonical digest, constructs the internal command, and
+persists both the resolved launch-spec snapshot and profile hash on the
+RuntimeSession. Until PX01 supplies the installation command, profiles are
+registered only through the trusted in-process configuration service; a
+missing, disabled, wrong-mode, or tampered profile fails closed.
 
 Arbitrary UI events have no mutation endpoint.
 

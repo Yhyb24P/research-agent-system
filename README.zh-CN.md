@@ -162,7 +162,7 @@ Supervisor 的具体 `researchd` composition root 和 CLI；日常 `research` cl
 应用启动入口仍未完成。
 
 嵌入式 composition 必须注册可信服务并使用 `build_startup_barrier(...)`。该屏障先验证
-migration `0021` 和实时 DB/CAS 状态，再按冻结顺序调用已有 workspace、worktree、
+migration `0022` 和实时 DB/CAS 状态，再按冻结顺序调用已有 workspace、worktree、
 RuntimeSession、job 和 invocation 恢复路径。任一阶段失败或跳过都会让
 `ResearchDaemon` 保持 non-ready；调用方不能用 free-text 或直接 SQL mutation 绕过。
 
@@ -258,6 +258,9 @@ HUMAN 身份，再构造内部命令。接受后的派发返回 `202` 以及带�
 
 | 方法 | 路由 | 路由特有 Body 字段 |
 |---|---|---|
+| `POST` | `/api/runtime-sessions/start` | `runtime_session_id`、`runtime_id` |
+| `POST` | `/api/runtime-sessions/attach` | `runtime_session_id`、`runtime_id` |
+| `POST` | `/api/runtime-sessions/{runtime_session_id}/stop` | `runtime_id`、`expected_version` |
 | `POST` | `/api/runs/{run_id}/cancel` | — |
 | `POST` | `/api/work-orders/{work_order_id}/approve` | `grant_id` |
 | `POST` | `/api/work-orders/{work_order_id}/human-decision` | `action`（`abort` 或 `revise`；`revise` 必须带 `objective`） |
@@ -269,6 +272,13 @@ Migration `0021` 会在派发前预留通用持久化回执。同一命令身份
 
 本地 token 负责认证 owner client，服务端 actor 绑定则阻止 payload 伪造 attribution；
 二者共同构成 PX00 MVP。未来可用 native peer credential 替换 token，而不改变内部命令权威。
+
+Migration `0022` 为已有 `AgentRuntime` 增加一对一、server-owned 的
+`RuntimeLaunchProfile`。公共 start/attach 请求不再包含 executable、argv、cwd、endpoint
+或 health override。Daemon 会解析 enabled profile、验证 canonical digest、构造内部命令，
+并把解析后的 launch-spec snapshot 与 profile hash 一起持久化到 RuntimeSession。PX01
+安装命令完成前，profile 只能由可信 in-process 配置服务注册；缺失、禁用、mode 不匹配或
+被篡改的 profile 均失败关闭。
 
 系统不存在允许任意 UI event 修改状态的入口。
 
