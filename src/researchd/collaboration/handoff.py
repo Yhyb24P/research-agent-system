@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from researchd.domain.base import DomainModel
-from researchd.domain.enums import AttemptState, DelegationState, HandoffMode, HandoffStatus
+from researchd.domain.enums import AttemptState, DelegationPurpose, DelegationState, HandoffMode, HandoffStatus
 from researchd.domain.ids import AgentId
 from researchd.storage.models import AgentInvocationRecord, AgentRecord, ArtifactRecord, AttemptRecord, AuditEventRecord, DelegationRecord, HandoffProposalRecord, ObservationRecord, WorkOrderRecord
 
@@ -172,6 +172,8 @@ class HandoffProposalService:
         agent_id = invocation.agent_id
         if not isinstance(work_order_id, str):
             raise ValueError("handoff requires a WorkOrder-scoped invocation")
+        if invocation.attempt_id is None or delegation.purpose != DelegationPurpose.EXECUTE.value:
+            raise ValueError("handoff requires an execution-scoped invocation")
         if action.proposed_target_agent_id is not None:
             target = session.get(AgentRecord, str(action.proposed_target_agent_id))
             if target is None or not target.enabled:

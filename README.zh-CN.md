@@ -284,10 +284,12 @@ research --config researchd.json console system
 每个 console 都是可随时关闭的投影 client；关闭其中一个不会停止 Agent、runtime
 session 或 daemon。
 
-Agent-origin message 统一进入 `AgentActionBroker`。managed turn response 只含
-action ID、内容、purpose、classification 及可选 recipient/reply；Broker 从
+managed turn request 携带 canonical invocation purpose 与结构化 payload：执行
+turn 接收由 controller 构造的 local request，规划与评审 turn 返回由 controller
+验证的结构化业务输出。Agent-origin message 与 handoff proposal 统一进入
+`AgentActionBroker`；其 action 不携带调用方可指定的 authority scope，Broker 从
 live Invocation 推导 sender、run、WorkOrder、Delegation、Agent 与 runtime，
-并拒绝过期 lease 或失效 ownership。
+并拒绝过期 lease 或失效 ownership。handoff 只能来自 execution-scoped invocation。
 
 Handoff 是独立、非权威的 `HandoffProposal`，绝不是 message text。Agent 可经
 同一个 invocation-bound Broker 提出 `CONTINUE` 或 `REVISE`；source 身份与

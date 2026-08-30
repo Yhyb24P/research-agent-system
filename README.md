@@ -320,10 +320,14 @@ research --config researchd.json console system
 Each console is a disposable projection client; quitting one never stops an
 Agent, a runtime session, or the daemon.
 
-Agent-origin messages enter through `AgentActionBroker`. Managed turn responses
-contain only an action ID, content, purpose, classification and optional
-recipient/reply. The broker derives sender, run, WorkOrder, Delegation, Agent
-and runtime from the live Invocation and rejects stale leases or ownership.
+Managed turn requests carry the canonical invocation purpose and a structured
+payload; execution turns receive the controller-built local request, while
+planning and review turns return a structured business output validated by the
+controller. Agent-origin messages and handoff proposals enter through
+`AgentActionBroker`. Their actions contain no caller-supplied authority scope:
+the broker derives sender, run, WorkOrder, Delegation, Agent and runtime from
+the live Invocation and rejects stale leases or ownership. A handoff is only
+valid from an execution-scoped invocation.
 
 Handoff is a separate non-authoritative `HandoffProposal`, never message text.
 An Agent may propose `CONTINUE` or `REVISE` through the same invocation-bound

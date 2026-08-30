@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, Protocol
 from urllib.parse import urlparse
 import httpx
-from pydantic import ValidationError
+from pydantic import ValidationError, model_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 from researchd.adapters.a2a.adapter import A2AAdapter
@@ -13,7 +13,7 @@ from researchd.adapters.a2a.codec import A2ACodecError, decode_executor_result, 
 from researchd.collaboration.action_broker import AgentActionBroker, AgentMessageAction
 from researchd.collaboration.handoff import HandoffProposalAction
 from researchd.collaboration.contracts import AgentHealth, AgentInvocationRequest, AgentInvocationResult, AgentRuntime, EvidenceInvocationInput, ExecuteInvocationInput, PlanInvocationInput, ReviewInvocationInput
-from researchd.domain.enums import InvocationStatus
+from researchd.domain.enums import DelegationPurpose, InvocationStatus
 from researchd.domain.base import DomainModel
 from researchd.executor.capability_broker import CapabilityBroker
 from researchd.executor.contracts import (
@@ -45,13 +45,23 @@ class ProcessAgentRunner(Protocol):
 
 class ManagedAgentTurnRequest(DomainModel):
     invocation_id: str
-    attempt_id: str
-    request: LocalAgentRequest
+    run_id: str
+    purpose: DelegationPurpose
+    work_order_id: str | None = None
+    attempt_id: str | None = None
+    payload: dict[str, object]
 
 
 class ManagedAgentTurnResponse(DomainModel):
-    execution: LocalAgentResponse
+    execution: LocalAgentResponse | None = None
+    output: dict[str, object] | None = None
     agent_actions: tuple[AgentMessageAction | HandoffProposalAction, ...] = ()
+
+    @model_validator(mode="after")
+    def exactly_one_result_kind(self) -> "ManagedAgentTurnResponse":
+        if (self.execution is None) == (self.output is None):
+            raise ValueError("managed Agent turn requires exactly one result kind")
+        return self
 
 
 def _request_payload(request: AgentInvocationRequest) -> dict[str, Any] | None:
@@ -307,11 +317,7 @@ class ManagedProcessAgentAdapter:
             )
         typed = request.typed_input
         if not isinstance(typed, ExecuteInvocationInput):
-            return AgentInvocationResult(
-                invocation_id=request.invocation_id,
-                status=InvocationStatus.FAILED,
-                reason_code="GRANTED_WORK_ORDER_REQUIRED",
-            )
+            return await self._invoke_business_turn(endpoint, request)
         try:
             work_order = self._controller_work_order(request, typed)
         except ValueError:
@@ -329,15 +335,16 @@ class ManagedProcessAgentAdapter:
                         endpoint,
                         ManagedAgentTurnRequest(
                             invocation_id=str(request.invocation_id),
+                            run_id=request.run_id,
+                            purpose=request.purpose,
+                            work_order_id=request.work_order_id,
                             attempt_id=work_order.attempt_id,
-                            request=model_request,
+                            payload=model_request.model_dump(mode="json"),
                         ).model_dump(mode="json"),
                     ))
-                    for action in response.agent_actions:
-                        if isinstance(action, AgentMessageAction):
-                            self.action_broker.submit_message(request.invocation_id, action)
-                        else:
-                            self.action_broker.submit_handoff(request.invocation_id, action)
+                    self._submit_agent_actions(request, response)
+                    if response.execution is None:
+                        raise ValueError("managed execution turn omitted execution result")
                     return response.execution
                 except Exception as error:
                     raise LocalModelUnavailable(type(error).__name__) from error
@@ -358,6 +365,54 @@ class ManagedProcessAgentAdapter:
             output=result.model_dump(mode="json"),
             reason_code=None if result.status == "execution_complete" else result.status,
         )
+
+    async def _invoke_business_turn(
+        self,
+        endpoint: str,
+        request: AgentInvocationRequest,
+    ) -> AgentInvocationResult:
+        payload = _request_payload(request)
+        if payload is None:
+            return AgentInvocationResult(
+                invocation_id=request.invocation_id,
+                status=InvocationStatus.FAILED,
+                reason_code="MANAGED_TURN_PAYLOAD_REQUIRED",
+            )
+        try:
+            response = ManagedAgentTurnResponse.model_validate(await self.client.invoke(
+                endpoint,
+                ManagedAgentTurnRequest(
+                    invocation_id=str(request.invocation_id), run_id=request.run_id,
+                    purpose=request.purpose, work_order_id=request.work_order_id,
+                    attempt_id=request.attempt_id, payload=payload,
+                ).model_dump(mode="json"),
+            ))
+            self._submit_agent_actions(request, response)
+            if response.output is None:
+                raise ValueError("managed business turn omitted structured output")
+        except Exception as error:
+            return AgentInvocationResult(
+                invocation_id=request.invocation_id,
+                status=InvocationStatus.FAILED,
+                reason_code=f"MANAGED_TURN_{type(error).__name__}"[:128],
+            )
+        return AgentInvocationResult(
+            invocation_id=request.invocation_id,
+            status=InvocationStatus.SUCCEEDED,
+            output_type=request.purpose.value,
+            output=response.output,
+        )
+
+    def _submit_agent_actions(
+        self,
+        request: AgentInvocationRequest,
+        response: ManagedAgentTurnResponse,
+    ) -> None:
+        for action in response.agent_actions:
+            if isinstance(action, AgentMessageAction):
+                self.action_broker.submit_message(request.invocation_id, action)
+            else:
+                self.action_broker.submit_handoff(request.invocation_id, action)
 
     async def cancel(self, invocation_id: str) -> None:
         del invocation_id

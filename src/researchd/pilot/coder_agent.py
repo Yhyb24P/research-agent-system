@@ -7,7 +7,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
 from researchd.collaboration.heterogeneous import ManagedAgentTurnRequest, ManagedAgentTurnResponse
-from researchd.domain.enums import Capability
+from researchd.domain.enums import Capability, DelegationPurpose
 from researchd.executor.contracts import CapabilityRequest, LocalAgentResponse
 
 
@@ -30,6 +30,8 @@ class PilotCoderHandler(BaseHTTPRequestHandler):
                 raise ValueError("invalid request size")
             payload = json.loads(self.rfile.read(length))
             turn = ManagedAgentTurnRequest.model_validate(payload)
+            if turn.purpose is not DelegationPurpose.EXECUTE:
+                raise ValueError("pilot coder only accepts EXECUTE turns")
             response = ManagedAgentTurnResponse(execution=self._complete(turn))
         except (ValueError, json.JSONDecodeError) as error:
             self._json(422, {"error": type(error).__name__})
@@ -38,7 +40,9 @@ class PilotCoderHandler(BaseHTTPRequestHandler):
 
     @staticmethod
     def _complete(turn: ManagedAgentTurnRequest) -> LocalAgentResponse:
-        request = turn.request
+        if turn.attempt_id is None:
+            raise ValueError("execution turn requires an attempt ID")
+        request = LocalAgentRequest.model_validate(turn.payload)
         if not request.prior_results and Capability.SANDBOX_SHELL in request.granted_capabilities:
             digest = hashlib.sha256(
                 f"{turn.invocation_id}:{turn.attempt_id}:pilot-output".encode()
