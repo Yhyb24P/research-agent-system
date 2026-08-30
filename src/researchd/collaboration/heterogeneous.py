@@ -1,4 +1,5 @@
 """Adapters for non-model Agent Runtimes; controller records remain authoritative."""
+import hashlib
 import json
 from datetime import UTC, datetime
 from pathlib import Path
@@ -26,6 +27,7 @@ from researchd.executor.worker import LocalExecutorWorker
 from researchd.models.base import LocalModelUnavailable
 from researchd.runtime_sessions.launch_profiles import RuntimeLaunchProfileService
 from researchd.storage.models import (
+    AgentInteractionRecord,
     AgentInvocationRecord,
     AgentRecord,
     AgentRuntimeRecord,
@@ -378,6 +380,7 @@ class ManagedProcessAgentAdapter:
                 status=InvocationStatus.FAILED,
                 reason_code="MANAGED_TURN_PAYLOAD_REQUIRED",
             )
+        self._record_interaction(request, payload)
         try:
             response = ManagedAgentTurnResponse.model_validate(await self.client.invoke(
                 endpoint,
@@ -391,17 +394,64 @@ class ManagedProcessAgentAdapter:
             if response.output is None:
                 raise ValueError("managed business turn omitted structured output")
         except Exception as error:
+            self._complete_interaction(request, status="FAILED", reason_code=type(error).__name__[:128])
             return AgentInvocationResult(
                 invocation_id=request.invocation_id,
                 status=InvocationStatus.FAILED,
                 reason_code=f"MANAGED_TURN_{type(error).__name__}"[:128],
             )
+        self._complete_interaction(request, status="COMPLETED", reason_code=None, response_json=response.output)
         return AgentInvocationResult(
             invocation_id=request.invocation_id,
             status=InvocationStatus.SUCCEEDED,
             output_type=request.purpose.value,
             output=response.output,
         )
+
+    def _record_interaction(self, request: AgentInvocationRequest, payload: dict[str, Any]) -> None:
+        now = datetime.now(UTC)
+        bundle_sha256 = (
+            request.context_bundle.bundle_sha256
+            if request.context_bundle is not None
+            else hashlib.sha256(
+                json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode(),
+            ).hexdigest()
+        )
+        with self.sessions.begin() as session:
+            session.add(AgentInteractionRecord(
+                interaction_id=str(request.invocation_id),
+                invocation_id=str(request.invocation_id),
+                run_id=request.run_id,
+                work_order_id=request.work_order_id,
+                attempt_id=request.attempt_id,
+                remote_agent_id=None, a2a_context_id=None, a2a_task_id=None,
+                role="managed_agent", purpose=request.purpose.value,
+                provider="managed-process", model="process-turn",
+                bundle_sha256=bundle_sha256,
+                response_type=request.purpose.value,
+                response_json=None, status="IN_PROGRESS", reason_code=None,
+                attempts=1, prompt_tokens=0, completion_tokens=0, total_tokens=0,
+                cost_usd="0", provider_request_id=None,
+                created_at=now, completed_at=None,
+            ))
+
+    def _complete_interaction(
+        self,
+        request: AgentInvocationRequest,
+        *,
+        status: str,
+        reason_code: str | None,
+        response_json: dict[str, object] | None = None,
+    ) -> None:
+        now = datetime.now(UTC)
+        with self.sessions.begin() as session:
+            row = session.get(AgentInteractionRecord, str(request.invocation_id))
+            if row is None:
+                return
+            row.status = status
+            row.reason_code = reason_code
+            row.response_json = response_json
+            row.completed_at = now
 
     def _submit_agent_actions(
         self,

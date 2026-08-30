@@ -74,6 +74,8 @@ class HandoffResolutionService:
                 raise LookupError(proposal_id)
             if proposal.status != HandoffStatus.PROPOSED.value:
                 if proposal.status == HandoffStatus.ACCEPTED.value:
+                    if target_agent_id is not None:
+                        self._require_matching_target(session, proposal, target_agent_id)
                     return HandoffProposalService._from_record(proposal)
                 raise ValueError("handoff proposal already has a different decision")
             self._require_source_terminal(session, proposal)
@@ -135,6 +137,18 @@ class HandoffResolutionService:
             ))
             session.flush()
             return HandoffProposalService._from_record(row)
+
+    @staticmethod
+    def _require_matching_target(
+        session: Session, proposal: HandoffProposalRecord, target_agent_id: str,
+    ) -> None:
+        """An explicit target on an already-accepted proposal must match the stored resolution."""
+        if proposal.resolution_entity_type != "attempt" or proposal.resolution_entity_id is None:
+            raise ValueError("handoff proposal already has a different decision")
+        attempt = session.get(AttemptRecord, proposal.resolution_entity_id)
+        delegation = session.get(DelegationRecord, attempt.delegation_id) if attempt is not None else None
+        if delegation is None or delegation.assigned_agent_id != target_agent_id:
+            raise ValueError("handoff proposal already has a different decision")
 
     @staticmethod
     def _require_source_terminal(session: Session, proposal: HandoffProposalRecord) -> None:
