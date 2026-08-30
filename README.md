@@ -275,8 +275,18 @@ curl http://127.0.0.1:8788/api/events/<run-id>?after=0
 curl http://127.0.0.1:8788/api/runtime-sessions
 curl http://127.0.0.1:8788/api/daemon-commands
 curl http://127.0.0.1:8788/api/system-events?after=0
+curl http://127.0.0.1:8788/api/collaboration-messages/<message-id>
 curl -N http://127.0.0.1:8788/api/runs/<run-id>/stream?follow=1
+curl -N http://127.0.0.1:8788/api/system-stream?follow=1
 ```
+
+Run event payloads carry `actor_type`/`actor_id` alongside the stream
+offset, and the system stream (`/api/system-stream`, SSE with
+`Last-Event-ID`/`after` resume) mirrors the JSON
+`/api/system-events` projection over the same monotonic audit stream.
+Reading a collaboration message by id returns the stored record including
+its classification; the AG-UI stream keeps redacting `LOCAL_ONLY` and
+`SECRET` bodies regardless.
 
 The read-only bootstrap intentionally rejects state-changing commands. An
 embedding application must construct `LocalControlAPI` with a

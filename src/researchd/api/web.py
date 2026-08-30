@@ -5,7 +5,7 @@ import hmac
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import time
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 from urllib.parse import parse_qs, unquote, urlparse
 
 from pydantic import BaseModel, ValidationError
@@ -102,6 +102,8 @@ class ControlResourceRouter:
                 if offset is not None and offset < 0:
                     raise ValueError("stream offset must be nonnegative")
                 return 200, {"events": self.api.events(parts[2], after_stream_offset=offset)}
+            if len(parts) == 3 and parts[:2] == ["api", "collaboration-messages"]:
+                return 200, {"message": self.api.collaboration_message(parts[2])}
         except LookupError:
             return 404, {"error": "not found"}
         except ValueError:
@@ -346,6 +348,9 @@ def make_handler(
             if len(parts) == 4 and parts[:2] == ["api", "runs"] and parts[3] == "stream":
                 self._send_event_stream(parts[2], parse_qs(parsed.query))
                 return
+            if parts == ["api", "system-stream"]:
+                self._send_system_stream(parse_qs(parsed.query))
+                return
             status, payload = router.get(self.path)
             self._send_json(status, payload)
 
@@ -430,6 +435,51 @@ def make_handler(
                     for item in tail:
                         self.wfile.write(item.as_sse())
                         current = item.stream_offset
+                    self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError):
+                return
+            finally:
+                if not follow:
+                    self.close_connection = True
+
+        @staticmethod
+        def _system_frame(event: dict[str, Any]) -> bytes:
+            data = json.dumps(event, ensure_ascii=False, sort_keys=True)
+            offset = event.get("stream_offset")
+            prefix = f"id: {offset}\n" if offset is not None else ""
+            return (prefix + f"event: system-event\ndata: {data}\n\n").encode("utf-8")
+
+        def _send_system_stream(self, query: dict[str, list[str]]) -> None:
+            try:
+                raw_offset = query.get("after", [self.headers.get("Last-Event-ID")])[0]
+                offset = None if raw_offset is None or raw_offset == "" else int(raw_offset)
+                if offset is not None and offset < 0:
+                    raise ValueError("stream offset must be nonnegative")
+                events = api.system_events(after_stream_offset=offset)
+            except ValueError:
+                self._send_json(400, {"error": "invalid stream offset"})
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache")
+            follow = query.get("follow", ["0"])[0].lower() in {"1", "true", "yes"}
+            self.send_header("Connection", "keep-alive" if follow else "close")
+            self.end_headers()
+            current = offset or 0
+            try:
+                for event in events:
+                    self.wfile.write(self._system_frame(event))
+                    event_offset = cast(int, event["stream_offset"])
+                    current = max(current, event_offset)
+                self.wfile.flush()
+                while follow:
+                    time.sleep(0.5)
+                    tail = api.system_events(after_stream_offset=current)
+                    if not tail:
+                        self.wfile.write(b": keep-alive\n\n")
+                    for event in tail:
+                        self.wfile.write(self._system_frame(event))
+                        current = cast(int, event["stream_offset"])
                     self.wfile.flush()
             except (BrokenPipeError, ConnectionResetError):
                 return

@@ -250,8 +250,16 @@ curl http://127.0.0.1:8788/api/events/<run-id>?after=0
 curl http://127.0.0.1:8788/api/runtime-sessions
 curl http://127.0.0.1:8788/api/daemon-commands
 curl http://127.0.0.1:8788/api/system-events?after=0
+curl http://127.0.0.1:8788/api/collaboration-messages/<message-id>
 curl -N http://127.0.0.1:8788/api/runs/<run-id>/stream?follow=1
+curl -N http://127.0.0.1:8788/api/system-stream?follow=1
 ```
+
+run event payload 现在携带 `actor_type`/`actor_id`；system stream
+（`/api/system-stream`，SSE，支持 `Last-Event-ID`/`after` 续读）与 JSON
+`/api/system-events` 投影同源，走同一条单调审计流。按 id 读取协作消息
+返回含 classification 的完整记录；AG-UI 流对 `LOCAL_ONLY` 与 `SECRET`
+正文的脱敏保持不变。
 
 这个只读启动方式会主动拒绝状态修改。嵌入应用必须使用
 `ResearchOrchestrator` 构造 `LocalControlAPI`；类型化命令随后先经过 `ResearchDaemon`

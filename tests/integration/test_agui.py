@@ -71,18 +71,19 @@ def _append_event(
     *,
     timestamp: datetime,
     entity_type: str = "work_order",
+    run_id: str | None = "run_stream",
 ) -> None:
     with sessions.begin() as session:
         session.add(AuditEventRecord(
             event_id=event_id,
             event_type=event_type,
-            run_id="run_stream",
+            run_id=run_id,
             entity_type=entity_type,
             entity_id="run_stream" if entity_type == "research_run" else "wo_stream",
             actor_type="controller",
             actor_id="orchestrator",
             timestamp=timestamp,
-            correlation_id="run_stream",
+            correlation_id=run_id or "researchd",
             causation_id=None,
             metadata_json={},
         ))
@@ -279,6 +280,90 @@ def test_loopback_sse_honors_last_event_id(tmp_path: Path) -> None:
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+
+
+def test_run_event_projection_carries_actor_identity(tmp_path: Path) -> None:
+    sessions = _seed_run(tmp_path / "actor-events.db")
+    now = datetime.now(UTC)
+    _append_event(sessions, "evt_actor", "PLAN_CREATED", timestamp=now)
+
+    events = LocalControlAPI(sessions).events("run_stream")
+    assert events[0]["actor_type"] == "controller"
+    assert events[0]["actor_id"] == "orchestrator"
+    status, resource = ControlResourceRouter(LocalControlAPI(sessions)).get(
+        "/api/events/run_stream",
+    )
+    assert status == 200 and isinstance(resource, dict)
+    assert resource["events"][0]["actor_type"] == "controller"
+    assert resource["events"][0]["actor_id"] == "orchestrator"
+
+
+def test_system_stream_sse_honors_last_event_id(tmp_path: Path) -> None:
+    sessions = _seed_run(tmp_path / "system-stream.db")
+    now = datetime.now(UTC)
+    _append_event(sessions, "evt_sys_first", "DAEMON_CHECK", timestamp=now, run_id=None)
+    _append_event(sessions, "evt_sys_second", "DAEMON_CHECK", timestamp=now, run_id=None)
+    api = LocalControlAPI(sessions)
+    first_offset = cast(int, api.system_events()[0]["stream_offset"])
+    server = serve_local_control(api, port=0)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        host, port = server.server_address[:2]
+        host_text = host.decode("ascii") if isinstance(host, bytes) else host
+        response = httpx.get(
+            f"http://{host_text}:{port}/api/system-stream",
+            headers={"Last-Event-ID": str(first_offset)},
+            timeout=5,
+        )
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/event-stream")
+        assert "evt_sys_first" not in response.text
+        assert "evt_sys_second" in response.text
+        assert f"id: {first_offset + 1}\nevent: system-event\n" in response.text
+        assert '"actor_type": "controller"' in response.text
+
+        resumed = httpx.get(
+            f"http://{host_text}:{port}/api/system-stream?after={first_offset}",
+            timeout=5,
+        )
+        assert resumed.status_code == 200
+        assert "evt_sys_first" not in resumed.text
+        assert "evt_sys_second" in resumed.text
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_message_read_endpoint_returns_full_record(tmp_path: Path) -> None:
+    sessions = _seed_run(tmp_path / "message-read.db")
+    now = datetime.now(UTC)
+    with sessions.begin() as session:
+        session.add(CollaborationMessageRecord(
+            message_id="msg_read",
+            run_id="run_stream",
+            work_order_id=None,
+            sender_actor_type="human",
+            sender_actor_id="operator",
+            recipient_agent_id=None,
+            purpose="DIRECTIVE",
+            body="bounded experiment",
+            classification="PROJECT_PRIVATE",
+            metadata_json={},
+            created_at=now,
+        ))
+    router = ControlResourceRouter(LocalControlAPI(sessions))
+    status, payload = router.get("/api/collaboration-messages/msg_read")
+    assert status == 200 and isinstance(payload, dict)
+    message = payload["message"]
+    assert message["message_id"] == "msg_read"
+    assert message["body"] == "bounded experiment"
+    assert message["classification"] == "PROJECT_PRIVATE"
+    assert message["sender_actor_type"] == "human"
+
+    missing_status, missing = router.get("/api/collaboration-messages/msg_missing")
+    assert missing_status == 404
 
 
 def test_controller_restart_preserves_monotonic_offsets_and_resume_cursor(tmp_path: Path) -> None:

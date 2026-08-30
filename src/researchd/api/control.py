@@ -78,6 +78,7 @@ class LocalControlAPI:
                 "event_id": event.event_id, "event_type": event.event_type,
                 "stream_offset": event.audit_seq,
                 "entity_type": event.entity_type, "entity_id": event.entity_id,
+                "actor_type": event.actor_type, "actor_id": event.actor_id,
                 "timestamp": event.timestamp.isoformat(), "correlation_id": event.correlation_id,
                 "metadata": event.metadata_json,
             } for event in records]

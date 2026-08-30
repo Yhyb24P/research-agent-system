@@ -283,6 +283,14 @@ The productization branch now contains the first LP01/LP02 foundation:
   (`OPERATOR_ABANDONED`). Reconciliation gained one observer per new family,
   including snapshot-tree observation for backup create and read-only
   observation for verify/plan.
+- PX00-06 event projection completion: run event payloads now carry
+  `actor_type`/`actor_id` from the authoritative audit stream; a new
+  `/api/system-stream` SSE route streams the global (run-less) audit events
+  with `Last-Event-ID`/`after` resume and optional follow, mirroring the JSON
+  `/api/system-events` projection; `GET /api/collaboration-messages/{id}`
+  reads a stored message record including its classification. The AG-UI
+  projection keeps its explicit key selection, so `LOCAL_ONLY`/`SECRET`
+  bodies remain redacted from the AG-UI stream.
 
 产品化分支现已实现首批 LP01/LP02 基础：持久化运行实例和类型化命令凭证、拒绝
 PID 复用的 PROCESS supervisor、受限 REMOTE_HTTP attach、先 intent 后副作用的审计
@@ -328,6 +336,11 @@ PX00-05 类型化命令族：`WorkspaceCreate`、`ResearchTaskCreate`、`WorkOrd
 是纯读操作，从不复制或写入，其中断回执只能被放弃（`OPERATOR_ABANDONED`）。
 reconciliation 为每个新命令族增加了专属 observer，包括 backup create 的快照树观察与
 verify/plan 的只读观察。
+PX00-06 事件投影补全：run event payload 现携带权威审计流的 `actor_type`/`actor_id`；
+新增 `/api/system-stream` SSE 路由，流式输出全局（无 run）审计事件，支持
+`Last-Event-ID`/`after` 续读与可选 follow，与 JSON `/api/system-events` 投影同源；
+`GET /api/collaboration-messages/{id}` 按 id 读取消息记录（含 classification）。
+AG-UI 投影保持显式选键，`LOCAL_ONLY`/`SECRET` 正文在 AG-UI 流中依旧脱敏。
 
 This is still an implementation milestone, not completion of the productized
 launcher. The daily `research` client and LP03 managed Agent pilot remain open.
