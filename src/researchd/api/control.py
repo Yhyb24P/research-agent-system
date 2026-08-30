@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from researchd.domain.enums import AttemptState, WorkOrderState
 from researchd.orchestrator.engine import ResearchOrchestrator
-from researchd.storage.models import AgentRecord, AgentRuntimeRecord, ArtifactRecord, ApprovalRequestRecord, AuditEventRecord, ClaimRecord, CollaborationMessageRecord, DelegationRecord, AgentInvocationRecord, AttemptRecord, ObservationRecord, PlanRecord, ResearchRunRecord, ReviewDecisionRecord, RuntimeSessionRecord, VerificationResultRecord, WorkOrderRecord, WorkspaceGrantRecord, WorkspaceReconciliationRecord, WorkspaceTransportRecord
+from researchd.storage.models import AgentRecord, AgentRuntimeRecord, ArtifactRecord, ApprovalRequestRecord, AuditEventRecord, ClaimRecord, CollaborationMessageRecord, DaemonCommandRecord, DelegationRecord, AgentInvocationRecord, AttemptRecord, ObservationRecord, PlanRecord, ResearchRunRecord, ReviewDecisionRecord, RuntimeSessionRecord, VerificationResultRecord, WorkOrderRecord, WorkspaceGrantRecord, WorkspaceReconciliationRecord, WorkspaceTransportRecord
 
 
 class LocalControlAPI:
@@ -128,6 +128,30 @@ class LocalControlAPI:
                 "exit_reason": row.exit_reason,
                 "reattach_state": row.reattach_state,
                 "version": row.version,
+            } for row in rows]
+
+    def daemon_commands(self, status: str | None = None) -> list[dict[str, Any]]:
+        """Project receipts without request payloads or command arguments."""
+        with self.sessions() as session:
+            query = select(DaemonCommandRecord).order_by(
+                DaemonCommandRecord.created_at,
+                DaemonCommandRecord.command_id,
+            )
+            if status is not None:
+                if status not in {"ACCEPTED", "COMPLETED", "REJECTED"}:
+                    raise ValueError("invalid daemon command status")
+                query = query.where(DaemonCommandRecord.status == status)
+            rows = session.scalars(query).all()
+            return [{
+                "command_id": row.command_id,
+                "command_type": row.command_type,
+                "command_version": row.command_version,
+                "actor_type": row.actor_type,
+                "actor_id": row.actor_id,
+                "status": row.status,
+                "reason_code": row.reason_code,
+                "created_at": row.created_at.isoformat(),
+                "updated_at": row.updated_at.isoformat(),
             } for row in rows]
 
     def stream_snapshot(self, run_id: str) -> dict[str, Any]:

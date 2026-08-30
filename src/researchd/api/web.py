@@ -46,6 +46,8 @@ class ControlResourceRouter:
                 return 200, self.api.workspace_grants(query.get("run", [None])[0])
             if parts == ["api", "runtime-sessions"]:
                 return 200, self.api.runtime_sessions(query.get("runtime", [None])[0])
+            if parts == ["api", "daemon-commands"]:
+                return 200, self.api.daemon_commands(query.get("status", [None])[0])
             if parts == ["api", "system-events"]:
                 raw_offset = query.get("after", [None])[0]
                 offset = int(raw_offset) if raw_offset is not None else None
@@ -85,31 +87,31 @@ class ControlCommandRouter:
     async def post(self, path: str, payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
         parts = [unquote(item) for item in urlparse(path).path.split("/") if item]
         if parts == ["api", "runtime-sessions", "start"]:
-            return 202, await self._execute(RuntimeSessionStartCommand.model_validate(payload))
+            return await self._execute(RuntimeSessionStartCommand.model_validate(payload))
         if parts == ["api", "runtime-sessions", "attach"]:
-            return 202, await self._execute(RuntimeSessionAttachCommand.model_validate(payload))
+            return await self._execute(RuntimeSessionAttachCommand.model_validate(payload))
         if len(parts) == 4 and parts[:2] == ["api", "runtime-sessions"] and parts[3] == "stop":
             stop_command = RuntimeSessionStopCommand.model_validate({
                 **payload,
                 "runtime_session_id": parts[2],
             })
-            return 202, await self._execute(stop_command)
+            return await self._execute(stop_command)
         if len(parts) == 4 and parts[:2] == ["api", "runs"] and parts[3] == "cancel":
             cancel_command = RunCancelCommand.model_validate({**payload, "run_id": parts[2]})
-            return 202, await self._execute(cancel_command)
+            return await self._execute(cancel_command)
         if len(parts) == 4 and parts[:2] == ["api", "work-orders"] and parts[3] == "approve":
             approve_command = WorkOrderApproveCommand.model_validate({
                 **payload, "work_order_id": parts[2],
             })
-            return 202, await self._execute(approve_command)
+            return await self._execute(approve_command)
         if len(parts) == 4 and parts[:2] == ["api", "work-orders"] and parts[3] == "human-decision":
             decision_command = HumanDecisionCommand.model_validate({
                 **payload, "work_order_id": parts[2],
             })
-            return 202, await self._execute(decision_command)
+            return await self._execute(decision_command)
         return 404, {"error": "unknown command"}
 
-    async def _execute(self, command: DomainModel) -> dict[str, Any]:
+    async def _execute(self, command: DomainModel) -> tuple[int, dict[str, Any]]:
         if self.daemon is None:
             raise RuntimeError("mutation requires researchd")
         result = self.daemon.execute(command)
@@ -117,7 +119,8 @@ class ControlCommandRouter:
             result = await result
         if not isinstance(result, BaseModel):
             raise TypeError("daemon command result must be a typed model")
-        return result.model_dump(mode="json")
+        response = result.model_dump(mode="json")
+        return (409 if response.get("status") == "REJECTED" else 202), response
 
 
 def make_handler(

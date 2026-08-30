@@ -329,3 +329,50 @@ def test_stop_intent_crash_is_finished_by_restart_reconciliation(tmp_path: Path)
                 os.kill(runtime_pid, signal.SIGTERM)
             except ProcessLookupError:
                 pass
+
+
+def test_generic_command_crash_blocks_ready_without_replaying(tmp_path: Path) -> None:
+    database = tmp_path / "researchd.db"
+    port = _free_port()
+    config = tmp_path / "researchd.json"
+    config.write_text(json.dumps({
+        "database": str(database),
+        "artifact_root": str(tmp_path / "artifacts"),
+        "state_root": str(tmp_path / "state"),
+        "repositories": {}, "job_commands": {},
+        "host": "127.0.0.1", "port": port,
+    }))
+    base = [sys.executable, "-m", "researchd.daemon.cli", "--config", str(config)]
+    assert subprocess.run([*base, "init"], check=False).returncode == 0
+    crashed = subprocess.run([
+        sys.executable,
+        str(ROOT / "tests/fixtures/daemon_command_crasher.py"),
+        str(database),
+    ], check=False)
+    assert crashed.returncode == 74
+
+    daemon = _start(base)
+    try:
+        health = _wait_for_health(daemon, port)
+        assert health["state"] == "FAILED"
+        assert health["ready"] is False
+        startup = cast(dict[str, object], health["startup"])
+        phases = cast(list[dict[str, object]], startup["phases"])
+        assert phases[7]["phase"] == "AUDIT_STREAM_HEALTH"
+        assert phases[7]["status"] == "FAIL"
+        with urlopen(
+            f"http://127.0.0.1:{port}/api/daemon-commands?status=ACCEPTED"
+        ) as response:
+            commands = json.load(response)
+        assert len(commands) == 1
+        assert commands[0]["command_id"] == "command_generic_crash"
+        assert commands[0]["status"] == "ACCEPTED"
+        with pytest.raises(HTTPError) as rejected:
+            _post(port, "/api/runs/run_another/cancel", {
+                "command_id": "command_after_crash",
+                "actor_type": "SYSTEM",
+                "actor_id": "crash-test",
+            })
+        assert rejected.value.code == 409
+    finally:
+        _terminate(daemon)

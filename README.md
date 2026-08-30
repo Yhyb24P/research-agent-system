@@ -178,7 +178,7 @@ RuntimeSession/Supervisor services. The daily `research` client and browser
 application bootstrap remain open.
 
 An embedding composition must register its trusted services and use
-`build_startup_barrier(...)`. The barrier verifies migration `0020` and live
+`build_startup_barrier(...)`. The barrier verifies migration `0021` and live
 DB/CAS state, then invokes the existing workspace, worktree, RuntimeSession,
 job, and invocation recovery paths in the frozen order. A failed or skipped
 phase leaves `ResearchDaemon` non-ready; callers cannot bypass that state with
@@ -257,6 +257,7 @@ Then query it from another terminal:
 curl http://127.0.0.1:8788/api/runs
 curl http://127.0.0.1:8788/api/events/<run-id>?after=0
 curl http://127.0.0.1:8788/api/runtime-sessions
+curl http://127.0.0.1:8788/api/daemon-commands
 curl http://127.0.0.1:8788/api/system-events?after=0
 curl -N http://127.0.0.1:8788/api/runs/<run-id>/stream?follow=1
 ```
@@ -275,6 +276,13 @@ routes. Every body carries the command identity fields `command_id`,
 | `POST` | `/api/runs/{run_id}/cancel` | — |
 | `POST` | `/api/work-orders/{work_order_id}/approve` | `grant_id` |
 | `POST` | `/api/work-orders/{work_order_id}/human-decision` | `action` (`abort` or `revise`; `revise` requires `objective`) |
+
+Migration `0021` reserves a durable generic receipt before dispatch. Reusing
+the same command identity and request replays its completed or rejected result
+without repeating the side effect; reusing the identity with different input
+is rejected. A receipt left `ACCEPTED` by an interrupted dispatch is never
+replayed automatically: it remains visible through `/api/daemon-commands` and
+blocks READY until an operator reconciliation mechanism resolves it.
 
 Arbitrary UI events have no mutation endpoint.
 

@@ -16,6 +16,7 @@ from researchd.collaboration.invocation import InvocationService
 from researchd.collaboration.registry import AgentRegistryService
 from researchd.collaboration.selector import AgentSelector
 from researchd.daemon.dispatcher import DaemonCommandDispatcher
+from researchd.daemon.command_service import DurableDaemonCommandService
 from researchd.daemon.runtime import ResearchDaemon
 from researchd.daemon.startup import build_startup_barrier
 from researchd.domain.base import DomainModel
@@ -190,7 +191,8 @@ def compose_daemon(config: DaemonConfig) -> DaemonApplication:
         jobs=jobs,
     )
     api = LocalControlAPI(sessions, orchestrator)
-    daemon = ResearchDaemon(barrier, DaemonCommandDispatcher(supervisor, api))
+    dispatcher = DaemonCommandDispatcher(supervisor, api)
+    daemon = ResearchDaemon(barrier, DurableDaemonCommandService(sessions, dispatcher))
     return DaemonApplication(config=config, daemon=daemon, api=api)
 
 

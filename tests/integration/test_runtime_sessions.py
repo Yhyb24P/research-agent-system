@@ -418,7 +418,7 @@ def test_current_0019_database_upgrades_to_runtime_session_contract(tmp_path: Pa
     )
     assert run_id_column["nullable"] is True
     with engine.connect() as connection:
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0020"
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0021"
         assert connection.scalar(text(
             "SELECT COUNT(*) FROM sqlite_master "
             "WHERE type = 'trigger' AND name = 'audit_events_assign_seq'"

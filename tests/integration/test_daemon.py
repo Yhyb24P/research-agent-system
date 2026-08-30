@@ -412,14 +412,14 @@ def test_composed_daemon_executes_real_human_decision_revise(tmp_path: Path) -> 
     application = _composed_application(tmp_path)
     run_id, work_order_id = _drive_to_human_required(application, tmp_path)
 
-    result = application.daemon.execute(HumanDecisionCommand(
+    result = _await(cast(DomainModel | Awaitable[DomainModel], application.daemon.execute(HumanDecisionCommand(
         command_id="cmd_composed_revise",
         actor_type="HUMAN",
         actor_id="operator",
         work_order_id=work_order_id,
         action="revise",
         objective="narrow the objective",
-    ))
+    ))))
 
     assert isinstance(result, DaemonCommandResult)
     assert result.command_type == "HumanDecision"
@@ -439,13 +439,13 @@ def test_composed_daemon_executes_real_human_decision_abort(tmp_path: Path) -> N
     application = _composed_application(tmp_path)
     run_id, work_order_id = _drive_to_human_required(application, tmp_path)
 
-    result = application.daemon.execute(HumanDecisionCommand(
+    result = _await(cast(DomainModel | Awaitable[DomainModel], application.daemon.execute(HumanDecisionCommand(
         command_id="cmd_composed_abort",
         actor_type="HUMAN",
         actor_id="operator",
         work_order_id=work_order_id,
         action="abort",
-    ))
+    ))))
 
     assert isinstance(result, DaemonCommandResult)
     assert result.command_type == "HumanDecision"

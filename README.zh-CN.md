@@ -162,7 +162,7 @@ Supervisor 的具体 `researchd` composition root 和 CLI；日常 `research` cl
 应用启动入口仍未完成。
 
 嵌入式 composition 必须注册可信服务并使用 `build_startup_barrier(...)`。该屏障先验证
-migration `0020` 和实时 DB/CAS 状态，再按冻结顺序调用已有 workspace、worktree、
+migration `0021` 和实时 DB/CAS 状态，再按冻结顺序调用已有 workspace、worktree、
 RuntimeSession、job 和 invocation 恢复路径。任一阶段失败或跳过都会让
 `ResearchDaemon` 保持 non-ready；调用方不能用 free-text 或直接 SQL mutation 绕过。
 
@@ -235,6 +235,7 @@ PY
 curl http://127.0.0.1:8788/api/runs
 curl http://127.0.0.1:8788/api/events/<run-id>?after=0
 curl http://127.0.0.1:8788/api/runtime-sessions
+curl http://127.0.0.1:8788/api/daemon-commands
 curl http://127.0.0.1:8788/api/system-events?after=0
 curl -N http://127.0.0.1:8788/api/runs/<run-id>/stream?follow=1
 ```
@@ -251,6 +252,11 @@ readiness gate，再进入现有策略/状态机。所有请求体都必须携�
 | `POST` | `/api/runs/{run_id}/cancel` | — |
 | `POST` | `/api/work-orders/{work_order_id}/approve` | `grant_id` |
 | `POST` | `/api/work-orders/{work_order_id}/human-decision` | `action`（`abort` 或 `revise`；`revise` 必须带 `objective`） |
+
+Migration `0021` 会在派发前预留通用持久化回执。同一命令身份和请求再次到达时，只重放
+已完成或已拒绝的结果，不重复执行副作用；用不同输入复用同一身份会被拒绝。若派发中断后
+回执仍为 `ACCEPTED`，系统绝不会自动重放；该回执会通过 `/api/daemon-commands` 保持可见，
+并阻止 daemon 进入 READY，直到后续的 operator reconciliation 机制明确处置。
 
 系统不存在允许任意 UI event 修改状态的入口。
 

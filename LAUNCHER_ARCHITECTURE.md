@@ -206,6 +206,9 @@ The productization branch now contains the first LP01/LP02 foundation:
 
 - migration `0020` persists `RuntimeSession` and typed START/ATTACH/STOP
   command receipts;
+- migration `0021` persists a generic daemon command receipt before dispatch,
+  replays terminal results without repeating side effects, and leaves an
+  interrupted `ACCEPTED` receipt fail-closed for operator reconciliation;
 - PROCESS supervision uses PID, process start ticks, and host boot identity to
   reject PID reuse; REMOTE_HTTP accepts only HTTPS or loopback HTTP endpoints
   registered on the existing `AgentRuntime`;
@@ -276,7 +279,7 @@ the frozen requirements. The current evidence is:
 
 | Requirement | Status | Authoritative evidence |
 |---|---|---|
-| exact schema check, DB/CAS sanity and eight ordered recovery phases | PASS | `daemon/startup.py`, migration `0020`, daemon integration tests |
+| exact schema check, DB/CAS sanity and eight ordered recovery phases | PASS | `daemon/startup.py`, migration `0021`, daemon integration tests |
 | non-ready mutation rejection and visible loopback health | PASS | `ResearchDaemon.execute`, `/api/health`, failed-start independent-process test |
 | unresolved runtime/workspace/worktree/job/invocation recovery blocks READY | PASS | fail-closed post-recovery checks in `daemon/startup.py` |
 | durable RuntimeSession and idempotent START/ATTACH/STOP receipts | PASS | migration `0020`, `runtime_sessions/service.py`, concurrency/replay tests |
@@ -285,7 +288,7 @@ the frozen requirements. The current evidence is:
 | `researchd` owns existing orchestrator/policy/approval command paths | PASS | `compose_daemon` builds the real `ResearchOrchestrator` from `CollaborationGateway`, `RecordingPolicyEngine(DeterministicPolicyEngine())`, `ApprovalService` and `JobManager` with empty capabilities; gate-dispatched cancel/approve/human-decision mutations execute against it (`daemon/composition.py`, composed-daemon mutation tests in `tests/integration/test_daemon.py`); the verification driver and cloud/executor adapters remain deliberate fail-closed gaps |
 | every existing HTTP mutation crosses `ResearchDaemon.execute()` | PASS | run cancel, work-order approve and human-decision routes dispatch typed commands through the daemon readiness gate (`api/web.py`, gate tests) |
 | versioned accepted/rejected result envelope for every command family | PASS | `daemon/contracts.py`, `DaemonCommandDispatcher` and envelope assertions in daemon web/AG-UI tests |
-| durable generic command receipt with idempotency persistence | OPEN | envelopes are in-memory responses; no durable receipt store exists yet |
+| durable generic command receipt with idempotency persistence | PASS | migration `0021`, `DurableDaemonCommandService`, `/api/daemon-commands`, replay/conflict tests and independent-process crash-window test |
 | Workspace, ResearchTask, Approval and Backup typed command families | OPEN | not yet implemented at the daemon boundary |
 
 Therefore LP02's durable runtime/supervision slice is implemented, while LP01
@@ -293,17 +296,18 @@ as a complete trusted mutation host is **not frozen complete**. The shared
 command/result contract, the migration of the existing HTTP mutations through
 the readiness gate, and the real Orchestrator/policy/approval injection into
 the composition root are done; the remaining gaps are the Workspace,
-ResearchTask, Approval and Backup typed command families, the durable generic
-command receipt, a real `VerificationDriver` wiring, and the cloud/executor
-Agent adapters (LP03/LP04). LP03 must not paper over these LP01 gaps with a
-pilot-only bypass. The next implementation order is: the remaining typed
-command families with durable receipts plus the verification driver, then the
-managed Agent pilot.
+ResearchTask, Approval and Backup typed command families, an explicit operator
+resolution command for interrupted generic receipts, a real
+`VerificationDriver` wiring, and the cloud/executor Agent adapters (LP03/LP04).
+LP03 must not paper over these LP01 gaps with a pilot-only bypass. The next
+implementation order is: the remaining typed command families and operator
+reconciliation path plus the verification driver, then the managed Agent
+pilot.
 
 审计结论：LP02 的持久化运行实例与 supervision 切片已经实现；LP01 作为完整可信
 mutation host 尚未冻结完成。统一命令合同、现有 HTTP mutation 经 readiness gate 的迁移，
 以及组合根中真实 Orchestrator/Policy/Approval 的注入均已完成；剩余缺口为 Workspace、
-ResearchTask、Approval、Backup 类型化命令族、durable generic command receipt、真实
-`VerificationDriver` 接线，以及 cloud/executor Agent adapter（LP03/LP04）。LP03 不得用
-pilot 专用旁路掩盖这些缺口；下一步顺序为：实现剩余类型化命令族与 durable receipt、接
-通验证 driver，最后进入 pilot。
+ResearchTask、Approval、Backup 类型化命令族、中断后通用回执的显式 operator resolution
+命令、真实 `VerificationDriver` 接线，以及 cloud/executor Agent adapter（LP03/LP04）。
+LP03 不得用 pilot 专用旁路掩盖这些缺口；下一步顺序为：实现剩余类型化命令族与 operator
+reconciliation 路径、接通验证 driver，最后进入 pilot。

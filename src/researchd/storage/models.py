@@ -242,6 +242,34 @@ class RuntimeSessionCommandRecord(Base):
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
 
 
+class DaemonCommandRecord(Base):
+    """Boundary receipt preventing uncertain typed commands from replaying."""
+
+    __tablename__ = "daemon_commands"
+    __table_args__ = (
+        CheckConstraint(
+            "actor_type IN ('HUMAN', 'SYSTEM')",
+            name="ck_daemon_commands_actor",
+        ),
+        CheckConstraint(
+            "status IN ('ACCEPTED', 'COMPLETED', 'REJECTED')",
+            name="ck_daemon_commands_status",
+        ),
+        Index("ix_daemon_commands_status", "status", "created_at"),
+    )
+    command_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    command_type: Mapped[str] = mapped_column(String(128), nullable=False)
+    command_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    request_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    actor_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    actor_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    result_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    reason_code: Mapped[str | None] = mapped_column(String(128))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+
+
 class DelegationRecord(Base, VersionedTimestamps):
     __tablename__ = "delegations"
     __table_args__ = (Index("ix_delegations_run_state", "run_id", "state"), Index("ix_delegations_idempotency", "idempotency_key", unique=True))

@@ -28,7 +28,7 @@ from researchd.supervisor.runtime import RuntimeSupervisor
 from researchd.workspace.service import WorkspaceDelegationService
 
 
-EXPECTED_SCHEMA_REVISION = "0020"
+EXPECTED_SCHEMA_REVISION = "0021"
 
 
 class StartupPhase(StrEnum):
@@ -280,10 +280,15 @@ def verify_audit_stream(engine: Engine) -> None:
             "SELECT COUNT(*) FROM sqlite_master "
             "WHERE type = 'trigger' AND name = 'audit_events_assign_seq'"
         )) or 0)
+        unresolved_commands = int(connection.scalar(text(
+            "SELECT COUNT(*) FROM daemon_commands WHERE status = 'ACCEPTED'"
+        )) or 0)
     if sequenced_count != event_count or maximum != event_count:
         raise RuntimeError("audit stream sequence is not contiguous")
     if next_sequence != maximum + 1 or trigger_count != 1:
         raise RuntimeError("audit stream allocator is unhealthy")
+    if unresolved_commands:
+        raise RuntimeError("daemon command outcome requires operator reconciliation")
 
 
 def _affected_count(result: object) -> int:
