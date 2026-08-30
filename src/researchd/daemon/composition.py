@@ -14,6 +14,7 @@ from researchd.backup.commands import BackupCommandService
 from researchd.collaboration.delegation import DelegationService
 from researchd.collaboration.action_broker import AgentActionBroker
 from researchd.collaboration.gateway import CollaborationGateway
+from researchd.collaboration.handoff import HandoffResolutionService
 from researchd.collaboration.heterogeneous import (
     HttpAgentClient,
     HttpxAgentClient,
@@ -157,6 +158,7 @@ class DaemonApplication:
     api: LocalControlAPI
     managed_start: ManagedAgentStartService
     resolution: DaemonCommandResolutionService
+    handoffs: HandoffResolutionService
 
 
 def compose_daemon(
@@ -257,11 +259,13 @@ def compose_daemon(
         jobs=jobs,
     )
     api = LocalControlAPI(sessions, orchestrator)
+    handoffs = HandoffResolutionService(sessions, orchestrator)
     dispatcher = DaemonCommandDispatcher(
         supervisor,
         api,
         backups=BackupCommandService(database, artifacts_path),
         managed_start=managed_start,
+        handoffs=handoffs,
     )
     daemon = ResearchDaemon(barrier, DurableDaemonCommandService(sessions, dispatcher))
     resolution = DaemonCommandResolutionService(sessions, build_builtin_observers(sessions))
@@ -271,6 +275,7 @@ def compose_daemon(
         api=api,
         managed_start=managed_start,
         resolution=resolution,
+        handoffs=handoffs,
     )
 
 

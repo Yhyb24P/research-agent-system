@@ -23,6 +23,7 @@ from researchd.daemon.contracts import (
     ExternalCollaborationMessageSendRequest,
     ExternalDaemonCommandResolveRequest,
     ExternalHumanDecisionRequest,
+    ExternalHandoffDecisionRequest,
     ExternalManagedAgentStartRequest,
     ExternalResearchTaskCreateRequest,
     ExternalRestorePlanRequest,
@@ -31,6 +32,7 @@ from researchd.daemon.contracts import (
     ExternalWorkOrderRejectRequest,
     ExternalWorkspaceCreateRequest,
     HumanDecisionCommand,
+    HandoffDecisionCommand,
     ManagedAgentStartCommand,
     ResearchTaskCreateCommand,
     RestorePlanCommand,
@@ -63,6 +65,8 @@ class ControlResourceRouter:
                 return 200, self.api.agent(parts[2])
             if parts == ["api", "delegations"]:
                 return 200, self.api.delegations(query.get("run", [None])[0])
+            if parts == ["api", "handoffs"]:
+                return 200, self.api.handoffs(query.get("run", [None])[0])
             if parts == ["api", "approvals"]:
                 return 200, self.api.approvals(query.get("run", [None])[0])
             if parts == ["api", "workspace-grants"]:
@@ -173,6 +177,18 @@ class ControlCommandRouter:
                 objective=decision_request.objective,
             )
             return await self._execute(decision_command)
+        if len(parts) == 4 and parts[:2] == ["api", "handoffs"] and parts[3] == "decision":
+            handoff_request = ExternalHandoffDecisionRequest.model_validate(payload)
+            handoff_command = HandoffDecisionCommand(
+                command_id=handoff_request.command_id,
+                actor_type="HUMAN",
+                actor_id=self.human_actor_id,
+                proposal_id=parts[2],
+                decision=handoff_request.decision,
+                reason=handoff_request.reason,
+                target_agent_id=handoff_request.target_agent_id,
+            )
+            return await self._execute(handoff_command)
         if parts == ["api", "workspaces"]:
             workspace_request = ExternalWorkspaceCreateRequest.model_validate(payload)
             workspace_command = WorkspaceCreateCommand(

@@ -36,7 +36,7 @@ class AgentSelector:
         self.allowed_adapter_kinds = allowed_adapter_kinds
         self.required_launch_mode = required_launch_mode
 
-    def select(self, *, required_roles: tuple[str, ...] = (), required_skills: tuple[str, ...] = (), required_trust_zones: tuple[AgentTrustZone, ...] = (), now: datetime | None = None) -> AgentSelection | None:
+    def select(self, *, required_roles: tuple[str, ...] = (), required_skills: tuple[str, ...] = (), required_trust_zones: tuple[AgentTrustZone, ...] = (), preferred_agent_id: AgentId | None = None, now: datetime | None = None) -> AgentSelection | None:
         reference = now or datetime.now(UTC)
         with self.sessions() as session:
             query = select(AgentRecord, AgentRuntimeRecord).join(
@@ -48,6 +48,8 @@ class AgentSelector:
                 AgentRuntimeRecord.runtime_lease_id.is_not(None),
                 AgentRuntimeRecord.lease_expires_at > reference,
             )
+            if preferred_agent_id is not None:
+                query = query.where(AgentRecord.agent_id == str(preferred_agent_id))
             if self.allowed_adapter_kinds:
                 query = query.where(AgentRuntimeRecord.adapter_kind.in_(
                     tuple(kind.value for kind in self.allowed_adapter_kinds)

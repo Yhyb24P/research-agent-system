@@ -79,6 +79,20 @@ class ExternalCollaborationMessageSendRequest(ExternalCommandRequest):
     ] = "PROJECT_PRIVATE"
 
 
+class ExternalHandoffDecisionRequest(ExternalCommandRequest):
+    decision: Literal["accept", "reject"]
+    reason: str = Field(min_length=1, max_length=16_384)
+    target_agent_id: str | None = Field(
+        default=None, pattern=r"^agent_[A-Za-z0-9][A-Za-z0-9_-]*$"
+    )
+
+    @model_validator(mode="after")
+    def target_only_applies_to_accept(self) -> "ExternalHandoffDecisionRequest":
+        if self.decision == "reject" and self.target_agent_id is not None:
+            raise ValueError("a rejected handoff cannot select a target Agent")
+        return self
+
+
 class ExternalManagedAgentStartRequest(ExternalCommandRequest):
     """Agent-scoped launch intent; the daemon resolves the launch spec."""
 
@@ -172,6 +186,21 @@ class CollaborationMessageSendCommand(DaemonCommand):
     ] = "PROJECT_PRIVATE"
 
 
+class HandoffDecisionCommand(DaemonCommand):
+    proposal_id: str = Field(pattern=r"^handoff_[A-Za-z0-9][A-Za-z0-9_-]*$")
+    decision: Literal["accept", "reject"]
+    reason: str = Field(min_length=1, max_length=16_384)
+    target_agent_id: str | None = Field(
+        default=None, pattern=r"^agent_[A-Za-z0-9][A-Za-z0-9_-]*$"
+    )
+
+    @model_validator(mode="after")
+    def target_only_applies_to_accept(self) -> "HandoffDecisionCommand":
+        if self.decision == "reject" and self.target_agent_id is not None:
+            raise ValueError("a rejected handoff cannot select a target Agent")
+        return self
+
+
 class ManagedAgentStartCommand(DaemonCommand):
     """Agent-scoped launch intent; only the daemon may see a launch spec."""
 
@@ -220,6 +249,7 @@ __all__ = [
     "ExternalCommandRequest",
     "ExternalCollaborationMessageSendRequest",
     "ExternalDaemonCommandResolveRequest",
+    "ExternalHandoffDecisionRequest",
     "ExternalHumanDecisionRequest",
     "ExternalManagedAgentStartRequest",
     "ExternalResearchTaskCreateRequest",
@@ -229,6 +259,7 @@ __all__ = [
     "ExternalWorkOrderRejectRequest",
     "ExternalWorkspaceCreateRequest",
     "HumanDecisionCommand",
+    "HandoffDecisionCommand",
     "ManagedAgentStartCommand",
     "ResearchTaskCreateCommand",
     "RestorePlanCommand",

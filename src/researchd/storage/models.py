@@ -481,6 +481,8 @@ class HandoffProposalRecord(Base):
     decision_actor_type: Mapped[str | None] = mapped_column(String(32))
     decision_actor_id: Mapped[str | None] = mapped_column(String(128))
     decision_reason: Mapped[str | None] = mapped_column(Text)
+    resolution_entity_type: Mapped[str | None] = mapped_column(String(32))
+    resolution_entity_id: Mapped[str | None] = mapped_column(String(128))
 
 
 class ArtifactRecord(Base):

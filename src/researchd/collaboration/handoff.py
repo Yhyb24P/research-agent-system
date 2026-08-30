@@ -1,14 +1,15 @@
 """Durable, non-authoritative handoff proposal contract and storage."""
 
-from datetime import datetime
-from typing import Literal
+from datetime import UTC, datetime
+from typing import Literal, Protocol
+import hashlib
 
 from pydantic import Field, model_validator
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
 from researchd.domain.base import DomainModel
-from researchd.domain.enums import HandoffMode, HandoffStatus
+from researchd.domain.enums import AttemptState, DelegationState, HandoffMode, HandoffStatus
 from researchd.domain.ids import AgentId
 from researchd.storage.models import AgentInvocationRecord, AgentRecord, ArtifactRecord, AttemptRecord, AuditEventRecord, DelegationRecord, HandoffProposalRecord, ObservationRecord, WorkOrderRecord
 
@@ -47,6 +48,110 @@ class HandoffProposal(DomainModel):
     observation_ids: tuple[str, ...] = ()
     status: HandoffStatus
     created_at: datetime
+    resolution_entity_type: str | None = None
+    resolution_entity_id: str | None = None
+
+
+class HandoffController(Protocol):
+    def retry_attempt(self, work_order_id: str, *, preferred_agent_id: str | None = None, attempt_id: str | None = None, delegation_id: str | None = None) -> str: ...
+    def create_handoff_revision(self, work_order_id: str, *, objective: str, reason: str, revision_work_order_id: str) -> str: ...
+
+
+class HandoffResolutionService:
+    """Resolve proposals without granting an Agent control-plane authority."""
+
+    def __init__(self, sessions: sessionmaker[Session], controller: HandoffController) -> None:
+        self.sessions = sessions
+        self.controller = controller
+
+    def accept(
+        self, proposal_id: str, *, actor_type: str, actor_id: str,
+        reason: str, target_agent_id: str | None = None,
+    ) -> HandoffProposal:
+        with self.sessions() as session:
+            proposal = session.get(HandoffProposalRecord, proposal_id)
+            if proposal is None:
+                raise LookupError(proposal_id)
+            if proposal.status != HandoffStatus.PROPOSED.value:
+                if proposal.status == HandoffStatus.ACCEPTED.value:
+                    return HandoffProposalService._from_record(proposal)
+                raise ValueError("handoff proposal already has a different decision")
+            self._require_source_terminal(session, proposal)
+            mode = HandoffMode(proposal.requested_mode)
+            target = target_agent_id or proposal.proposed_target_agent_id
+            objective = proposal.continuation_objective
+        digest = hashlib.sha256(proposal_id.encode()).hexdigest()[:32]
+        if mode is HandoffMode.CONTINUE:
+            if target is None:
+                raise ValueError("CONTINUE handoff requires a target Agent")
+            entity_type = "attempt"
+            entity_id = self.controller.retry_attempt(
+                proposal.work_order_id, preferred_agent_id=target,
+                attempt_id=f"att_handoff_{digest}", delegation_id=f"del_handoff_{digest}",
+            )
+        else:
+            if target is not None:
+                raise ValueError("REVISE handoff cannot select an execution target Agent")
+            if objective is None:
+                raise ValueError("REVISE handoff requires a continuation objective")
+            entity_type = "work_order"
+            entity_id = self.controller.create_handoff_revision(
+                proposal.work_order_id, objective=objective, reason=proposal.reason,
+                revision_work_order_id=f"wo_handoff_{digest}",
+            )
+        return self._decide(
+            proposal_id, status=HandoffStatus.ACCEPTED, actor_type=actor_type,
+            actor_id=actor_id, reason=reason, entity_type=entity_type, entity_id=entity_id,
+        )
+
+    def reject(self, proposal_id: str, *, actor_type: str, actor_id: str, reason: str) -> HandoffProposal:
+        return self._decide(
+            proposal_id, status=HandoffStatus.REJECTED, actor_type=actor_type,
+            actor_id=actor_id, reason=reason, entity_type=None, entity_id=None,
+        )
+
+    def _decide(self, proposal_id: str, *, status: HandoffStatus, actor_type: str, actor_id: str, reason: str, entity_type: str | None, entity_id: str | None) -> HandoffProposal:
+        if not actor_type or not actor_id or not reason:
+            raise ValueError("handoff decision actor and reason are required")
+        now = datetime.now(UTC)
+        with self.sessions.begin() as session:
+            row = session.get(HandoffProposalRecord, proposal_id)
+            if row is None:
+                raise LookupError(proposal_id)
+            if row.status != HandoffStatus.PROPOSED.value:
+                if row.status != status.value or row.resolution_entity_id != entity_id:
+                    raise ValueError("handoff proposal already has a different decision")
+                return HandoffProposalService._from_record(row)
+            row.status, row.decided_at = status.value, now
+            row.decision_actor_type, row.decision_actor_id = actor_type, actor_id
+            row.decision_reason = reason
+            row.resolution_entity_type, row.resolution_entity_id = entity_type, entity_id
+            session.add(AuditEventRecord(
+                event_id=f"evt_handoff_decision_{proposal_id}", event_type=f"HANDOFF_{status.value}",
+                run_id=row.run_id, entity_type="handoff_proposal", entity_id=proposal_id,
+                actor_type=actor_type, actor_id=actor_id, timestamp=now,
+                correlation_id=row.work_order_id, causation_id=row.source_invocation_id,
+                metadata_json={"resolution_entity_type": entity_type, "resolution_entity_id": entity_id},
+            ))
+            session.flush()
+            return HandoffProposalService._from_record(row)
+
+    @staticmethod
+    def _require_source_terminal(session: Session, proposal: HandoffProposalRecord) -> None:
+        delegation = session.get(DelegationRecord, proposal.source_delegation_id)
+        attempt = session.scalar(select(AttemptRecord).where(
+            AttemptRecord.delegation_id == proposal.source_delegation_id,
+        ).order_by(AttemptRecord.created_at.desc()).limit(1))
+        if delegation is None or delegation.state not in {
+            DelegationState.COMPLETED.value, DelegationState.FAILED.value,
+            DelegationState.CANCELLED.value,
+        }:
+            raise ValueError("handoff source Delegation is not terminal")
+        if attempt is None or attempt.state not in {
+            AttemptState.SUCCEEDED.value, AttemptState.FAILED.value,
+            AttemptState.CANCELLED.value,
+        }:
+            raise ValueError("handoff source Attempt is not terminal")
 
 
 class HandoffProposalService:
@@ -132,7 +237,9 @@ class HandoffProposalService:
             continuation_objective=row.continuation_objective,
             artifact_ids=tuple(row.artifact_ids_json), observation_ids=tuple(row.observation_ids_json),
             status=HandoffStatus(row.status), created_at=row.created_at,
+            resolution_entity_type=row.resolution_entity_type,
+            resolution_entity_id=row.resolution_entity_id,
         )
 
 
-__all__ = ["HandoffProposal", "HandoffProposalAction", "HandoffProposalService"]
+__all__ = ["HandoffController", "HandoffProposal", "HandoffProposalAction", "HandoffProposalService", "HandoffResolutionService"]

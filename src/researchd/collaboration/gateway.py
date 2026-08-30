@@ -193,19 +193,44 @@ class CollaborationGateway:
             self._context_bundles[str(invocation_id)] = context_bundle
         return delegation_id, invocation_id
 
-    def prepare_execution(self, work_order: WorkOrderRecord) -> str | None:
+    def prepare_execution(
+        self,
+        work_order: WorkOrderRecord,
+        *,
+        preferred_agent_id: AgentId | None = None,
+        delegation_id: DelegationId | None = None,
+    ) -> str | None:
         """Assign execution ownership before the immutable Attempt is created."""
         if not self.tracking_enabled or self.delegations is None:
             return None
+        if delegation_id is not None:
+            with self.delegations.sessions() as session:
+                existing = session.get(DelegationRecord, str(delegation_id))
+            if existing is not None:
+                if (
+                    existing.run_id != work_order.run_id
+                    or existing.work_order_id != work_order.work_order_id
+                    or existing.purpose != DelegationPurpose.EXECUTE.value
+                    or (
+                        preferred_agent_id is not None
+                        and existing.assigned_agent_id != str(preferred_agent_id)
+                    )
+                ):
+                    raise ValueError("handoff Delegation identity conflict")
+                return existing.delegation_id
         if self.selector is not None and (self.agent_id is None or self.runtime_id is None):
-            selected = self.selector.select(required_roles=("executor",))
+            selected = self.selector.select(
+                required_roles=("executor",), preferred_agent_id=preferred_agent_id,
+            )
             if selected is None:
                 raise ValueError("no eligible Agent runtime for delegation")
             agent_id, runtime_id = selected.agent_id, selected.runtime_id
         else:
             assert self.agent_id is not None and self.runtime_id is not None
             agent_id, runtime_id = self.agent_id, self.runtime_id
-        delegation_id = DelegationId(f"del_{uuid4().hex}")
+            if preferred_agent_id is not None and agent_id != preferred_agent_id:
+                raise ValueError("configured Agent is not the requested handoff target")
+        delegation_id = delegation_id or DelegationId(f"del_{uuid4().hex}")
         self.delegations.create(Delegation(
             delegation_id=delegation_id, run_id=work_order.run_id,
             work_order_id=work_order.work_order_id, purpose=DelegationPurpose.EXECUTE,

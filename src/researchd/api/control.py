@@ -10,7 +10,7 @@ from researchd.collaboration.contracts import CollaborationMessage
 from researchd.collaboration.messages import CollaborationMessageService
 from researchd.domain.enums import AttemptState, WorkOrderState
 from researchd.orchestrator.engine import ResearchOrchestrator
-from researchd.storage.models import AgentRecord, AgentRuntimeRecord, ArtifactRecord, ApprovalRequestRecord, AuditEventRecord, ClaimRecord, CollaborationMessageRecord, DaemonCommandRecord, DelegationRecord, AgentInvocationRecord, AttemptRecord, ObservationRecord, PlanRecord, ResearchRunRecord, ReviewDecisionRecord, RuntimeSessionRecord, VerificationResultRecord, WorkOrderRecord, WorkspaceGrantRecord, WorkspaceReconciliationRecord, WorkspaceTransportRecord
+from researchd.storage.models import AgentRecord, AgentRuntimeRecord, ArtifactRecord, ApprovalRequestRecord, AuditEventRecord, ClaimRecord, CollaborationMessageRecord, DaemonCommandRecord, DelegationRecord, AgentInvocationRecord, AttemptRecord, HandoffProposalRecord, ObservationRecord, PlanRecord, ResearchRunRecord, ReviewDecisionRecord, RuntimeSessionRecord, VerificationResultRecord, WorkOrderRecord, WorkspaceGrantRecord, WorkspaceReconciliationRecord, WorkspaceTransportRecord
 from researchd.workspace.creation import WorkspaceCreationService
 
 
@@ -169,6 +169,7 @@ class LocalControlAPI:
             "approvals": self.approvals(run_id),
             "artifacts": self.artifacts(run_id),
             "workspace_grants": self.workspace_grants(run_id),
+            "handoffs": self.handoffs(run_id),
         }
 
     def collaboration_message(self, message_id: str) -> dict[str, Any]:
@@ -192,6 +193,41 @@ class LocalControlAPI:
                 CollaborationMessageRecord.message_id,
             )).all()
             return [self._message_payload(row) for row in rows]
+
+    def handoffs(self, run_id: str | None = None) -> list[dict[str, Any]]:
+        """Project handoff proposals and their controller-owned decisions."""
+        with self.sessions() as session:
+            query = select(HandoffProposalRecord).order_by(
+                HandoffProposalRecord.created_at, HandoffProposalRecord.proposal_id,
+            )
+            if run_id is not None:
+                if session.get(ResearchRunRecord, run_id) is None:
+                    raise LookupError(run_id)
+                query = query.where(HandoffProposalRecord.run_id == run_id)
+            return [self._handoff_payload(row) for row in session.scalars(query).all()]
+
+    @staticmethod
+    def _handoff_payload(row: HandoffProposalRecord) -> dict[str, Any]:
+        return {
+            "proposal_id": row.proposal_id, "run_id": row.run_id,
+            "work_order_id": row.work_order_id,
+            "source_delegation_id": row.source_delegation_id,
+            "source_invocation_id": row.source_invocation_id,
+            "source_agent_id": row.source_agent_id,
+            "proposed_target_agent_id": row.proposed_target_agent_id,
+            "requested_mode": row.requested_mode, "status": row.status,
+            "reason": row.reason,
+            "continuation_objective": row.continuation_objective,
+            "artifact_ids": row.artifact_ids_json,
+            "observation_ids": row.observation_ids_json,
+            "decision_actor_type": row.decision_actor_type,
+            "decision_actor_id": row.decision_actor_id,
+            "decision_reason": row.decision_reason,
+            "resolution_entity_type": row.resolution_entity_type,
+            "resolution_entity_id": row.resolution_entity_id,
+            "created_at": row.created_at.isoformat(),
+            "decided_at": row.decided_at.isoformat() if row.decided_at else None,
+        }
 
     @staticmethod
     def _message_payload(row: CollaborationMessageRecord) -> dict[str, Any]:

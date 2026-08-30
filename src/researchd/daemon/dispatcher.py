@@ -10,6 +10,7 @@ from researchd.daemon.contracts import (
     CollaborationMessageSendCommand,
     DaemonCommandResult,
     HumanDecisionCommand,
+    HandoffDecisionCommand,
     ManagedAgentStartCommand,
     ResearchTaskCreateCommand,
     RestorePlanCommand,
@@ -38,11 +39,13 @@ class DaemonCommandDispatcher:
         control: "ControlMutationAuthority | None" = None,
         backups: "BackupMutationAuthority | None" = None,
         managed_start: "ManagedAgentStartAuthority | None" = None,
+        handoffs: "HandoffResolutionAuthority | None" = None,
     ) -> None:
         self.supervisor = supervisor
         self.control = control
         self.backups = backups
         self.managed_start = managed_start
+        self.handoffs = handoffs
 
     def __call__(self, command: DomainModel) -> DomainModel | Awaitable[DomainModel]:
         if isinstance(command, RuntimeSessionStartCommand):
@@ -74,6 +77,20 @@ class DaemonCommandDispatcher:
                 objective=command.objective,
             )
             return self._accepted(command.command_id, "HumanDecision", resource)
+        if isinstance(command, HandoffDecisionCommand):
+            handoffs = self._handoffs()
+            if command.decision == "accept":
+                resource = handoffs.accept(
+                    command.proposal_id, actor_type=command.actor_type,
+                    actor_id=command.actor_id, reason=command.reason,
+                    target_agent_id=command.target_agent_id,
+                )
+            else:
+                resource = handoffs.reject(
+                    command.proposal_id, actor_type=command.actor_type,
+                    actor_id=command.actor_id, reason=command.reason,
+                )
+            return self._accepted(command.command_id, "HandoffDecision", resource)
         if isinstance(command, WorkspaceCreateCommand):
             control = self._control()
             resource = control.create_workspace(command.workspace_id, command.name)
@@ -161,6 +178,11 @@ class DaemonCommandDispatcher:
             raise RuntimeError("managed agent start authority is not configured")
         return self.managed_start
 
+    def _handoffs(self) -> "HandoffResolutionAuthority":
+        if self.handoffs is None:
+            raise RuntimeError("handoff resolution authority is not configured")
+        return self.handoffs
+
     @staticmethod
     def _accepted(command_id: str, command_type: str, resource: DomainModel | dict[str, object]) -> DaemonCommandResult:
         payload = (
@@ -206,6 +228,17 @@ class ControlMutationAuthority(Protocol):
         self,
         message: CollaborationMessage,
     ) -> dict[str, object]: ...
+
+
+class HandoffResolutionAuthority(Protocol):
+    def accept(
+        self, proposal_id: str, *, actor_type: str, actor_id: str,
+        reason: str, target_agent_id: str | None = None,
+    ) -> DomainModel: ...
+    def reject(
+        self, proposal_id: str, *, actor_type: str, actor_id: str,
+        reason: str,
+    ) -> DomainModel: ...
 
 
 class BackupMutationAuthority(Protocol):
