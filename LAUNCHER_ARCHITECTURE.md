@@ -440,6 +440,19 @@ PX03-01 VerificationDriver：`LocalVerificationDriver` 填上 orchestrator
 claims 只作为 claims 记录，永不成 verifier 输入。`compose_daemon` 已
 接线该 driver，验证不再因缺少 verifier 而失败关闭。
 
+PX03-02 managed executor routing：产品 composition 已将 PROCESS adapter
+注册到 `AgentAdapterCatalog`，不固定任何 Agent 身份。产品 selector 要求
+启用的已安装 runtime、有效 lease，以及 LaunchProfile hash 仍与可信目录
+一致的 HEALTHY RuntimeSession。canonical invocation 只调用 Registry 持有的
+loopback endpoint，绝不再次执行启动 argv。
+
+PX03-02 managed executor routing registers the PROCESS adapter in
+`AgentAdapterCatalog` without fixing any Agent identity. Product selection
+requires an enabled installed runtime, a live lease, and a HEALTHY
+RuntimeSession whose LaunchProfile hash still matches the trusted catalog.
+Canonical invocation targets only the registry-owned loopback endpoint and
+never executes the launch argv a second time.
+
 This is still an implementation milestone, not completion of the productized
 launcher. The daily `research` client and LP03 managed Agent pilot remain open.
 

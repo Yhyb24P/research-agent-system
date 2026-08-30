@@ -13,8 +13,14 @@ from researchd.artifacts import ArtifactService, ContentAddressedArtifactStore
 from researchd.backup.commands import BackupCommandService
 from researchd.collaboration.delegation import DelegationService
 from researchd.collaboration.gateway import CollaborationGateway
+from researchd.collaboration.heterogeneous import (
+    HttpAgentClient,
+    HttpxAgentClient,
+    ManagedProcessAgentAdapter,
+)
 from researchd.collaboration.invocation import InvocationService
 from researchd.collaboration.registry import AgentRegistryService
+from researchd.collaboration.runtime import AgentAdapterCatalog
 from researchd.collaboration.selector import AgentSelector
 from researchd.daemon.dispatcher import DaemonCommandDispatcher
 from researchd.daemon.command_service import DurableDaemonCommandService
@@ -25,6 +31,7 @@ from researchd.daemon.reconciliation import (
 from researchd.daemon.runtime import ResearchDaemon
 from researchd.daemon.startup import build_startup_barrier
 from researchd.domain.base import DomainModel
+from researchd.domain.enums import AgentAdapterKind
 from researchd.executor.jobs import JobManager, LocalDurableJobBackend
 from researchd.executor.worktree import WorktreeManager
 from researchd.orchestrator.engine import ResearchOrchestrator
@@ -140,7 +147,11 @@ class DaemonApplication:
     resolution: DaemonCommandResolutionService
 
 
-def compose_daemon(config: DaemonConfig) -> DaemonApplication:
+def compose_daemon(
+    config: DaemonConfig,
+    *,
+    agent_client: HttpAgentClient | None = None,
+) -> DaemonApplication:
     """Wire existing authorities once; no service is reimplemented here."""
     database = config.database.resolve()
     artifacts_path = config.artifact_root.resolve()
@@ -189,15 +200,29 @@ def compose_daemon(config: DaemonConfig) -> DaemonApplication:
     # iteration limits use the orchestrator constructor defaults. The
     # verification driver is the concrete LocalVerificationDriver over the
     # trusted verifier domain (immutable attempt artifacts, executor claims
-    # never fed to the verifier); the cloud/executor Agent adapters stay
-    # unwired until managed Agents attach (LP03/LP04).
+    # never fed to the verifier). The adapter catalog registers only the
+    # managed PROCESS executor adapter: the launch profile and live session
+    # are resolved per runtime, never from request payloads or hardcoded Agent
+    # identities; other adapter kinds stay unregistered so catalog resolution
+    # fails closed for them. The adapter targets the already-supervised Agent
+    # service and never launches the profile argv again.
     verifier_driver = LocalVerificationDriver(sessions, store)
+    catalog = AgentAdapterCatalog(sessions)
+    catalog.register(
+        AgentAdapterKind.PROCESS,
+        ManagedProcessAgentAdapter(
+            sessions,
+            launch_profiles,
+            agent_client or HttpxAgentClient(),
+        ),
+    )
     orchestrator = ResearchOrchestrator(
         sessions,
         collaboration=CollaborationGateway(
             delegations=DelegationService(sessions),
             invocations=invocations,
-            selector=AgentSelector(sessions),
+            selector=AgentSelector(sessions, require_supervised_session=True),
+            catalog=catalog,
         ),
         policy=RecordingPolicyEngine(DeterministicPolicyEngine(), sessions),
         verifier=verifier_driver,

@@ -275,6 +275,13 @@ batch offers `status`, `agent list` / `agent use` / `agent remove`,
 `approve`, `reject` and `quit`; every command crosses the authenticated
 transport, and `agent remove` only clears the session-local working set.
 
+Managed PROCESS Agent invocation is resolved dynamically through the installed
+Agent catalog; no Agent ID is fixed in the daemon composition. An executor is
+eligible only with an active runtime lease and a HEALTHY RuntimeSession whose
+launch-profile hash still matches the trusted catalog. Invocation uses the
+runtime's registry-owned loopback endpoint and never starts the launch command
+a second time.
+
 For a deliberately read-only projection without daemon mutations, embed only
 the local API:
 

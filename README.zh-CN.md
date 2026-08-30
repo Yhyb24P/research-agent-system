@@ -247,6 +247,11 @@ uv run research --config researchd.json
 `task cancel`、`msg`、`events watch`、`approve`、`reject` 与 `quit`；
 每条命令都走认证 transport，`agent remove` 仅清除会话本地工作集。
 
+受管 PROCESS Agent invocation 经已安装 Agent 目录动态解析，daemon composition
+不固定任何 Agent ID。executor 只有在 runtime lease 有效、存在 HEALTHY
+RuntimeSession 且其 launch-profile hash 仍与可信目录一致时才可被选择。
+invocation 仅调用 Registry 持有的 loopback endpoint，绝不二次执行启动命令。
+
 如需明确不允许 daemon mutation 的只读投影，可只嵌入 local API：
 
 ```bash

@@ -2,12 +2,17 @@
 import json
 from typing import Any, Protocol
 from urllib.parse import urlparse
+import httpx
 from pydantic import ValidationError
+from sqlalchemy import select
+from sqlalchemy.orm import Session, sessionmaker
 from researchd.adapters.a2a.adapter import A2AAdapter
 from researchd.adapters.a2a.codec import A2ACodecError, decode_executor_result, encode_granted_work_order
 from researchd.collaboration.contracts import AgentHealth, AgentInvocationRequest, AgentInvocationResult, AgentRuntime, EvidenceInvocationInput, ExecuteInvocationInput, PlanInvocationInput, ReviewInvocationInput
 from researchd.domain.enums import InvocationStatus
 from researchd.executor.contracts import ExecutorResult
+from researchd.runtime_sessions.launch_profiles import RuntimeLaunchProfileService
+from researchd.storage.models import RuntimeSessionRecord
 
 
 class HttpAgentClient(Protocol):
@@ -181,3 +186,76 @@ class LocalProcessAgentAdapter:
         cancel = getattr(self.runner, "cancel", None)
         if cancel is not None:
             await cancel(invocation_id)
+
+
+class HttpxAgentClient:
+    """Bounded JSON transport to a registry-owned Agent endpoint."""
+
+    async def invoke(self, endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
+        async with httpx.AsyncClient(
+            timeout=30.0,
+            follow_redirects=False,
+            trust_env=False,
+        ) as client:
+            response = await client.post(endpoint, json=payload)
+            response.raise_for_status()
+            decoded = response.json()
+        if not isinstance(decoded, dict):
+            raise ValueError("Agent endpoint returned non-object JSON")
+        return decoded
+
+
+class ManagedProcessAgentAdapter:
+    """Route invocation to an already-supervised PROCESS Agent service."""
+
+    def __init__(
+        self,
+        sessions: sessionmaker[Session],
+        launch_profiles: RuntimeLaunchProfileService,
+        client: HttpAgentClient,
+    ) -> None:
+        self.sessions = sessions
+        self.launch_profiles = launch_profiles
+        self.delegate = HttpAgentAdapter(client)
+
+    def _require_live(self, runtime_id: object, endpoint: str | None) -> None:
+        profile = self.launch_profiles.resolve_process(str(runtime_id))
+        parsed = urlparse(endpoint or "")
+        if (
+            parsed.scheme != "http"
+            or parsed.hostname not in {"127.0.0.1", "localhost", "::1"}
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError("managed PROCESS runtime requires a safe loopback endpoint")
+        with self.sessions() as session:
+            row = session.scalar(select(RuntimeSessionRecord).where(
+                RuntimeSessionRecord.runtime_id == str(runtime_id),
+                RuntimeSessionRecord.supervisor_state == "HEALTHY",
+                RuntimeSessionRecord.launch_profile_sha256 == profile.spec_sha256,
+            ).order_by(RuntimeSessionRecord.started_at.desc()).limit(1))
+        if row is None:
+            raise ValueError("managed PROCESS runtime has no matching HEALTHY session")
+
+    async def health(self, runtime: AgentRuntime) -> AgentHealth:
+        try:
+            self._require_live(runtime.runtime_id, runtime.endpoint_ref)
+        except ValueError as error:
+            return AgentHealth(healthy=False, reason=str(error))
+        return await self.delegate.health(runtime)
+
+    async def invoke(self, request: AgentInvocationRequest) -> AgentInvocationResult:
+        try:
+            self._require_live(request.runtime_id, request.endpoint_ref)
+        except ValueError:
+            return AgentInvocationResult(
+                invocation_id=request.invocation_id,
+                status=InvocationStatus.FAILED,
+                reason_code="PROCESS_RUNTIME_UNAVAILABLE",
+            )
+        return await self.delegate.invoke(request)
+
+    async def cancel(self, invocation_id: str) -> None:
+        await self.delegate.cancel(invocation_id)
