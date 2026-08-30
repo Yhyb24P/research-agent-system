@@ -310,6 +310,16 @@ The productization branch now contains the first LP01/LP02 foundation:
   claim the same normalized alias, resolution is rejected as ambiguous
   (`AgentAliasAmbiguous`), and an unclaimed alias raises
   `AgentAliasNotFound`.
+- PX02-02 Client transport: `researchd.client.transport.ResearchClient`
+  is the only channel through which the daily `research` client reaches
+  the controller; it never opens the SQLite database. Reads and SSE
+  streams authenticate with the owner-only control credential, and
+  mutations POST a typed external request carrying a generated or
+  caller-supplied command identity (`cmd_<32 hex>`), so a retry replays
+  instead of duplicating. The transport separates a durable `REJECTED`
+  envelope from a 409 that only means the daemon is not ready or the
+  command identity was reused with a different request, and resumes SSE
+  streams from the last observed `id:` offset.
 
 产品化分支现已实现首批 LP01/LP02 基础：持久化运行实例和类型化命令凭证、拒绝
 PID 复用的 PROCESS supervisor、受限 REMOTE_HTTP attach、先 intent 后副作用的审计
@@ -373,6 +383,12 @@ PX01-04 Agent aliases：`AgentAliasService` 经受信
 再比较，即别名匹配对大小写与首尾空白不敏感。仅启用中的 profile 参与
 解析；两个及以上启用 profile 声称同一归一化别名时，解析以歧义拒绝
 （`AgentAliasAmbiguous`）；无人声称的别名抛出 `AgentAliasNotFound`。
+PX02-02 客户端传输层：`researchd.client.transport.ResearchClient` 是日常
+`research` client 到达 controller 的唯一通道；它从不打开 SQLite 数据库。
+读取与 SSE 流使用 owner-only 控制凭据认证；mutation 以生成或调用方提供的
+命令身份（`cmd_<32位hex>`）POST 类型化外部请求，因此重试走重放而非重复
+执行。传输层将持久的 `REJECTED` envelope 与仅表示 daemon 未就绪或命令身份
+被不同请求复用的 409 区分开，并能从最后观察到的 `id:` offset 续读 SSE 流。
 
 This is still an implementation milestone, not completion of the productized
 launcher. The daily `research` client and LP03 managed Agent pilot remain open.
