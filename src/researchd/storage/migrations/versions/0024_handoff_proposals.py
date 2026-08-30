@@ -3,6 +3,8 @@
 from alembic import op
 import sqlalchemy as sa
 
+from researchd.storage.types import UTCDateTime
+
 revision = "0024"
 down_revision = "0023"
 branch_labels = None
@@ -26,8 +28,8 @@ def upgrade() -> None:
         sa.Column("artifact_ids_json", sa.JSON(), nullable=False),
         sa.Column("observation_ids_json", sa.JSON(), nullable=False),
         sa.Column("status", sa.String(16), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
-        sa.Column("decided_at", sa.DateTime(timezone=True)),
+        sa.Column("created_at", UTCDateTime(), nullable=False),
+        sa.Column("decided_at", UTCDateTime()),
         sa.Column("decision_actor_type", sa.String(32)),
         sa.Column("decision_actor_id", sa.String(128)),
         sa.Column("decision_reason", sa.Text()),

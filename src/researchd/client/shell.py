@@ -347,7 +347,7 @@ def _execute(
             )
     elif command.name in {"handoff accept", "handoff reject"}:
         proposal_id = command.args[0]
-        payload: dict[str, Any] = {
+        payload = {
             "decision": command.name.removeprefix("handoff "),
             "reason": " ".join(command.args[1:]),
         }

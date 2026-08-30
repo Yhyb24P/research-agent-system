@@ -244,7 +244,7 @@ def test_shell_msg_generates_a_message_identity() -> None:
     assert payload["run_id"] == "run_one"
     assert payload["body"] == "hello"
     assert payload["recipient_agent_id"] == "agent_alpha"
-    assert payload["purpose"] == "operator-message"
+    assert payload["purpose"] == "DISCUSSION"
     # The server applies the PROJECT_PRIVATE default when omitted.
     assert "classification" not in payload
 

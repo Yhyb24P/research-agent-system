@@ -66,15 +66,17 @@ class CollaborationMessageService:
     def _validate_scope(session: Session, message: CollaborationMessage) -> None:
         if session.get(ResearchRunRecord, message.run_id) is None:
             raise ValueError("message run does not exist")
-        references = (
-            (WorkOrderRecord, message.work_order_id),
-            (DelegationRecord, str(message.delegation_id) if message.delegation_id else None),
-            (AgentInvocationRecord, str(message.invocation_id) if message.invocation_id else None),
-            (CollaborationMessageRecord, str(message.reply_to_message_id) if message.reply_to_message_id else None),
+        pairs: tuple[
+            tuple[str | None, WorkOrderRecord | DelegationRecord | AgentInvocationRecord | CollaborationMessageRecord | None],
+            ...
+        ] = (
+            (message.work_order_id, session.get(WorkOrderRecord, message.work_order_id) if message.work_order_id else None),
+            (str(message.delegation_id) if message.delegation_id else None, session.get(DelegationRecord, str(message.delegation_id)) if message.delegation_id else None),
+            (str(message.invocation_id) if message.invocation_id else None, session.get(AgentInvocationRecord, str(message.invocation_id)) if message.invocation_id else None),
+            (str(message.reply_to_message_id) if message.reply_to_message_id else None, session.get(CollaborationMessageRecord, str(message.reply_to_message_id)) if message.reply_to_message_id else None),
         )
-        for record_type, identifier in references:
+        for identifier, record in pairs:
             if identifier is None:
                 continue
-            record = session.get(record_type, identifier)
             if record is None or record.run_id != message.run_id:
                 raise ValueError("message reference is outside its run")

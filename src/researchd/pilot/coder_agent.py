@@ -8,7 +8,7 @@ from typing import Any
 
 from researchd.collaboration.heterogeneous import ManagedAgentTurnRequest, ManagedAgentTurnResponse
 from researchd.domain.enums import Capability, DelegationPurpose
-from researchd.executor.contracts import CapabilityRequest, LocalAgentResponse
+from researchd.executor.contracts import CapabilityRequest, LocalAgentRequest, LocalAgentResponse
 
 
 class PilotCoderHandler(BaseHTTPRequestHandler):

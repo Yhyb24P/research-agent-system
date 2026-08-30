@@ -20,7 +20,7 @@ from researchd.daemon.contracts import (
     WorkspaceCreateCommand,
 )
 from researchd.domain.base import DomainModel
-from researchd.domain.enums import DataClassification
+from researchd.domain.enums import CollaborationPurpose, DataClassification
 from researchd.domain.ids import AgentId, DelegationId, InvocationId, MessageId
 from researchd.runtime_sessions.contracts import (
     RuntimeSessionAttachCommand,
@@ -80,17 +80,17 @@ class DaemonCommandDispatcher:
         if isinstance(command, HandoffDecisionCommand):
             handoffs = self._handoffs()
             if command.decision == "accept":
-                resource = handoffs.accept(
+                handoff_resource = handoffs.accept(
                     command.proposal_id, actor_type=command.actor_type,
                     actor_id=command.actor_id, reason=command.reason,
                     target_agent_id=command.target_agent_id,
                 )
             else:
-                resource = handoffs.reject(
+                handoff_resource = handoffs.reject(
                     command.proposal_id, actor_type=command.actor_type,
                     actor_id=command.actor_id, reason=command.reason,
                 )
-            return self._accepted(command.command_id, "HandoffDecision", resource)
+            return self._accepted(command.command_id, "HandoffDecision", handoff_resource)
         if isinstance(command, WorkspaceCreateCommand):
             control = self._control()
             resource = control.create_workspace(command.workspace_id, command.name)
@@ -128,7 +128,7 @@ class DaemonCommandDispatcher:
                     if command.recipient_agent_id
                     else None
                 ),
-                purpose=command.purpose,
+                purpose=CollaborationPurpose(command.purpose),
                 body=command.body,
                 classification=DataClassification(command.classification),
             )
