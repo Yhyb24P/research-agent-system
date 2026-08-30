@@ -146,7 +146,14 @@ def _parse_msg(tokens: list[str]) -> ParsedCommand:
         token = tokens[index]
         if token.startswith("--"):
             key = token[2:]
-            if key not in {"to", "purpose", "classification"}:
+            if key not in {
+                "to",
+                "purpose",
+                "classification",
+                "reply-to",
+                "delegation",
+                "invocation",
+            }:
                 raise ShellParseError(f"unknown msg option: --{key}")
             if index + 1 >= len(tokens):
                 raise ShellParseError(f"option --{key} requires a value")
@@ -291,6 +298,12 @@ def _execute(
             payload["recipient_agent_id"] = command.options["to"]
         if "classification" in command.options:
             payload["classification"] = command.options["classification"]
+        if "reply-to" in command.options:
+            payload["reply_to_message_id"] = command.options["reply-to"]
+        if "delegation" in command.options:
+            payload["delegation_id"] = command.options["delegation"]
+        if "invocation" in command.options:
+            payload["invocation_id"] = command.options["invocation"]
         envelope = client.post_command("/api/collaboration-messages", payload)
         print_fn(f"{envelope['status']} {envelope['command_id']}")
     elif command.name == "events watch":

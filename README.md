@@ -295,6 +295,9 @@ Collaboration messages use a closed purpose vocabulary (`DISCUSSION`,
 `STATUS`, `QUESTION`, `DIRECTIVE`, `NOTICE`) and may durably reference one
 WorkOrder, Delegation, Invocation, or prior message in the same run. These
 links remain communication context and never confer workflow authority.
+The authenticated `msg` command may add `--reply-to`, `--delegation`, or
+`--invocation` links. Sender identity is absent from the request schema and is
+bound by the daemon as the authenticated local human.
 
 For a deliberately read-only projection without daemon mutations, embed only
 the local API:

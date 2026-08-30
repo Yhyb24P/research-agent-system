@@ -262,6 +262,8 @@ invocation 仅调用 Registry 持有的 loopback endpoint，绝不二次执行�
 CollaborationMessage 使用封闭 purpose 集合（`DISCUSSION`、`STATUS`、
 `QUESTION`、`DIRECTIVE`、`NOTICE`），并可持久关联同一 run 内的 WorkOrder、
 Delegation、Invocation 或前序消息。这些关联只提供沟通上下文，不授予工作流权威。
+认证后的 `msg` 命令可用 `--reply-to`、`--delegation` 或 `--invocation`
+添加关联。请求 schema 不包含 sender 身份；daemon 将其绑定为已认证的本地 human。
 
 如需明确不允许 daemon mutation 的只读投影，可只嵌入 local API：
 
