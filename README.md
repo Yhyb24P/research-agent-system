@@ -63,6 +63,12 @@ replace `ResearchRun`, `Delegation`, `AgentInvocation`, `Artifact`, or
   reconciliation, and cleanup state.
 - Durable runs, work orders, attempts, jobs, explicit state transitions,
   operation idempotency, cancellation, and restart reconciliation.
+- Durable `RuntimeSession` instances and typed START/ATTACH/STOP command
+  receipts, with PROCESS and REMOTE_HTTP supervision, strong process identity,
+  restart reconciliation, and no direct Agent authority over lifecycle state.
+- A fail-closed `researchd` startup barrier that orders schema/storage checks,
+  workspace/worktree recovery, runtime/job/invocation reconciliation, and audit
+  stream validation before any typed mutation may be dispatched.
 - Deterministic policy, scoped human approval, classified Agent context, and
   fail-closed capability brokering.
 - Content-addressed artifacts, provenance, observations, claims, independent
@@ -166,18 +172,17 @@ snapshot formats and old database schemas are intentionally rejected rather
 than upgraded in place. The software matrix does not replace the actual
 off-host and primary-loss drill required for DQ04 acceptance.
 
-Integration tests are the executable reference workflow. The repository is a
-library/modular-monolith baseline; it does not yet ship a production daemon or
-browser application bootstrap.
+Integration tests are the executable reference workflow. The repository now
+contains the durable RuntimeSession/Supervisor services and readiness-gated
+daemon foundation, but it does not yet ship the final `researchd` composition
+CLI, daily `research` client, or browser application bootstrap.
 
-An embedding controller must register its workspace transports and call
-`WorkspaceDelegationService.recover_incomplete()` during startup, before it
-accepts new work. This closes interrupted provisioning/reconciliation windows
-using the transport handle persisted before the external side effect.
-It must likewise construct `WorktreeManager` with durable sessions and call
-`recover_incomplete(repository_mapping)` before creating attempt worktrees.
-This closes interrupted create/remove windows from their persisted lifecycle
-state.
+An embedding composition must register its trusted services and use
+`build_startup_barrier(...)`. The barrier verifies migration `0020` and live
+DB/CAS state, then invokes the existing workspace, worktree, RuntimeSession,
+job, and invocation recovery paths in the frozen order. A failed or skipped
+phase leaves `ResearchDaemon` non-ready; callers cannot bypass that state with
+a free-text or direct-SQL mutation.
 
 Qualify the actual deployment filesystem rather than a temporary substitute:
 
@@ -215,6 +220,8 @@ Then query it from another terminal:
 ```bash
 curl http://127.0.0.1:8788/api/runs
 curl http://127.0.0.1:8788/api/events/<run-id>?after=0
+curl http://127.0.0.1:8788/api/runtime-sessions
+curl http://127.0.0.1:8788/api/system-events?after=0
 curl -N http://127.0.0.1:8788/api/runs/<run-id>/stream?follow=1
 ```
 
@@ -238,6 +245,11 @@ Arbitrary UI events have no mutation endpoint.
 - `src/researchd/workspace/`: workspace grants, admission, transport, lease,
   reconciliation, and cleanup.
 - `src/researchd/orchestrator/`: trusted bounded workflow controller.
+- `src/researchd/runtime_sessions/` and `supervisor/`: durable concrete
+  Agent-runtime instances, typed command receipts, side-effect drivers, and
+  restart reconciliation.
+- `src/researchd/daemon/`: startup recovery barrier and readiness-gated typed
+  mutation boundary.
 - `src/researchd/api/`: local control facade, AG-UI projection, SSE/JSON HTTP,
   and TUI rendering.
 - `src/researchd/storage/`: authoritative SQLAlchemy records and Alembic

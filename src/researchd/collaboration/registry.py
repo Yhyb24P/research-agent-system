@@ -157,6 +157,22 @@ class AgentRegistryService:
                 raise ValueError(f"agent runtime does not exist: {runtime_id}")
             return self._runtime_from_record(row)
 
+    def require_enabled_runtime(self, runtime_id: str) -> AgentRuntime:
+        """Resolve a launchable runtime without treating a lease as process health."""
+        with self.sessions() as session:
+            row = session.scalar(
+                select(AgentRuntimeRecord)
+                .join(AgentRecord, AgentRecord.agent_id == AgentRuntimeRecord.agent_id)
+                .where(
+                    AgentRuntimeRecord.runtime_id == runtime_id,
+                    AgentRuntimeRecord.enabled.is_(True),
+                    AgentRecord.enabled.is_(True),
+                )
+            )
+            if row is None:
+                raise ValueError(f"agent runtime is unavailable: {runtime_id}")
+            return self._runtime_from_record(row)
+
     def list_runtimes(self, agent_id: str | None = None) -> tuple[AgentRuntime, ...]:
         with self.sessions() as session:
             query = select(AgentRuntimeRecord).order_by(AgentRuntimeRecord.runtime_id)

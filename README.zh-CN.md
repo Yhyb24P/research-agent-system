@@ -57,6 +57,11 @@ LangGraph state 都只是适配器或运行时表示，不能取代 `ResearchRun
   worktree 与 Archive transport、artifact-only reconciliation 和 cleanup state。
 - ResearchRun、WorkOrder、Attempt、Job 持久化、显式状态机、operation 幂等、取消和
   重启恢复协调。
+- 持久化 `RuntimeSession` 和类型化 START/ATTACH/STOP command receipt；PROCESS 与
+  REMOTE_HTTP supervisor 使用强进程身份、重启协调，并且不向 Agent 下放生命周期权威。
+- 失败关闭的 `researchd` 启动恢复屏障：在接受任何类型化 mutation 前，依次完成
+  schema/storage 检查、workspace/worktree 恢复、runtime/job/invocation 协调和 audit
+  stream 验证。
 - 确定性策略、限定范围的人工审批、分类后的 Agent context 和失败关闭的能力代理。
 - 内容寻址 Artifact、provenance、Observation、Claim、独立 Verification、Review 和
   追加式 AuditEvent。
@@ -152,14 +157,14 @@ uv run pytest -q tests/qualification/test_dq04_backup_restore.py
 commit/tag。旧快照格式和旧数据库 schema 会被直接拒绝，不做就地升级或兼容补丁。
 软件矩阵不能替代 DQ04 验收所需的真实异地存储与 primary-loss 演练。
 
-集成测试是当前可执行 reference workflow。仓库目前是 library/模块化单体基线，尚未
-提供生产 daemon 或浏览器应用的一键启动入口。
+集成测试是当前可执行 reference workflow。仓库已经包含持久化 RuntimeSession、
+Supervisor 和带 readiness gate 的 daemon 基础，但尚未提供最终 `researchd` composition
+CLI、日常 `research` client 或浏览器应用启动入口。
 
-嵌入式控制器启动时必须先注册 workspace transport，并在接收新任务前调用
-`WorkspaceDelegationService.recover_incomplete()`。系统会使用外部副作用发生前已持久化
-的 transport handle，关闭中断的 provisioning/reconciliation 窗口并记录清理结果。
-控制器还必须使用持久化 session 构造 `WorktreeManager`，并在创建尝试工作树前调用
-`recover_incomplete(repository_mapping)`，从持久化生命周期状态关闭中断的创建/移除窗口。
+嵌入式 composition 必须注册可信服务并使用 `build_startup_barrier(...)`。该屏障先验证
+migration `0020` 和实时 DB/CAS 状态，再按冻结顺序调用已有 workspace、worktree、
+RuntimeSession、job 和 invocation 恢复路径。任一阶段失败或跳过都会让
+`ResearchDaemon` 保持 non-ready；调用方不能用 free-text 或直接 SQL mutation 绕过。
 
 资格探针必须运行在实际部署数据目录，而不是临时替代目录：
 
@@ -197,6 +202,8 @@ PY
 ```bash
 curl http://127.0.0.1:8788/api/runs
 curl http://127.0.0.1:8788/api/events/<run-id>?after=0
+curl http://127.0.0.1:8788/api/runtime-sessions
+curl http://127.0.0.1:8788/api/system-events?after=0
 curl -N http://127.0.0.1:8788/api/runs/<run-id>/stream?follow=1
 ```
 
@@ -218,6 +225,9 @@ curl -N http://127.0.0.1:8788/api/runs/<run-id>/stream?follow=1
 - `src/researchd/workspace/`：workspace grant、准入、transport、lease、reconciliation
   与 cleanup。
 - `src/researchd/orchestrator/`：可信、有界工作流控制器。
+- `src/researchd/runtime_sessions/` 与 `supervisor/`：具体 Agent runtime 实例、类型化
+  command receipt、副作用 driver 和重启协调。
+- `src/researchd/daemon/`：启动恢复屏障和 readiness-gated 类型化 mutation 边界。
 - `src/researchd/api/`：本地控制 facade、AG-UI projection、SSE/JSON HTTP 和 TUI。
 - `src/researchd/storage/`：权威 SQLAlchemy record 和 Alembic migration。
 - `src/researchd/policy/`、`verifier/`、`artifacts/`、`executor/`：可信执行与证据链。

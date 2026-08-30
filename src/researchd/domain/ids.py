@@ -62,6 +62,10 @@ class AgentRuntimeId(_EntityId):
     pattern = r"^runtime_[A-Za-z0-9][A-Za-z0-9_-]*$"
 
 
+class RuntimeSessionId(_EntityId):
+    pattern = r"^runtime_session_[A-Za-z0-9][A-Za-z0-9_-]*$"
+
+
 class DelegationId(_EntityId):
     pattern = r"^del_[A-Za-z0-9][A-Za-z0-9_-]*$"
 

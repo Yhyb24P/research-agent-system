@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import CheckConstraint, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy import CheckConstraint, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint, text as sa_text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from researchd.storage.types import UTCDateTime
@@ -155,6 +155,91 @@ class AgentRuntimeLeaseEventRecord(Base):
     owner_id: Mapped[str] = mapped_column(String(128), nullable=False)
     event_type: Mapped[str] = mapped_column(String(32), nullable=False)
     observed_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+
+
+class RuntimeSessionRecord(Base, VersionedTimestamps):
+    """One concrete supervised instance of an existing AgentRuntime."""
+
+    __tablename__ = "runtime_sessions"
+    __table_args__ = (
+        CheckConstraint(
+            "launch_mode IN ('PROCESS', 'REMOTE_HTTP', 'CLOUD', 'A2A')",
+            name="ck_runtime_sessions_launch_mode",
+        ),
+        CheckConstraint(
+            "supervisor_state IN ('STARTING', 'HEALTHY', 'DEGRADED', "
+            "'STOPPING', 'STOPPED', 'LOST', 'RECONCILIATION_REQUIRED')",
+            name="ck_runtime_sessions_state",
+        ),
+        CheckConstraint(
+            "reattach_state IN ('PENDING', 'ATTACHED', 'NOT_APPLICABLE', "
+            "'DETACHED', 'FAILED')",
+            name="ck_runtime_sessions_reattach_state",
+        ),
+        Index("ix_runtime_sessions_runtime", "runtime_id", "created_at"),
+        Index("ix_runtime_sessions_state", "supervisor_state", "updated_at"),
+        Index(
+            "ux_runtime_sessions_one_active_runtime",
+            "runtime_id",
+            unique=True,
+            sqlite_where=sa_text(
+                "supervisor_state IN ('STARTING', 'HEALTHY', 'DEGRADED', "
+                "'STOPPING', 'RECONCILIATION_REQUIRED')"
+            ),
+        ),
+    )
+    runtime_session_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    runtime_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_runtimes.runtime_id"), nullable=False,
+    )
+    launch_mode: Mapped[str] = mapped_column(String(32), nullable=False)
+    supervisor_state: Mapped[str] = mapped_column(String(32), nullable=False)
+    launch_spec_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    external_identity_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    started_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    last_health_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    stopped_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    exit_reason: Mapped[str | None] = mapped_column(String(256))
+    reattach_state: Mapped[str] = mapped_column(String(32), nullable=False)
+
+
+class RuntimeSessionCommandRecord(Base):
+    """Durable idempotency receipt for one typed supervisor mutation."""
+
+    __tablename__ = "runtime_session_commands"
+    __table_args__ = (
+        CheckConstraint(
+            "command_type IN ('START', 'ATTACH', 'STOP')",
+            name="ck_runtime_session_commands_type",
+        ),
+        CheckConstraint(
+            "actor_type IN ('HUMAN', 'SYSTEM')",
+            name="ck_runtime_session_commands_actor",
+        ),
+        CheckConstraint(
+            "status IN ('ACCEPTED', 'COMPLETED', 'FAILED')",
+            name="ck_runtime_session_commands_status",
+        ),
+        Index(
+            "ix_runtime_session_commands_session",
+            "runtime_session_id",
+            "created_at",
+        ),
+    )
+    command_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    runtime_session_id: Mapped[str] = mapped_column(
+        ForeignKey("runtime_sessions.runtime_session_id"), nullable=False,
+    )
+    command_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    request_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    actor_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    actor_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    expected_version: Mapped[int | None] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    result_state: Mapped[str | None] = mapped_column(String(32))
+    failure_reason: Mapped[str | None] = mapped_column(String(128))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
 
 
 class DelegationRecord(Base, VersionedTimestamps):
@@ -341,7 +426,7 @@ class AuditEventRecord(Base):
     # after the initial row has been accepted.
     audit_seq: Mapped[int | None] = mapped_column(Integer)
     event_type: Mapped[str] = mapped_column(String(64), nullable=False)
-    run_id: Mapped[str] = mapped_column(ForeignKey("research_runs.run_id"), nullable=False)
+    run_id: Mapped[str | None] = mapped_column(ForeignKey("research_runs.run_id"))
     entity_type: Mapped[str] = mapped_column(String(64), nullable=False)
     entity_id: Mapped[str] = mapped_column(String(128), nullable=False)
     actor_type: Mapped[str] = mapped_column(String(64), nullable=False)

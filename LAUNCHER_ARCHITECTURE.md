@@ -199,3 +199,29 @@ LP00 is frozen when review confirms:
   authority boundaries.
 
 LP00 只是架构冻结，不是实现完成声明。
+
+## 10. Implementation status / 实施状态
+
+The productization branch now contains the first LP01/LP02 foundation:
+
+- migration `0020` persists `RuntimeSession` and typed START/ATTACH/STOP
+  command receipts;
+- PROCESS supervision uses PID, process start ticks, and host boot identity to
+  reject PID reuse; REMOTE_HTTP accepts only HTTPS or loopback HTTP endpoints
+  registered on the existing `AgentRuntime`;
+- intent is committed before each external side effect, while observation and
+  command result are committed afterward in the same monotonic audit stream;
+- restart reconciliation never relaunches an uncertain persisted intent;
+- `ResearchDaemon` remains non-ready until all eight frozen recovery phases
+  pass.
+
+产品化分支现已实现首批 LP01/LP02 基础：持久化运行实例和类型化命令凭证、拒绝
+PID 复用的 PROCESS supervisor、受限 REMOTE_HTTP attach、先 intent 后副作用的审计
+顺序，以及八阶段全部通过后才 READY 的 daemon gate。
+
+This is still an implementation milestone, not completion of the productized
+launcher. The final `researchd` composition CLI, daily `research` client, and
+LP03 managed Agent pilot remain open.
+
+这仍是实现里程碑，不代表产品化 Launcher 已完成。最终 `researchd` composition CLI、
+日常 `research` client 和 LP03 managed Agent pilot 仍未完成。

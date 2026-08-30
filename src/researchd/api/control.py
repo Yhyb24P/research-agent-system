@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from researchd.domain.enums import AttemptState, WorkOrderState
 from researchd.orchestrator.engine import ResearchOrchestrator
-from researchd.storage.models import AgentRecord, AgentRuntimeRecord, ArtifactRecord, ApprovalRequestRecord, AuditEventRecord, ClaimRecord, CollaborationMessageRecord, DelegationRecord, AgentInvocationRecord, AttemptRecord, ObservationRecord, PlanRecord, ResearchRunRecord, ReviewDecisionRecord, VerificationResultRecord, WorkOrderRecord, WorkspaceGrantRecord, WorkspaceReconciliationRecord, WorkspaceTransportRecord
+from researchd.storage.models import AgentRecord, AgentRuntimeRecord, ArtifactRecord, ApprovalRequestRecord, AuditEventRecord, ClaimRecord, CollaborationMessageRecord, DelegationRecord, AgentInvocationRecord, AttemptRecord, ObservationRecord, PlanRecord, ResearchRunRecord, ReviewDecisionRecord, RuntimeSessionRecord, VerificationResultRecord, WorkOrderRecord, WorkspaceGrantRecord, WorkspaceReconciliationRecord, WorkspaceTransportRecord
 
 
 class LocalControlAPI:
@@ -79,6 +79,56 @@ class LocalControlAPI:
                 "metadata": event.metadata_json,
             } for event in records]
             return payload
+
+    def system_events(
+        self,
+        *,
+        after_stream_offset: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """Read global SYSTEM/HUMAN events from the same monotonic stream."""
+        with self.sessions() as session:
+            query = select(AuditEventRecord).where(AuditEventRecord.run_id.is_(None))
+            if after_stream_offset is not None:
+                query = query.where(AuditEventRecord.audit_seq > after_stream_offset)
+            records: Sequence[AuditEventRecord] = session.scalars(
+                query.order_by(AuditEventRecord.audit_seq),
+            ).all()
+            return [{
+                "event_id": event.event_id,
+                "event_type": event.event_type,
+                "stream_offset": event.audit_seq,
+                "entity_type": event.entity_type,
+                "entity_id": event.entity_id,
+                "actor_type": event.actor_type,
+                "actor_id": event.actor_id,
+                "timestamp": event.timestamp.isoformat(),
+                "correlation_id": event.correlation_id,
+                "metadata": event.metadata_json,
+            } for event in records]
+
+    def runtime_sessions(self, runtime_id: str | None = None) -> list[dict[str, Any]]:
+        """Project durable supervisor state without exposing launch secrets."""
+        with self.sessions() as session:
+            query = select(RuntimeSessionRecord).order_by(
+                RuntimeSessionRecord.created_at,
+                RuntimeSessionRecord.runtime_session_id,
+            )
+            if runtime_id is not None:
+                query = query.where(RuntimeSessionRecord.runtime_id == runtime_id)
+            rows = session.scalars(query).all()
+            return [{
+                "runtime_session_id": row.runtime_session_id,
+                "runtime_id": row.runtime_id,
+                "launch_mode": row.launch_mode,
+                "supervisor_state": row.supervisor_state,
+                "external_identity": row.external_identity_json,
+                "started_at": row.started_at.isoformat() if row.started_at else None,
+                "last_health_at": row.last_health_at.isoformat() if row.last_health_at else None,
+                "stopped_at": row.stopped_at.isoformat() if row.stopped_at else None,
+                "exit_reason": row.exit_reason,
+                "reattach_state": row.reattach_state,
+                "version": row.version,
+            } for row in rows]
 
     def stream_snapshot(self, run_id: str) -> dict[str, Any]:
         """Return the current read model used for an initial AG-UI snapshot."""

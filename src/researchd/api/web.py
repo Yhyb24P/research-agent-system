@@ -54,6 +54,14 @@ class ControlResourceRouter:
                 return 200, self.api.approvals(query.get("run", [None])[0])
             if parts == ["api", "workspace-grants"]:
                 return 200, self.api.workspace_grants(query.get("run", [None])[0])
+            if parts == ["api", "runtime-sessions"]:
+                return 200, self.api.runtime_sessions(query.get("runtime", [None])[0])
+            if parts == ["api", "system-events"]:
+                raw_offset = query.get("after", [None])[0]
+                offset = int(raw_offset) if raw_offset is not None else None
+                if offset is not None and offset < 0:
+                    raise ValueError("stream offset must be nonnegative")
+                return 200, {"events": self.api.system_events(after_stream_offset=offset)}
             if parts == ["api", "artifacts"] and query.get("run", [None])[0]:
                 return 200, self.api.artifacts(query["run"][0])
             if len(parts) == 3 and parts[:2] == ["api", "timeline"]:
