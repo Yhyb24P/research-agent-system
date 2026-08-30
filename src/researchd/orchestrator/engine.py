@@ -399,21 +399,49 @@ class ResearchOrchestrator:
             preferred_agent_id=AgentId(preferred_agent_id) if preferred_agent_id else None,
             delegation_id=DelegationId(delegation_id) if delegation_id else None,
         )
-        self._increment_iteration(order.run_id)
-        self.transitions.transition_work_order(order.work_order_id, order.version, WorkOrderState.EXECUTING,
-            event_type="ATTEMPT_RETRY_REQUESTED", actor_type="controller", actor_id="orchestrator", correlation_id=order.work_order_id)
         now = utc_now()
         with self.sessions.begin() as session:
+            existing = session.get(AttemptRecord, attempt_id)
+            if existing is not None:
+                if existing.work_order_id != work_order_id or existing.delegation_id != delegation_id:
+                    raise OrchestrationError("handoff Attempt identity conflict")
+                return existing.attempt_id
+            current_order = session.get(WorkOrderRecord, work_order_id)
+            current_run = session.get(ResearchRunRecord, order.run_id)
+            if current_order is None or current_run is None:
+                raise OrchestrationError("retry scope disappeared")
+            if (
+                current_order.version != order.version
+                or WorkOrderState(current_order.state) is not WorkOrderState.EXECUTION_FAILED
+            ):
+                raise OrchestrationError("execution-failed WorkOrder changed during retry")
+            if current_run.iterations_used >= current_run.max_iterations:
+                raise OrchestrationError("maximum iterations exceeded")
+            current_run.iterations_used += 1
+            current_run.version += 1
+            current_run.updated_at = now
+            current_order.state = WorkOrderState.EXECUTING.value
+            current_order.version += 1
+            current_order.updated_at = now
             session.add(AttemptRecord(attempt_id=attempt_id, work_order_id=order.work_order_id, delegation_id=prepared_delegation_id,
-                state=AttemptState.CREATED.value, terminal_at=None, version=1, created_at=now, updated_at=now))
+                state=AttemptState.RUNNING.value, terminal_at=None, version=3, created_at=now, updated_at=now))
+            session.add(AuditEventRecord(event_id=f"evt_{uuid4().hex}", event_type="ATTEMPT_RETRY_REQUESTED",
+                run_id=order.run_id, entity_type="work_order", entity_id=order.work_order_id,
+                actor_type="controller", actor_id="orchestrator", timestamp=now,
+                correlation_id=attempt_id, causation_id=None,
+                metadata_json={"attempt_id": attempt_id, "delegation_id": prepared_delegation_id}))
             session.add(AuditEventRecord(event_id=f"evt_{uuid4().hex}", event_type="ATTEMPT_CREATED",
                 run_id=order.run_id, entity_type="attempt", entity_id=attempt_id, actor_type="controller",
                 actor_id="orchestrator", timestamp=now, correlation_id=order.work_order_id,
                 causation_id=None, metadata_json={"retry": True, "work_order_id": order.work_order_id}))
-        self.transitions.transition_attempt(attempt_id, 1, AttemptState.PREPARING, event_type="ATTEMPT_PREPARING",
-            actor_type="controller", actor_id="orchestrator", correlation_id=attempt_id)
-        self.transitions.transition_attempt(attempt_id, 2, AttemptState.RUNNING, event_type="ATTEMPT_RUNNING",
-            actor_type="controller", actor_id="orchestrator", correlation_id=attempt_id)
+            session.add(AuditEventRecord(event_id=f"evt_{uuid4().hex}", event_type="ATTEMPT_PREPARING",
+                run_id=order.run_id, entity_type="attempt", entity_id=attempt_id, actor_type="controller",
+                actor_id="orchestrator", timestamp=now, correlation_id=attempt_id,
+                causation_id=None, metadata_json={}))
+            session.add(AuditEventRecord(event_id=f"evt_{uuid4().hex}", event_type="ATTEMPT_RUNNING",
+                run_id=order.run_id, entity_type="attempt", entity_id=attempt_id, actor_type="controller",
+                actor_id="orchestrator", timestamp=now, correlation_id=attempt_id,
+                causation_id=None, metadata_json={}))
         return attempt_id
 
     async def _execute_or_resume(self, order: WorkOrderRecord) -> bool:
