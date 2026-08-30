@@ -47,6 +47,53 @@ class ExternalDaemonCommandResolveRequest(ExternalCommandRequest):
     abandon: bool = False
 
 
+class ExternalWorkspaceCreateRequest(ExternalCommandRequest):
+    workspace_id: str = Field(min_length=1, max_length=128)
+    name: str = Field(min_length=1, max_length=256)
+
+
+class ExternalResearchTaskCreateRequest(ExternalCommandRequest):
+    workspace_id: str = Field(min_length=1, max_length=128)
+    objective: str = Field(min_length=1, max_length=16_384)
+    run_id: str | None = Field(default=None, min_length=1, max_length=128)
+
+
+class ExternalWorkOrderRejectRequest(ExternalCommandRequest):
+    approval_id: str = Field(min_length=1, max_length=128)
+
+
+class ExternalCollaborationMessageSendRequest(ExternalCommandRequest):
+    message_id: str = Field(pattern=r"^msg_[A-Za-z0-9][A-Za-z0-9_-]*$")
+    run_id: str = Field(min_length=1, max_length=128)
+    work_order_id: str | None = Field(default=None, min_length=1, max_length=128)
+    recipient_agent_id: str | None = Field(
+        default=None, pattern=r"^agent_[A-Za-z0-9][A-Za-z0-9_-]*$"
+    )
+    purpose: str = Field(min_length=1, max_length=64)
+    body: str = Field(min_length=1, max_length=32_768)
+    classification: Literal[
+        "PUBLIC", "CLOUD_SAFE", "PROJECT_PRIVATE", "LOCAL_ONLY", "SECRET"
+    ] = "PROJECT_PRIVATE"
+
+
+class ExternalBackupCreateRequest(ExternalCommandRequest):
+    destination: str = Field(min_length=1, max_length=1024)
+    candidate_commit: str = Field(pattern=r"^[0-9a-f]{40}$")
+    candidate_tag: str = Field(pattern=r"^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9A-Za-z.-]+$")
+
+
+class ExternalBackupVerifyRequest(ExternalCommandRequest):
+    snapshot: str = Field(min_length=1, max_length=1024)
+
+
+class ExternalRestorePlanRequest(ExternalCommandRequest):
+    snapshot: str = Field(min_length=1, max_length=1024)
+    database_destination: str = Field(min_length=1, max_length=1024)
+    artifact_destination: str = Field(min_length=1, max_length=1024)
+    expected_candidate_commit: str = Field(pattern=r"^[0-9a-f]{40}$")
+    expected_candidate_tag: str = Field(pattern=r"^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9A-Za-z.-]+$")
+
+
 class RunCancelCommand(DaemonCommand):
     run_id: str = Field(min_length=1, max_length=128)
 
@@ -81,6 +128,54 @@ class DaemonCommandResolveCommand(DaemonCommand):
     abandon: bool = False
 
 
+class WorkspaceCreateCommand(DaemonCommand):
+    workspace_id: str = Field(min_length=1, max_length=128)
+    name: str = Field(min_length=1, max_length=256)
+
+
+class ResearchTaskCreateCommand(DaemonCommand):
+    workspace_id: str = Field(min_length=1, max_length=128)
+    objective: str = Field(min_length=1, max_length=16_384)
+    run_id: str | None = Field(default=None, min_length=1, max_length=128)
+
+
+class WorkOrderRejectCommand(DaemonCommand):
+    work_order_id: str = Field(min_length=1, max_length=128)
+    approval_id: str = Field(min_length=1, max_length=128)
+
+
+class CollaborationMessageSendCommand(DaemonCommand):
+    message_id: str = Field(pattern=r"^msg_[A-Za-z0-9][A-Za-z0-9_-]*$")
+    run_id: str = Field(min_length=1, max_length=128)
+    work_order_id: str | None = Field(default=None, min_length=1, max_length=128)
+    recipient_agent_id: str | None = Field(
+        default=None, pattern=r"^agent_[A-Za-z0-9][A-Za-z0-9_-]*$"
+    )
+    purpose: str = Field(min_length=1, max_length=64)
+    body: str = Field(min_length=1, max_length=32_768)
+    classification: Literal[
+        "PUBLIC", "CLOUD_SAFE", "PROJECT_PRIVATE", "LOCAL_ONLY", "SECRET"
+    ] = "PROJECT_PRIVATE"
+
+
+class BackupCreateCommand(DaemonCommand):
+    destination: str = Field(min_length=1, max_length=1024)
+    candidate_commit: str = Field(pattern=r"^[0-9a-f]{40}$")
+    candidate_tag: str = Field(pattern=r"^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9A-Za-z.-]+$")
+
+
+class BackupVerifyCommand(DaemonCommand):
+    snapshot: str = Field(min_length=1, max_length=1024)
+
+
+class RestorePlanCommand(DaemonCommand):
+    snapshot: str = Field(min_length=1, max_length=1024)
+    database_destination: str = Field(min_length=1, max_length=1024)
+    artifact_destination: str = Field(min_length=1, max_length=1024)
+    expected_candidate_commit: str = Field(pattern=r"^[0-9a-f]{40}$")
+    expected_candidate_tag: str = Field(pattern=r"^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9A-Za-z.-]+$")
+
+
 class DaemonCommandResult(DomainModel):
     command_version: Literal[1] = 1
     command_id: str
@@ -91,15 +186,29 @@ class DaemonCommandResult(DomainModel):
 
 
 __all__ = [
+    "BackupCreateCommand",
+    "BackupVerifyCommand",
+    "CollaborationMessageSendCommand",
     "DaemonCommand",
     "DaemonCommandResolveCommand",
     "DaemonCommandResult",
+    "ExternalBackupCreateRequest",
+    "ExternalBackupVerifyRequest",
     "ExternalCommandRequest",
+    "ExternalCollaborationMessageSendRequest",
     "ExternalDaemonCommandResolveRequest",
     "ExternalHumanDecisionRequest",
+    "ExternalResearchTaskCreateRequest",
+    "ExternalRestorePlanRequest",
     "ExternalRunCancelRequest",
     "ExternalWorkOrderApproveRequest",
+    "ExternalWorkOrderRejectRequest",
+    "ExternalWorkspaceCreateRequest",
     "HumanDecisionCommand",
+    "ResearchTaskCreateCommand",
+    "RestorePlanCommand",
     "RunCancelCommand",
     "WorkOrderApproveCommand",
+    "WorkOrderRejectCommand",
+    "WorkspaceCreateCommand",
 ]

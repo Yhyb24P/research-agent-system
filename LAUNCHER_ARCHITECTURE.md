@@ -269,6 +269,20 @@ The productization branch now contains the first LP01/LP02 foundation:
   terminal target can only be replayed, never re-resolved to a different
   result. `researchctl daemon-command list/resolve` offers the same channel
   offline against the SQLite database.
+- PX00-05 typed command families: `WorkspaceCreate`, `ResearchTaskCreate`,
+  `WorkOrderReject`, `CollaborationMessageSend`, `BackupCreate`,
+  `BackupVerify` and `RestorePlan` now cross the same `ResearchDaemon.execute()`
+  gate. The control authority gains `create_workspace`, `create_research_task`,
+  `reject` and `send_collaboration_message` (fail closed without an
+  orchestrator); the backup authority (`BackupCommandService`) is bound to the
+  daemon's own database and artifact root and also fails closed when absent.
+  Reject converges a `WAITING_APPROVAL` order and its pending approval to
+  `FAILED`/`REJECTED` (the run fails with `APPROVAL_REJECTED`), symmetric with
+  a policy denial. Verify and plan are pure reads that never copy or write, so
+  an interrupted receipt for either can only be abandoned
+  (`OPERATOR_ABANDONED`). Reconciliation gained one observer per new family,
+  including snapshot-tree observation for backup create and read-only
+  observation for verify/plan.
 
 产品化分支现已实现首批 LP01/LP02 基础：持久化运行实例和类型化命令凭证、拒绝
 PID 复用的 PROCESS supervisor、受限 REMOTE_HTTP attach、先 intent 后副作用的审计
@@ -304,6 +318,16 @@ PX00 operator 回执协调：中断遗留的 `ACCEPTED` 通用回执不再永久
 事件在同一事务提交，crash 不可能留下半应用的 resolution；已终态的目标只能重放，
 不能被再次解析出不同结果。`researchctl daemon-command list/resolve` 提供同一通道的
 离线 SQLite 入口。
+PX00-05 类型化命令族：`WorkspaceCreate`、`ResearchTaskCreate`、`WorkOrderReject`、
+`CollaborationMessageSend`、`BackupCreate`、`BackupVerify` 与 `RestorePlan` 现在同样
+强制经过 `ResearchDaemon.execute()` gate。控制权威新增 `create_workspace`、
+`create_research_task`、`reject` 与 `send_collaboration_message`（缺少 orchestrator
+时失败关闭）；备份权威（`BackupCommandService`）绑定 daemon 自身的数据库与 artifact
+根目录，缺失时同样失败关闭。Reject 把 `WAITING_APPROVAL` 工单及其 pending 审批收敛为
+`FAILED`/`REJECTED`（run 以 `APPROVAL_REJECTED` 失败），与策略拒绝对称。verify 与 plan
+是纯读操作，从不复制或写入，其中断回执只能被放弃（`OPERATOR_ABANDONED`）。
+reconciliation 为每个新命令族增加了专属 observer，包括 backup create 的快照树观察与
+verify/plan 的只读观察。
 
 This is still an implementation milestone, not completion of the productized
 launcher. The daily `research` client and LP03 managed Agent pilot remain open.
@@ -329,23 +353,21 @@ the frozen requirements. The current evidence is:
 | versioned accepted/rejected result envelope for every command family | PASS | `daemon/contracts.py`, `DaemonCommandDispatcher` and envelope assertions in daemon web/AG-UI tests |
 | durable generic command receipt with idempotency persistence | PASS | migration `0021`, `DurableDaemonCommandService`, `/api/daemon-commands`, replay/conflict tests and independent-process crash-window test |
 | explicit operator resolution command for interrupted generic receipts | PASS | `daemon/reconciliation.py` (command-family observers, atomic convergence, guarded UPDATE), non-ready-reachable authenticated `POST /api/daemon-commands/{id}/resolve` in `api/web.py`, `researchctl daemon-command list/resolve`, observer/idempotency/conflict tests in `tests/integration/test_daemon_resolution.py` and the failed-daemon recovery test in `tests/integration/test_daemon_process.py` |
-| Workspace, ResearchTask, Approval and Backup typed command families | OPEN | not yet implemented at the daemon boundary |
+| Workspace, ResearchTask, Approval and Backup typed command families | PASS | PX00-05: `WorkspaceCreate`/`ResearchTaskCreate`/`WorkOrderReject`/`CollaborationMessageSend`/`BackupCreate`/`BackupVerify`/`RestorePlan` commands in `daemon/contracts.py`; dispatcher branches plus extended `ControlMutationAuthority` and `BackupMutationAuthority` in `daemon/dispatcher.py`; `LocalControlAPI` methods in `api/control.py`; seven new routes in `api/web.py`; `BackupCommandService` in `backup/commands.py`; one observer per family in `daemon/reconciliation.py`; tests in `tests/integration/test_daemon_command_families.py`, `test_daemon_web.py`, `test_daemon_resolution.py` and `test_daemon_commands.py` |
 
 Therefore LP02's durable runtime/supervision slice is implemented, while LP01
 as a complete trusted mutation host is **not frozen complete**. The shared
 command/result contract, the migration of the existing HTTP mutations through
-the readiness gate, and the real Orchestrator/policy/approval injection into
-the composition root are done; the remaining gaps are the Workspace,
-ResearchTask, Approval and Backup typed command families, a real
-`VerificationDriver` wiring, and the cloud/executor Agent adapters (LP03/LP04).
-LP03 must not paper over these LP01 gaps with a pilot-only bypass. The next
-implementation order is: the remaining typed command families plus the
-verification driver, then the managed Agent pilot.
+the readiness gate, the real Orchestrator/policy/approval injection into the
+composition root, and the Workspace, ResearchTask, Approval and Backup typed
+command families are done; the remaining gaps are a real `VerificationDriver`
+wiring and the cloud/executor Agent adapters (LP03/LP04). LP03 must not paper
+over these LP01 gaps with a pilot-only bypass. The next implementation order
+is: the verification driver, then the managed Agent pilot.
 
 审计结论：LP02 的持久化运行实例与 supervision 切片已经实现；LP01 作为完整可信
-mutation host 尚未冻结完成。统一命令合同、现有 HTTP mutation 经 readiness gate 的迁移，
-以及组合根中真实 Orchestrator/Policy/Approval 的注入均已完成；剩余缺口为 Workspace、
-ResearchTask、Approval、Backup 类型化命令族、真实 `VerificationDriver` 接线，以及
-cloud/executor Agent adapter（LP03/LP04）。
-LP03 不得用 pilot 专用旁路掩盖这些缺口；下一步顺序为：实现剩余类型化命令族、接通验证
-driver，最后进入 pilot。
+mutation host 尚未冻结完成。统一命令合同、现有 HTTP mutation 经 readiness gate 的迁移、
+组合根中真实 Orchestrator/Policy/Approval 的注入，以及 Workspace、ResearchTask、
+Approval、Backup 类型化命令族均已完成；剩余缺口为真实 `VerificationDriver` 接线，
+以及 cloud/executor Agent adapter（LP03/LP04）。
+LP03 不得用 pilot 专用旁路掩盖这些缺口；下一步顺序为：接通验证 driver，最后进入 pilot。

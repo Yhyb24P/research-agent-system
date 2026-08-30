@@ -9,6 +9,7 @@ import pytest
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session, sessionmaker
 
+from researchd.backup.snapshot import backup_snapshot
 from researchd.daemon.contracts import DaemonCommandResolveCommand, DaemonCommandResult
 from researchd.daemon.reconciliation import (
     DaemonCommandResolutionService,
@@ -19,7 +20,9 @@ from researchd.storage.db import create_sqlite_engine, session_factory
 from researchd.storage.models import (
     AgentRecord,
     AgentRuntimeRecord,
+    ApprovalRequestRecord,
     AuditEventRecord,
+    CollaborationMessageRecord,
     DaemonCommandRecord,
     ResearchRunRecord,
     RuntimeSessionRecord,
@@ -118,6 +121,9 @@ def _seed_work_order(
     approval_grant_id: str | None = None,
 ) -> None:
     _seed_run(sessions, run_id)
+    with sessions() as session:
+        if session.get(WorkOrderRecord, work_order_id) is not None:
+            return
     now = _now()
     with sessions.begin() as session:
         session.add(WorkOrderRecord(
@@ -210,6 +216,75 @@ def _seed_runtime_session(
             version=1,
             created_at=now,
             updated_at=now,
+        ))
+
+
+def _seed_workspace_named(sessions: sessionmaker[Session], workspace_id: str) -> None:
+    now = _now()
+    with sessions.begin() as session:
+        session.add(WorkspaceRecord(
+            workspace_id=workspace_id,
+            name=workspace_id,
+            version=1,
+            created_at=now,
+            updated_at=now,
+        ))
+
+
+def _seed_approval_request(
+    sessions: sessionmaker[Session],
+    approval_id: str,
+    *,
+    status: str = "PENDING",
+    work_order_id: str | None = None,
+    run_id: str = "run_resolution",
+) -> None:
+    if work_order_id is not None:
+        _seed_work_order(sessions, work_order_id, run_id=run_id)
+    now = _now()
+    with sessions.begin() as session:
+        session.add(ApprovalRequestRecord(
+            approval_id=approval_id,
+            run_id=run_id,
+            work_order_id=work_order_id,
+            requester_actor_type="orchestrator",
+            requester_actor_id="orchestrator",
+            operation_type="capability.network.external",
+            canonical_parameters="{}",
+            parameter_sha256="a" * 64,
+            requested_by="orchestrator",
+            reason="resolution fixture",
+            risk_level="MEDIUM",
+            resource_scope={},
+            budget_delta={},
+            expires_at=now,
+            one_shot=True,
+            status=status,
+            created_at=now,
+        ))
+
+
+def _seed_message(
+    sessions: sessionmaker[Session],
+    message_id: str,
+    *,
+    run_id: str = "run_resolution",
+) -> None:
+    _seed_run(sessions, run_id)
+    now = _now()
+    with sessions.begin() as session:
+        session.add(CollaborationMessageRecord(
+            message_id=message_id,
+            run_id=run_id,
+            work_order_id=None,
+            sender_actor_type="HUMAN",
+            sender_actor_id="operator",
+            recipient_agent_id=None,
+            purpose="DIRECTIVE",
+            body="resolution fixture message",
+            classification="PROJECT_PRIVATE",
+            metadata_json={},
+            created_at=now,
         ))
 
 
@@ -599,6 +674,256 @@ def test_runtime_session_receipt_outcomes_follow_supervisor_state(tmp_path: Path
     assert stop_absent.resource is not None
     assert stop_absent.resource["target_status"] == "REJECTED"
     assert stop_absent.resource["target_reason_code"] == "effect_absent"
+
+
+def test_workspace_create_receipt_outcomes_follow_workspace_record(tmp_path: Path) -> None:
+    sessions = _sessions(tmp_path)
+    _seed_workspace_named(sessions, "ws_created")
+    _seed_receipt(sessions, "cmd_ws_created", "WorkspaceCreateCommand")
+    created = _resolve(
+        sessions,
+        "cmd_ws_created",
+        {"workspace_id": "ws_created"},
+        command_id="cmd_resolve_ws_1",
+    )
+    assert created.resource is not None
+    assert created.resource["target_status"] == "COMPLETED"
+    assert cast(dict[str, object], created.resource["observed_resource"])["name"] == "ws_created"
+
+    _seed_receipt(sessions, "cmd_ws_ghost", "WorkspaceCreateCommand")
+    ghost = _resolve(
+        sessions,
+        "cmd_ws_ghost",
+        {"workspace_id": "ws_missing"},
+        command_id="cmd_resolve_ws_2",
+    )
+    assert ghost.resource is not None
+    assert ghost.resource["target_status"] == "REJECTED"
+    assert ghost.resource["target_reason_code"] == "target_missing"
+    assert _receipt(sessions, "cmd_ws_ghost").status == "REJECTED"
+
+
+def test_research_task_create_receipt_outcomes_follow_run_record(tmp_path: Path) -> None:
+    sessions = _sessions(tmp_path)
+    _seed_run(sessions, "run_task_created", state="NEW")
+    _seed_receipt(sessions, "cmd_task_created", "ResearchTaskCreateCommand")
+    created = _resolve(
+        sessions,
+        "cmd_task_created",
+        {"run_id": "run_task_created"},
+        command_id="cmd_resolve_task_1",
+    )
+    assert created.resource is not None
+    assert created.resource["target_status"] == "COMPLETED"
+    assert cast(dict[str, object], created.resource["observed_resource"])["state"] == "NEW"
+
+    _seed_receipt(sessions, "cmd_task_ghost", "ResearchTaskCreateCommand")
+    ghost = _resolve(
+        sessions,
+        "cmd_task_ghost",
+        {"run_id": "run_missing"},
+        command_id="cmd_resolve_task_2",
+    )
+    assert ghost.resource is not None
+    assert ghost.resource["target_status"] == "REJECTED"
+    assert ghost.resource["target_reason_code"] == "target_missing"
+
+
+def test_work_order_reject_receipt_outcomes_follow_approval_state(tmp_path: Path) -> None:
+    sessions = _sessions(tmp_path)
+    _seed_work_order(sessions, "wo_rej_done", state="FAILED")
+    _seed_approval_request(
+        sessions, "apr_rej_done", status="REJECTED", work_order_id="wo_rej_done",
+    )
+    _seed_receipt(sessions, "cmd_rej_done", "WorkOrderRejectCommand")
+    done = _resolve(
+        sessions,
+        "cmd_rej_done",
+        {"work_order_id": "wo_rej_done", "approval_id": "apr_rej_done"},
+        command_id="cmd_resolve_rej_1",
+    )
+    assert done.resource is not None
+    assert done.resource["target_status"] == "COMPLETED"
+    observed = cast(dict[str, object], done.resource["observed_resource"])
+    assert observed["approval_status"] == "REJECTED"
+    assert observed["work_order_state"] == "FAILED"
+
+    # The approval rejected but the order never failed: the effect is partial.
+    _seed_work_order(sessions, "wo_rej_partial", state="WAITING_APPROVAL")
+    _seed_approval_request(
+        sessions, "apr_rej_partial", status="REJECTED", work_order_id="wo_rej_partial",
+    )
+    _seed_receipt(sessions, "cmd_rej_partial", "WorkOrderRejectCommand")
+    partial = _resolve(
+        sessions,
+        "cmd_rej_partial",
+        {"work_order_id": "wo_rej_partial", "approval_id": "apr_rej_partial"},
+        command_id="cmd_resolve_rej_2",
+    )
+    assert partial.resource is not None
+    assert partial.resource["target_status"] == "UNDETERMINED"
+    assert partial.resource["target_reason_code"] == "rejection_partial"
+    assert _receipt(sessions, "cmd_rej_partial").status == "ACCEPTED"
+
+    # Nothing rejected yet: the effect is absent.
+    _seed_work_order(sessions, "wo_rej_pending", state="WAITING_APPROVAL")
+    _seed_approval_request(
+        sessions, "apr_rej_pending", status="PENDING", work_order_id="wo_rej_pending",
+    )
+    _seed_receipt(sessions, "cmd_rej_pending", "WorkOrderRejectCommand")
+    pending = _resolve(
+        sessions,
+        "cmd_rej_pending",
+        {"work_order_id": "wo_rej_pending", "approval_id": "apr_rej_pending"},
+        command_id="cmd_resolve_rej_3",
+    )
+    assert pending.resource is not None
+    assert pending.resource["target_status"] == "REJECTED"
+    assert pending.resource["target_reason_code"] == "effect_absent"
+
+    # The approval moved the other way: conflicting, undecidable.
+    _seed_work_order(sessions, "wo_rej_conflict", state="POLICY_CHECK")
+    _seed_approval_request(
+        sessions, "apr_rej_conflict", status="APPROVED", work_order_id="wo_rej_conflict",
+    )
+    _seed_receipt(sessions, "cmd_rej_conflict", "WorkOrderRejectCommand")
+    conflict = _resolve(
+        sessions,
+        "cmd_rej_conflict",
+        {"work_order_id": "wo_rej_conflict", "approval_id": "apr_rej_conflict"},
+        command_id="cmd_resolve_rej_4",
+    )
+    assert conflict.resource is not None
+    assert conflict.resource["target_status"] == "UNDETERMINED"
+    assert conflict.resource["target_reason_code"] == "conflicting_approval"
+
+    _seed_receipt(sessions, "cmd_rej_ghost", "WorkOrderRejectCommand")
+    ghost = _resolve(
+        sessions,
+        "cmd_rej_ghost",
+        {"work_order_id": "wo_rej_ghost", "approval_id": "apr_missing"},
+        command_id="cmd_resolve_rej_5",
+    )
+    assert ghost.resource is not None
+    assert ghost.resource["target_status"] == "REJECTED"
+    assert ghost.resource["target_reason_code"] == "target_missing"
+
+
+def test_collaboration_message_receipt_outcomes_follow_message_record(tmp_path: Path) -> None:
+    sessions = _sessions(tmp_path)
+    _seed_message(sessions, "msg_created")
+    _seed_receipt(sessions, "cmd_msg_created", "CollaborationMessageSendCommand")
+    created = _resolve(
+        sessions,
+        "cmd_msg_created",
+        {"message_id": "msg_created"},
+        command_id="cmd_resolve_msg_1",
+    )
+    assert created.resource is not None
+    assert created.resource["target_status"] == "COMPLETED"
+    assert cast(dict[str, object], created.resource["observed_resource"])["purpose"] == "DIRECTIVE"
+
+    _seed_receipt(sessions, "cmd_msg_ghost", "CollaborationMessageSendCommand")
+    ghost = _resolve(
+        sessions,
+        "cmd_msg_ghost",
+        {"message_id": "msg_missing"},
+        command_id="cmd_resolve_msg_2",
+    )
+    assert ghost.resource is not None
+    assert ghost.resource["target_status"] == "REJECTED"
+    assert ghost.resource["target_reason_code"] == "target_missing"
+
+
+def test_backup_create_receipt_outcomes_follow_snapshot_tree(tmp_path: Path) -> None:
+    sessions = _sessions(tmp_path)
+    commit = "e" * 40
+    tag = "v1.0.0-rc.80"
+    artifact_root = tmp_path / "artifacts"
+    artifact_root.mkdir()
+    destination = tmp_path / "snapshots" / "resolution"
+    backup_snapshot(
+        _database(tmp_path), artifact_root, destination,
+        candidate_commit=commit, candidate_tag=tag,
+    )
+    _seed_receipt(sessions, "cmd_backup_created", "BackupCreateCommand")
+    created = _resolve(
+        sessions,
+        "cmd_backup_created",
+        {"destination": str(destination)},
+        command_id="cmd_resolve_backup_1",
+    )
+    assert created.resource is not None
+    assert created.resource["target_status"] == "COMPLETED"
+    observed = cast(dict[str, object], created.resource["observed_resource"])
+    assert observed["candidate_commit"] == commit
+    assert observed["candidate_tag"] == tag
+
+    # backup_snapshot is atomic: a missing or damaged tree is undecidable.
+    _seed_receipt(sessions, "cmd_backup_missing", "BackupCreateCommand")
+    missing = _resolve(
+        sessions,
+        "cmd_backup_missing",
+        {"destination": str(tmp_path / "snapshots" / "never-created")},
+        command_id="cmd_resolve_backup_2",
+    )
+    assert missing.resource is not None
+    assert missing.resource["target_status"] == "UNDETERMINED"
+    assert missing.resource["target_reason_code"] == "snapshot_invalid"
+    assert _receipt(sessions, "cmd_backup_missing").status == "ACCEPTED"
+
+    (destination / "manifest.json").write_text("corrupted", encoding="utf-8")
+    _seed_receipt(sessions, "cmd_backup_damaged", "BackupCreateCommand")
+    damaged = _resolve(
+        sessions,
+        "cmd_backup_damaged",
+        {"destination": str(destination)},
+        command_id="cmd_resolve_backup_3",
+    )
+    assert damaged.resource is not None
+    assert damaged.resource["target_status"] == "UNDETERMINED"
+    assert damaged.resource["target_reason_code"] == "snapshot_invalid"
+
+
+def test_read_only_receipts_can_only_be_abandoned(tmp_path: Path) -> None:
+    sessions = _sessions(tmp_path)
+    _seed_receipt(sessions, "cmd_verify_lost", "BackupVerifyCommand")
+    verified = _resolve(
+        sessions,
+        "cmd_verify_lost",
+        {"snapshot": "/tmp/snap"},
+        command_id="cmd_resolve_verify_1",
+    )
+    assert verified.resource is not None
+    assert verified.resource["target_status"] == "UNDETERMINED"
+    assert verified.resource["target_reason_code"] == "read_only_no_persistent_effect"
+    assert _receipt(sessions, "cmd_verify_lost").status == "ACCEPTED"
+
+    abandoned = _resolve(
+        sessions,
+        "cmd_verify_lost",
+        {"snapshot": "/tmp/snap"},
+        command_id="cmd_resolve_verify_2",
+        abandon=True,
+    )
+    assert abandoned.resource is not None
+    assert abandoned.resource["target_status"] == "REJECTED"
+    assert abandoned.resource["target_reason_code"] == "OPERATOR_ABANDONED"
+    assert _receipt(sessions, "cmd_verify_lost").status == "REJECTED"
+    assert _receipt(sessions, "cmd_verify_lost").reason_code == "OPERATOR_ABANDONED"
+
+    _seed_receipt(sessions, "cmd_plan_lost", "RestorePlanCommand")
+    planned = _resolve(
+        sessions,
+        "cmd_plan_lost",
+        {"snapshot": "/tmp/snap"},
+        command_id="cmd_resolve_plan_1",
+        abandon=True,
+    )
+    assert planned.resource is not None
+    assert planned.resource["target_status"] == "REJECTED"
+    assert planned.resource["target_reason_code"] == "OPERATOR_ABANDONED"
+    assert _receipt(sessions, "cmd_plan_lost").status == "REJECTED"
 
 
 def test_researchctl_lists_and_resolves_receipts(

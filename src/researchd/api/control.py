@@ -6,9 +6,12 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
+from researchd.collaboration.contracts import CollaborationMessage
+from researchd.collaboration.messages import CollaborationMessageService
 from researchd.domain.enums import AttemptState, WorkOrderState
 from researchd.orchestrator.engine import ResearchOrchestrator
 from researchd.storage.models import AgentRecord, AgentRuntimeRecord, ArtifactRecord, ApprovalRequestRecord, AuditEventRecord, ClaimRecord, CollaborationMessageRecord, DaemonCommandRecord, DelegationRecord, AgentInvocationRecord, AttemptRecord, ObservationRecord, PlanRecord, ResearchRunRecord, ReviewDecisionRecord, RuntimeSessionRecord, VerificationResultRecord, WorkOrderRecord, WorkspaceGrantRecord, WorkspaceReconciliationRecord, WorkspaceTransportRecord
+from researchd.workspace.creation import WorkspaceCreationService
 
 
 class LocalControlAPI:
@@ -322,6 +325,39 @@ class LocalControlAPI:
             raise RuntimeError("controller is required for state-changing commands")
         self.orchestrator.resolve_human(work_order_id, action=action, objective=objective)
         return self.work_order_status(work_order_id)
+
+    def create_workspace(self, workspace_id: str, name: str) -> dict[str, Any]:
+        record = WorkspaceCreationService(self.sessions).create(workspace_id, name)
+        return {"workspace_id": record.workspace_id, "name": record.name, "version": record.version}
+
+    def create_research_task(
+        self,
+        workspace_id: str,
+        objective: str,
+        *,
+        run_id: str | None = None,
+    ) -> dict[str, Any]:
+        if self.orchestrator is None:
+            raise RuntimeError("controller is required for state-changing commands")
+        created = self.orchestrator.create_run(workspace_id=workspace_id, objective=objective, run_id=run_id)
+        return {"run_id": created, "workspace_id": workspace_id, "state": "NEW"}
+
+    def reject(
+        self,
+        work_order_id: str,
+        approval_id: str,
+        *,
+        actor_type: str,
+        actor_id: str,
+    ) -> dict[str, Any]:
+        if self.orchestrator is None:
+            raise RuntimeError("controller is required for state-changing commands")
+        self.orchestrator.reject(work_order_id, approval_id, actor_type=actor_type, actor_id=actor_id)
+        return self.work_order_status(work_order_id)
+
+    def send_collaboration_message(self, message: CollaborationMessage) -> dict[str, Any]:
+        CollaborationMessageService(self.sessions).append(message)
+        return {"message_id": str(message.message_id), "run_id": message.run_id, "purpose": message.purpose}
 
 
 __all__ = ["LocalControlAPI"]

@@ -11,7 +11,11 @@ from researchd.daemon.command_service import (
     DaemonCommandConflict,
     DurableDaemonCommandService,
 )
-from researchd.daemon.contracts import DaemonCommandResult, RunCancelCommand
+from researchd.daemon.contracts import (
+    DaemonCommandResult,
+    ResearchTaskCreateCommand,
+    RunCancelCommand,
+)
 from researchd.daemon.startup import verify_audit_stream
 from researchd.api.control import LocalControlAPI
 from researchd.storage.db import create_sqlite_engine, session_factory
@@ -150,6 +154,46 @@ def test_uncertain_reserved_command_is_not_replayed_and_blocks_health(
     assert calls == []
     with pytest.raises(RuntimeError, match="operator reconciliation"):
         verify_audit_stream(engine)
+
+
+def test_research_task_create_is_durably_replayed_once(tmp_path: Path) -> None:
+    database = tmp_path / "task-create.db"
+    migrate(database)
+    sessions = session_factory(create_sqlite_engine(database))
+    calls: list[str] = []
+
+    def dispatch(command: object) -> DaemonCommandResult:
+        assert isinstance(command, ResearchTaskCreateCommand)
+        calls.append(command.workspace_id)
+        return DaemonCommandResult(
+            command_id=command.command_id,
+            command_type="ResearchTaskCreate",
+            status="ACCEPTED",
+            resource={
+                "run_id": command.run_id or "run_stub",
+                "workspace_id": command.workspace_id,
+                "state": "NEW",
+            },
+        )
+
+    service = DurableDaemonCommandService(sessions, dispatch)
+    command = ResearchTaskCreateCommand(
+        command_id="cmd_task_durable",
+        actor_type="HUMAN",
+        actor_id="operator",
+        workspace_id="ws_durable",
+        objective="durable task",
+        run_id="run_durable",
+    )
+    first = asyncio.run(service.execute(command))
+    replay = asyncio.run(service.execute(command))
+
+    assert replay == first
+    assert calls == ["ws_durable"]
+    with sessions() as session:
+        receipt = session.get(DaemonCommandRecord, "cmd_task_durable")
+        assert receipt is not None and receipt.status == "COMPLETED"
+        assert receipt.command_type == "ResearchTaskCreateCommand"
 
 
 def test_current_0020_database_upgrades_to_daemon_receipts(tmp_path: Path) -> None:

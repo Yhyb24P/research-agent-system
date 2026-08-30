@@ -269,7 +269,23 @@ HUMAN 身份，再构造内部命令。接受后的派发返回 `202` 以及带�
 | `POST` | `/api/runs/{run_id}/cancel` | — |
 | `POST` | `/api/work-orders/{work_order_id}/approve` | `grant_id` |
 | `POST` | `/api/work-orders/{work_order_id}/human-decision` | `action`（`abort` 或 `revise`；`revise` 必须带 `objective`） |
+| `POST` | `/api/work-orders/{work_order_id}/reject` | `approval_id` |
+| `POST` | `/api/workspaces` | `workspace_id`、`name` |
+| `POST` | `/api/runs` | `workspace_id`、`objective`、`run_id`（可选） |
+| `POST` | `/api/collaboration-messages` | `message_id`（`msg_…`）、`run_id`、`purpose`、`body`、`recipient_agent_id`（可选，`agent_…`）、`classification`（可选，默认 `PROJECT_PRIVATE`） |
+| `POST` | `/api/backups/create` | `destination`、`candidate_commit`（40 位十六进制）、`candidate_tag`（`vX.Y.Z-rc.…`） |
+| `POST` | `/api/backups/verify` | `snapshot` |
+| `POST` | `/api/restores/plan` | `snapshot`、`database_destination`、`artifact_destination`、`expected_candidate_commit`、`expected_candidate_tag` |
 | `POST` | `/api/daemon-commands/{command_id}/resolve` | `resource_ref`（命令族专属 key/value）、`abandon`（可选） |
+
+workspace、research-task、reject 与 collaboration-message 路由经由 orchestrator
+控制权威执行，因此要求嵌入应用暴露 `ResearchOrchestrator`；缺失时失败关闭。
+`POST /api/work-orders/{work_order_id}/reject` 会把 `WAITING_APPROVAL` 工单与其
+pending 审批收敛为 `FAILED`/`REJECTED`（run 以 `APPROVAL_REJECTED` 失败），与策略
+拒绝对称。三条备份路由绑定 daemon 自身的数据库与 artifact 根目录：create 生成原子
+快照树，verify 只做全量校验、不复制，restore plan 是不写入任何文件的 dry run。
+由于 verify 与 plan 不产生持久效果，其中断回执只能被放弃
+（`OPERATOR_ABANDONED`），不能被断言为完成。
 
 Migration `0021` 会在派发前预留通用持久化回执。同一命令身份和请求再次到达时，只重放
 已完成或已拒绝的结果，不重复执行副作用；用不同输入复用同一身份会被拒绝。若派发中断后

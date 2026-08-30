@@ -3,13 +3,23 @@
 from collections.abc import Awaitable
 from typing import Protocol
 
+from researchd.collaboration.contracts import CollaborationMessage
 from researchd.daemon.contracts import (
+    BackupCreateCommand,
+    BackupVerifyCommand,
+    CollaborationMessageSendCommand,
     DaemonCommandResult,
     HumanDecisionCommand,
+    ResearchTaskCreateCommand,
+    RestorePlanCommand,
     RunCancelCommand,
     WorkOrderApproveCommand,
+    WorkOrderRejectCommand,
+    WorkspaceCreateCommand,
 )
 from researchd.domain.base import DomainModel
+from researchd.domain.enums import DataClassification
+from researchd.domain.ids import AgentId, MessageId
 from researchd.runtime_sessions.contracts import (
     RuntimeSessionAttachCommand,
     RuntimeSessionStartCommand,
@@ -25,9 +35,11 @@ class DaemonCommandDispatcher:
         self,
         supervisor: RuntimeSupervisor,
         control: "ControlMutationAuthority | None" = None,
+        backups: "BackupMutationAuthority | None" = None,
     ) -> None:
         self.supervisor = supervisor
         self.control = control
+        self.backups = backups
 
     def __call__(self, command: DomainModel) -> DomainModel | Awaitable[DomainModel]:
         if isinstance(command, RuntimeSessionStartCommand):
@@ -48,6 +60,65 @@ class DaemonCommandDispatcher:
                 objective=command.objective,
             )
             return self._accepted(command.command_id, "HumanDecision", resource)
+        if isinstance(command, WorkspaceCreateCommand):
+            control = self._control()
+            resource = control.create_workspace(command.workspace_id, command.name)
+            return self._accepted(command.command_id, "WorkspaceCreate", resource)
+        if isinstance(command, ResearchTaskCreateCommand):
+            control = self._control()
+            resource = control.create_research_task(
+                command.workspace_id,
+                command.objective,
+                run_id=command.run_id,
+            )
+            return self._accepted(command.command_id, "ResearchTaskCreate", resource)
+        if isinstance(command, WorkOrderRejectCommand):
+            control = self._control()
+            resource = control.reject(
+                command.work_order_id,
+                command.approval_id,
+                actor_type=command.actor_type,
+                actor_id=command.actor_id,
+            )
+            return self._accepted(command.command_id, "WorkOrderReject", resource)
+        if isinstance(command, CollaborationMessageSendCommand):
+            control = self._control()
+            message = CollaborationMessage(
+                message_id=MessageId(command.message_id),
+                run_id=command.run_id,
+                work_order_id=command.work_order_id,
+                sender_actor_type=command.actor_type,
+                sender_actor_id=command.actor_id,
+                recipient_agent_id=(
+                    AgentId(command.recipient_agent_id)
+                    if command.recipient_agent_id
+                    else None
+                ),
+                purpose=command.purpose,
+                body=command.body,
+                classification=DataClassification(command.classification),
+            )
+            resource = control.send_collaboration_message(message)
+            return self._accepted(command.command_id, "CollaborationMessageSend", resource)
+        if isinstance(command, BackupCreateCommand):
+            resource = self._backups().create_backup(
+                command.destination,
+                command.candidate_commit,
+                command.candidate_tag,
+            )
+            return self._accepted(command.command_id, "BackupCreate", resource)
+        if isinstance(command, BackupVerifyCommand):
+            resource = self._backups().verify_backup(command.snapshot)
+            return self._accepted(command.command_id, "BackupVerify", resource)
+        if isinstance(command, RestorePlanCommand):
+            resource = self._backups().plan_restore(
+                command.snapshot,
+                command.database_destination,
+                command.artifact_destination,
+                command.expected_candidate_commit,
+                command.expected_candidate_tag,
+            )
+            return self._accepted(command.command_id, "RestorePlan", resource)
         raise TypeError(f"unsupported daemon command: {type(command).__name__}")
 
     async def _cancel(self, command: RunCancelCommand) -> DaemonCommandResult:
@@ -62,6 +133,11 @@ class DaemonCommandDispatcher:
         if self.control is None:
             raise RuntimeError("orchestrator mutation authority is not configured")
         return self.control
+
+    def _backups(self) -> "BackupMutationAuthority":
+        if self.backups is None:
+            raise RuntimeError("backup mutation authority is not configured")
+        return self.backups
 
     @staticmethod
     def _accepted(command_id: str, command_type: str, resource: DomainModel | dict[str, object]) -> DaemonCommandResult:
@@ -88,6 +164,44 @@ class ControlMutationAuthority(Protocol):
         action: str,
         objective: str | None = None,
     ) -> dict[str, object]: ...
+    def create_workspace(self, workspace_id: str, name: str) -> dict[str, object]: ...
+    def create_research_task(
+        self,
+        workspace_id: str,
+        objective: str,
+        *,
+        run_id: str | None = None,
+    ) -> dict[str, object]: ...
+    def reject(
+        self,
+        work_order_id: str,
+        approval_id: str,
+        *,
+        actor_type: str,
+        actor_id: str,
+    ) -> dict[str, object]: ...
+    def send_collaboration_message(
+        self,
+        message: CollaborationMessage,
+    ) -> dict[str, object]: ...
 
 
-__all__ = ["DaemonCommandDispatcher"]
+class BackupMutationAuthority(Protocol):
+    def create_backup(
+        self,
+        destination: str,
+        candidate_commit: str,
+        candidate_tag: str,
+    ) -> dict[str, object]: ...
+    def verify_backup(self, snapshot: str) -> dict[str, object]: ...
+    def plan_restore(
+        self,
+        snapshot: str,
+        database_destination: str,
+        artifact_destination: str,
+        expected_candidate_commit: str,
+        expected_candidate_tag: str,
+    ) -> dict[str, object]: ...
+
+
+__all__ = ["BackupMutationAuthority", "ControlMutationAuthority", "DaemonCommandDispatcher"]

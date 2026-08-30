@@ -10,6 +10,7 @@ from pydantic import ConfigDict, Field, field_validator, model_validator
 
 from researchd.api.control import LocalControlAPI
 from researchd.artifacts import ArtifactService, ContentAddressedArtifactStore
+from researchd.backup.commands import BackupCommandService
 from researchd.collaboration.delegation import DelegationService
 from researchd.collaboration.gateway import CollaborationGateway
 from researchd.collaboration.invocation import InvocationService
@@ -199,7 +200,11 @@ def compose_daemon(config: DaemonConfig) -> DaemonApplication:
         jobs=jobs,
     )
     api = LocalControlAPI(sessions, orchestrator)
-    dispatcher = DaemonCommandDispatcher(supervisor, api)
+    dispatcher = DaemonCommandDispatcher(
+        supervisor,
+        api,
+        backups=BackupCommandService(database, artifacts_path),
+    )
     daemon = ResearchDaemon(barrier, DurableDaemonCommandService(sessions, dispatcher))
     resolution = DaemonCommandResolutionService(sessions, build_builtin_observers(sessions))
     return DaemonApplication(

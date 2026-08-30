@@ -297,7 +297,26 @@ internal command. An accepted dispatch returns `202` with the versioned
 | `POST` | `/api/runs/{run_id}/cancel` | — |
 | `POST` | `/api/work-orders/{work_order_id}/approve` | `grant_id` |
 | `POST` | `/api/work-orders/{work_order_id}/human-decision` | `action` (`abort` or `revise`; `revise` requires `objective`) |
+| `POST` | `/api/work-orders/{work_order_id}/reject` | `approval_id` |
+| `POST` | `/api/workspaces` | `workspace_id`, `name` |
+| `POST` | `/api/runs` | `workspace_id`, `objective`, `run_id` (optional) |
+| `POST` | `/api/collaboration-messages` | `message_id` (`msg_…`), `run_id`, `purpose`, `body`, `recipient_agent_id` (optional, `agent_…`), `classification` (optional, default `PROJECT_PRIVATE`) |
+| `POST` | `/api/backups/create` | `destination`, `candidate_commit` (40-hex), `candidate_tag` (`vX.Y.Z-rc.…`) |
+| `POST` | `/api/backups/verify` | `snapshot` |
+| `POST` | `/api/restores/plan` | `snapshot`, `database_destination`, `artifact_destination`, `expected_candidate_commit`, `expected_candidate_tag` |
 | `POST` | `/api/daemon-commands/{command_id}/resolve` | `resource_ref` (family-specific key/value pairs), `abandon` (optional) |
+
+The workspace, research-task, reject, and collaboration-message routes run
+through the orchestrator control authority, so they require the embedding
+application to expose a `ResearchOrchestrator`; without one they fail closed.
+`POST /api/work-orders/{work_order_id}/reject` converges a `WAITING_APPROVAL`
+order and its pending approval to `FAILED`/`REJECTED` (the run fails with
+`APPROVAL_REJECTED`), symmetric with a policy denial. The three backup routes
+are bound to the daemon's own database and artifact root: create produces an
+atomic snapshot tree, verify validates it without copying, and the restore
+plan is a dry run that never writes. Because verify and plan leave no
+persistent effect, an interrupted receipt for either can only be abandoned
+(`OPERATOR_ABANDONED`), never asserted complete.
 
 Migration `0021` reserves a durable generic receipt before dispatch. Reusing
 the same command identity and request replays its completed or rejected result

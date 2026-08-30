@@ -12,6 +12,7 @@ import hashlib
 import json
 from collections.abc import Mapping
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, Literal, Protocol, cast
 from uuid import uuid4
 
@@ -19,16 +20,20 @@ from sqlalchemy import select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session, sessionmaker
 
+from researchd.backup.snapshot import BackupError, read_snapshot_manifest
 from researchd.daemon.contracts import DaemonCommandResolveCommand, DaemonCommandResult
 from researchd.domain.base import DomainModel
-from researchd.domain.enums import ResearchRunState, WorkOrderState
+from researchd.domain.enums import ApprovalStatus, ResearchRunState, WorkOrderState
 from researchd.runtime_sessions.contracts import SupervisorState
 from researchd.storage.models import (
+    ApprovalRequestRecord,
     AuditEventRecord,
+    CollaborationMessageRecord,
     DaemonCommandRecord,
     ResearchRunRecord,
     RuntimeSessionRecord,
     WorkOrderRecord,
+    WorkspaceRecord,
 )
 
 
@@ -213,9 +218,149 @@ class RuntimeSessionStopObserver:
         )
 
 
+class WorkspaceCreateObserver:
+    """A created workspace is durable once the authoritative record exists."""
+
+    def __init__(self, sessions: sessionmaker[Session]) -> None:
+        self.sessions = sessions
+
+    def observe(self, resource_ref: Mapping[str, str]) -> ObservedOutcome:
+        ref = _ref(resource_ref, "workspace_id")
+        if ref is None:
+            return ObservedOutcome(status="UNDETERMINED", reason_code="resource_ref_invalid")
+        with self.sessions() as session:
+            workspace = session.get(WorkspaceRecord, ref[0])
+            if workspace is None:
+                return ObservedOutcome(status="REJECTED", reason_code="target_missing")
+            resource: dict[str, object] = {
+                "workspace_id": workspace.workspace_id,
+                "name": workspace.name,
+            }
+        return ObservedOutcome(status="COMPLETED", resource=resource)
+
+
+class ResearchTaskCreateObserver:
+    """A created research task is durable once the run record exists."""
+
+    def __init__(self, sessions: sessionmaker[Session]) -> None:
+        self.sessions = sessions
+
+    def observe(self, resource_ref: Mapping[str, str]) -> ObservedOutcome:
+        ref = _ref(resource_ref, "run_id")
+        if ref is None:
+            return ObservedOutcome(status="UNDETERMINED", reason_code="resource_ref_invalid")
+        with self.sessions() as session:
+            run = session.get(ResearchRunRecord, ref[0])
+            if run is None:
+                return ObservedOutcome(status="REJECTED", reason_code="target_missing")
+            resource: dict[str, object] = {
+                "run_id": run.run_id,
+                "state": run.state,
+            }
+        return ObservedOutcome(status="COMPLETED", resource=resource)
+
+
+class WorkOrderRejectObserver:
+    """A rejected approval is durable once the request converged to REJECTED."""
+
+    def __init__(self, sessions: sessionmaker[Session]) -> None:
+        self.sessions = sessions
+
+    def observe(self, resource_ref: Mapping[str, str]) -> ObservedOutcome:
+        ref = _ref(resource_ref, "work_order_id", "approval_id")
+        if ref is None:
+            return ObservedOutcome(status="UNDETERMINED", reason_code="resource_ref_invalid")
+        work_order_id, approval_id = ref
+        with self.sessions() as session:
+            request = session.get(ApprovalRequestRecord, approval_id)
+            if request is None:
+                return ObservedOutcome(status="REJECTED", reason_code="target_missing")
+            order = session.get(WorkOrderRecord, work_order_id)
+            resource: dict[str, object] = {
+                "work_order_id": work_order_id,
+                "approval_id": approval_id,
+                "approval_status": request.status,
+                "work_order_state": order.state if order is not None else None,
+            }
+        if request.status == ApprovalStatus.REJECTED.value:
+            if order is not None and order.state == WorkOrderState.FAILED.value:
+                return ObservedOutcome(status="COMPLETED", resource=resource)
+            return ObservedOutcome(
+                status="UNDETERMINED",
+                resource=resource,
+                reason_code="rejection_partial",
+            )
+        if request.status == ApprovalStatus.PENDING.value:
+            return ObservedOutcome(status="REJECTED", resource=resource, reason_code="effect_absent")
+        return ObservedOutcome(
+            status="UNDETERMINED",
+            resource=resource,
+            reason_code="conflicting_approval",
+        )
+
+
+class CollaborationMessageSendObserver:
+    """A sent message is durable once the append-only record exists."""
+
+    def __init__(self, sessions: sessionmaker[Session]) -> None:
+        self.sessions = sessions
+
+    def observe(self, resource_ref: Mapping[str, str]) -> ObservedOutcome:
+        ref = _ref(resource_ref, "message_id")
+        if ref is None:
+            return ObservedOutcome(status="UNDETERMINED", reason_code="resource_ref_invalid")
+        with self.sessions() as session:
+            record = session.get(CollaborationMessageRecord, ref[0])
+            if record is None:
+                return ObservedOutcome(status="REJECTED", reason_code="target_missing")
+            resource: dict[str, object] = {
+                "message_id": record.message_id,
+                "run_id": record.run_id,
+                "purpose": record.purpose,
+            }
+        return ObservedOutcome(status="COMPLETED", resource=resource)
+
+
+class BackupCreateObserver:
+    """A created snapshot is durable once its tree is complete and valid."""
+
+    def observe(self, resource_ref: Mapping[str, str]) -> ObservedOutcome:
+        ref = _ref(resource_ref, "destination")
+        if ref is None:
+            return ObservedOutcome(status="UNDETERMINED", reason_code="resource_ref_invalid")
+        try:
+            manifest = read_snapshot_manifest(Path(ref[0]))
+        except BackupError:
+            # backup_snapshot is atomic: a crash leaves either a complete tree
+            # or nothing. A damaged tree is undecidable, not a failed create.
+            return ObservedOutcome(
+                status="UNDETERMINED",
+                reason_code="snapshot_invalid",
+            )
+        resource: dict[str, object] = {
+            "destination": ref[0],
+            "candidate_commit": manifest.candidate_commit,
+            "candidate_tag": manifest.candidate_tag,
+            "schema_revision": manifest.schema_revision,
+        }
+        return ObservedOutcome(status="COMPLETED", resource=resource)
+
+
+class ReadOnlyEffectObserver:
+    """Read-only commands leave no durable effect; only abandonment applies."""
+
+    def observe(self, resource_ref: Mapping[str, str]) -> ObservedOutcome:
+        del resource_ref
+        return ObservedOutcome(
+            status="UNDETERMINED",
+            reason_code="read_only_no_persistent_effect",
+        )
+
+
 def build_builtin_observers(sessions: sessionmaker[Session]) -> dict[str, CommandOutcomeObserver]:
     """Bind the closed command families of the current dispatcher to observers."""
     start_observer = RuntimeSessionStartObserver(sessions)
+    read_only = ReadOnlyEffectObserver()
     return {
         "RunCancelCommand": RunCancelObserver(sessions),
         "WorkOrderApproveCommand": WorkOrderApproveObserver(sessions),
@@ -223,6 +368,13 @@ def build_builtin_observers(sessions: sessionmaker[Session]) -> dict[str, Comman
         "RuntimeSessionStartCommand": start_observer,
         "RuntimeSessionAttachCommand": start_observer,
         "RuntimeSessionStopCommand": RuntimeSessionStopObserver(sessions),
+        "WorkspaceCreateCommand": WorkspaceCreateObserver(sessions),
+        "ResearchTaskCreateCommand": ResearchTaskCreateObserver(sessions),
+        "WorkOrderRejectCommand": WorkOrderRejectObserver(sessions),
+        "CollaborationMessageSendCommand": CollaborationMessageSendObserver(sessions),
+        "BackupCreateCommand": BackupCreateObserver(),
+        "BackupVerifyCommand": read_only,
+        "RestorePlanCommand": read_only,
     }
 
 
@@ -472,13 +624,19 @@ class DaemonCommandResolutionService:
 
 
 __all__ = [
+    "BackupCreateObserver",
+    "CollaborationMessageSendObserver",
     "CommandOutcomeObserver",
     "DaemonCommandResolutionService",
     "HumanDecisionObserver",
     "ObservedOutcome",
+    "ReadOnlyEffectObserver",
+    "ResearchTaskCreateObserver",
     "RunCancelObserver",
     "RuntimeSessionStartObserver",
     "RuntimeSessionStopObserver",
     "WorkOrderApproveObserver",
+    "WorkOrderRejectObserver",
+    "WorkspaceCreateObserver",
     "build_builtin_observers",
 ]

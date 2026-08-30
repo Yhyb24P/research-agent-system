@@ -10,6 +10,7 @@ from sqlalchemy import text
 
 from researchd.agents.cloud_lead import CloudLeadAdapter
 from researchd.artifacts.store import ContentAddressedArtifactStore
+from researchd.collaboration.contracts import CollaborationMessage
 from researchd.collaboration.registry import AgentRegistryService
 from researchd.context.builder import ContextBuilder
 from researchd.context.redaction import DeterministicRedactor
@@ -197,6 +198,35 @@ class _ControlStub:
     ) -> dict[str, object]:
         self.calls.append(("human", work_order_id, action, objective or ""))
         return {"work_order_id": work_order_id, "action": action}
+
+    def create_workspace(self, workspace_id: str, name: str) -> dict[str, object]:
+        self.calls.append(("workspace", workspace_id, name))
+        return {"workspace_id": workspace_id, "name": name, "version": 1}
+
+    def create_research_task(
+        self,
+        workspace_id: str,
+        objective: str,
+        *,
+        run_id: str | None = None,
+    ) -> dict[str, object]:
+        self.calls.append(("task", workspace_id, objective, run_id or ""))
+        return {"run_id": run_id or "run_stub", "workspace_id": workspace_id, "state": "NEW"}
+
+    def reject(
+        self,
+        work_order_id: str,
+        approval_id: str,
+        *,
+        actor_type: str,
+        actor_id: str,
+    ) -> dict[str, object]:
+        self.calls.append(("reject", work_order_id, approval_id, actor_type, actor_id))
+        return {"work_order_id": work_order_id, "state": "FAILED"}
+
+    def send_collaboration_message(self, message: CollaborationMessage) -> dict[str, object]:
+        self.calls.append(("message", str(message.message_id)))
+        return {"message_id": str(message.message_id), "run_id": message.run_id, "purpose": message.purpose}
 
 
 def test_dispatcher_fails_closed_without_control_authority(tmp_path: Path) -> None:

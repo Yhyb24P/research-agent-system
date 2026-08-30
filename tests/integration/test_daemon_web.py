@@ -1,12 +1,23 @@
 import asyncio
 from pathlib import Path
+from typing import cast
 import pytest
 from pydantic import ValidationError
 from sqlalchemy.orm import Session, sessionmaker
 
 from researchd.api.control import LocalControlAPI
 from researchd.api.web import ControlCommandRouter
-from researchd.daemon.contracts import DaemonCommandResult
+from researchd.daemon.contracts import (
+    BackupCreateCommand,
+    BackupVerifyCommand,
+    CollaborationMessageSendCommand,
+    DaemonCommand,
+    DaemonCommandResult,
+    ResearchTaskCreateCommand,
+    RestorePlanCommand,
+    WorkOrderRejectCommand,
+    WorkspaceCreateCommand,
+)
 from researchd.daemon.reconciliation import (
     DaemonCommandResolutionService,
     build_builtin_observers,
@@ -307,3 +318,129 @@ def test_resolve_route_requires_resolution_service(tmp_path: Path) -> None:
             "/api/daemon-commands/cmd_x/resolve",
             {"command_id": "cmd_resolve_none", "resource_ref": {}},
         ))
+
+
+_FAMILY_ROUTES: tuple[tuple[str, dict[str, object]], ...] = (
+    ("/api/workspaces", {
+        "command_id": "cmd_ws_family",
+        "workspace_id": "ws_family",
+        "name": "family",
+    }),
+    ("/api/runs", {
+        "command_id": "cmd_task_family",
+        "workspace_id": "ws_family",
+        "objective": "family task",
+    }),
+    ("/api/work-orders/wo_family/reject", {
+        "command_id": "cmd_reject_family",
+        "approval_id": "apr_family",
+    }),
+    ("/api/collaboration-messages", {
+        "command_id": "cmd_msg_family",
+        "message_id": "msg_family",
+        "run_id": "run_family",
+        "purpose": "DIRECTIVE",
+        "body": "stay in scope",
+    }),
+    ("/api/backups/create", {
+        "command_id": "cmd_backup_family",
+        "destination": "/tmp/family-snap",
+        "candidate_commit": "e" * 40,
+        "candidate_tag": "v1.0.0-rc.80",
+    }),
+    ("/api/backups/verify", {
+        "command_id": "cmd_verify_family",
+        "snapshot": "/tmp/family-snap",
+    }),
+    ("/api/restores/plan", {
+        "command_id": "cmd_plan_family",
+        "snapshot": "/tmp/family-snap",
+        "database_destination": "/tmp/family-restore.db",
+        "artifact_destination": "/tmp/family-restore-artifacts",
+        "expected_candidate_commit": "e" * 40,
+        "expected_candidate_tag": "v1.0.0-rc.80",
+    }),
+)
+
+
+class _FamilyDispatcher:
+    """Accepts only the PX00-05 command families; everything else fails."""
+
+    def __init__(self) -> None:
+        self.commands: list[DomainModel] = []
+
+    def __call__(self, command: DomainModel) -> DaemonCommandResult:
+        self.commands.append(command)
+        assert isinstance(command, (
+            BackupCreateCommand,
+            BackupVerifyCommand,
+            CollaborationMessageSendCommand,
+            ResearchTaskCreateCommand,
+            RestorePlanCommand,
+            WorkOrderRejectCommand,
+            WorkspaceCreateCommand,
+        ))
+        return DaemonCommandResult(
+            command_id=command.command_id,
+            command_type=type(command).__name__.removesuffix("Command"),
+            status="ACCEPTED",
+            resource={"accepted": True},
+        )
+
+
+@pytest.mark.parametrize(("path", "payload"), _FAMILY_ROUTES)
+def test_family_routes_cross_ready_gate(tmp_path: Path, path: str, payload: dict[str, object]) -> None:
+    sessions = session_factory(create_sqlite_engine(tmp_path / "unused.db"))
+    dispatcher = _FamilyDispatcher()
+    daemon = ResearchDaemon(_barrier(), dispatcher)
+    assert daemon.start().ready
+    router = ControlCommandRouter(LocalControlAPI(sessions), daemon)
+
+    status, response = asyncio.run(router.post(path, payload))
+
+    assert status == 202
+    assert response["status"] == "ACCEPTED"
+    assert response["command_id"] == payload["command_id"]
+    command = cast(DaemonCommand, dispatcher.commands[-1])
+    assert command.actor_type == "HUMAN"
+    assert command.actor_id == "local-control-client"
+
+
+@pytest.mark.parametrize(("path", "payload"), _FAMILY_ROUTES)
+def test_family_routes_are_rejected_before_daemon_ready(
+    tmp_path: Path, path: str, payload: dict[str, object],
+) -> None:
+    sessions = session_factory(create_sqlite_engine(tmp_path / "unused.db"))
+    dispatcher = _FamilyDispatcher()
+    daemon = ResearchDaemon(_barrier(), dispatcher)
+    router = ControlCommandRouter(LocalControlAPI(sessions), daemon)
+
+    with pytest.raises(DaemonNotReady):
+        asyncio.run(router.post(path, payload))
+    assert dispatcher.commands == []
+
+
+@pytest.mark.parametrize(("path", "payload"), _FAMILY_ROUTES)
+def test_family_routes_require_daemon(
+    tmp_path: Path, path: str, payload: dict[str, object],
+) -> None:
+    sessions = session_factory(create_sqlite_engine(tmp_path / "unused.db"))
+    router = ControlCommandRouter(LocalControlAPI(sessions))
+
+    with pytest.raises(RuntimeError, match="requires researchd"):
+        asyncio.run(router.post(path, payload))
+
+
+def test_family_routes_reject_forged_actor_fields(tmp_path: Path) -> None:
+    sessions = session_factory(create_sqlite_engine(tmp_path / "unused.db"))
+    dispatcher = _FamilyDispatcher()
+    daemon = ResearchDaemon(_barrier(), dispatcher)
+    daemon.start()
+    router = ControlCommandRouter(LocalControlAPI(sessions), daemon)
+    payload = dict(_FAMILY_ROUTES[0][1])
+    payload["actor_type"] = "SYSTEM"
+    payload["actor_id"] = "forged-system"
+
+    with pytest.raises(ValidationError):
+        asyncio.run(router.post("/api/workspaces", payload))
+    assert dispatcher.commands == []

@@ -13,11 +13,14 @@ from researchd.workspace.contracts import (
     WorkspaceSnapshot,
     WorkspaceTransportKind,
 )
+from researchd.workspace.creation import WorkspaceCreationService, WorkspaceError
 from researchd.workspace.service import WorkspaceDelegationService
 from researchd.workspace.transports import ArchiveWorkspaceTransport, GitWorktreeTransport
 
 __all__ = [
+    "WorkspaceCreationService",
     "WorkspaceDelegationService",
+    "WorkspaceError",
     "WorkspaceGrant",
     "WorkspaceGrantBinding",
     "WorkspaceGrantState",

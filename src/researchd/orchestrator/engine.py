@@ -325,6 +325,20 @@ class ResearchOrchestrator:
         self._transition_run(order.run_id, ResearchRunState.ACTIVE, "APPROVAL_RESUMED")
         return True
 
+    def reject(self, work_order_id: str, approval_id: str, *, actor_type: str, actor_id: str) -> bool:
+        """Reject a pending approval; the order fails exactly like a policy denial."""
+        order = self._order(work_order_id)
+        if WorkOrderState(order.state) is not WorkOrderState.WAITING_APPROVAL or self.approvals is None:
+            raise OrchestrationError("work order is not awaiting approval")
+        if order.approval_id != approval_id:
+            raise OrchestrationError("approval does not belong to this work order")
+        self.approvals.reject(approval_id)
+        self.transitions.transition_work_order(work_order_id, order.version, WorkOrderState.FAILED,
+            event_type="APPROVAL_REJECTED", actor_type=actor_type, actor_id=actor_id,
+            correlation_id=work_order_id, metadata={"approval_id": approval_id})
+        self._transition_run(order.run_id, ResearchRunState.FAILED, "APPROVAL_REJECTED")
+        return True
+
     async def _dispatch(self, order: WorkOrderRecord) -> bool:
         run = self._run(order.run_id)
         if run.cancellation_requested:

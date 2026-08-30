@@ -14,14 +14,28 @@ from researchd.api.agui import AGUIProjectionAdapter
 from researchd.api.control import LocalControlAPI
 from researchd.daemon.runtime import ResearchDaemon
 from researchd.daemon.contracts import (
+    BackupCreateCommand,
+    BackupVerifyCommand,
+    CollaborationMessageSendCommand,
     DaemonCommandResolveCommand,
+    ExternalBackupCreateRequest,
+    ExternalBackupVerifyRequest,
+    ExternalCollaborationMessageSendRequest,
     ExternalDaemonCommandResolveRequest,
     ExternalHumanDecisionRequest,
+    ExternalResearchTaskCreateRequest,
+    ExternalRestorePlanRequest,
     ExternalRunCancelRequest,
     ExternalWorkOrderApproveRequest,
+    ExternalWorkOrderRejectRequest,
+    ExternalWorkspaceCreateRequest,
     HumanDecisionCommand,
+    ResearchTaskCreateCommand,
+    RestorePlanCommand,
     RunCancelCommand,
     WorkOrderApproveCommand,
+    WorkOrderRejectCommand,
+    WorkspaceCreateCommand,
 )
 from researchd.daemon.reconciliation import DaemonCommandResolutionService
 from researchd.domain.base import DomainModel
@@ -182,6 +196,85 @@ class ControlCommandRouter:
                 objective=decision_request.objective,
             )
             return await self._execute(decision_command)
+        if parts == ["api", "workspaces"]:
+            workspace_request = ExternalWorkspaceCreateRequest.model_validate(payload)
+            workspace_command = WorkspaceCreateCommand(
+                command_id=workspace_request.command_id,
+                actor_type="HUMAN",
+                actor_id=self.human_actor_id,
+                workspace_id=workspace_request.workspace_id,
+                name=workspace_request.name,
+            )
+            return await self._execute(workspace_command)
+        if parts == ["api", "runs"]:
+            task_request = ExternalResearchTaskCreateRequest.model_validate(payload)
+            task_command = ResearchTaskCreateCommand(
+                command_id=task_request.command_id,
+                actor_type="HUMAN",
+                actor_id=self.human_actor_id,
+                workspace_id=task_request.workspace_id,
+                objective=task_request.objective,
+                run_id=task_request.run_id,
+            )
+            return await self._execute(task_command)
+        if len(parts) == 4 and parts[:2] == ["api", "work-orders"] and parts[3] == "reject":
+            reject_request = ExternalWorkOrderRejectRequest.model_validate(payload)
+            reject_command = WorkOrderRejectCommand(
+                command_id=reject_request.command_id,
+                actor_type="HUMAN",
+                actor_id=self.human_actor_id,
+                work_order_id=parts[2],
+                approval_id=reject_request.approval_id,
+            )
+            return await self._execute(reject_command)
+        if parts == ["api", "collaboration-messages"]:
+            message_request = ExternalCollaborationMessageSendRequest.model_validate(payload)
+            message_command = CollaborationMessageSendCommand(
+                command_id=message_request.command_id,
+                actor_type="HUMAN",
+                actor_id=self.human_actor_id,
+                message_id=message_request.message_id,
+                run_id=message_request.run_id,
+                work_order_id=message_request.work_order_id,
+                recipient_agent_id=message_request.recipient_agent_id,
+                purpose=message_request.purpose,
+                body=message_request.body,
+                classification=message_request.classification,
+            )
+            return await self._execute(message_command)
+        if parts == ["api", "backups", "create"]:
+            backup_request = ExternalBackupCreateRequest.model_validate(payload)
+            backup_command = BackupCreateCommand(
+                command_id=backup_request.command_id,
+                actor_type="HUMAN",
+                actor_id=self.human_actor_id,
+                destination=backup_request.destination,
+                candidate_commit=backup_request.candidate_commit,
+                candidate_tag=backup_request.candidate_tag,
+            )
+            return await self._execute(backup_command)
+        if parts == ["api", "backups", "verify"]:
+            verify_request = ExternalBackupVerifyRequest.model_validate(payload)
+            verify_command = BackupVerifyCommand(
+                command_id=verify_request.command_id,
+                actor_type="HUMAN",
+                actor_id=self.human_actor_id,
+                snapshot=verify_request.snapshot,
+            )
+            return await self._execute(verify_command)
+        if parts == ["api", "restores", "plan"]:
+            restore_request = ExternalRestorePlanRequest.model_validate(payload)
+            restore_command = RestorePlanCommand(
+                command_id=restore_request.command_id,
+                actor_type="HUMAN",
+                actor_id=self.human_actor_id,
+                snapshot=restore_request.snapshot,
+                database_destination=restore_request.database_destination,
+                artifact_destination=restore_request.artifact_destination,
+                expected_candidate_commit=restore_request.expected_candidate_commit,
+                expected_candidate_tag=restore_request.expected_candidate_tag,
+            )
+            return await self._execute(restore_command)
         if len(parts) == 4 and parts[:2] == ["api", "daemon-commands"] and parts[3] == "resolve":
             resolve_request = ExternalDaemonCommandResolveRequest.model_validate(payload)
             resolve_command = DaemonCommandResolveCommand(
