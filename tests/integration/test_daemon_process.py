@@ -53,11 +53,32 @@ def _wait_for_health(process: subprocess.Popen[str], port: int) -> dict[str, obj
     raise AssertionError(f"researchd failed before READY: {failure_output}")
 
 
-def _post(port: int, path: str, payload: dict[str, object]) -> dict[str, object]:
+def _token(state_root: Path) -> str:
+    return (state_root / "control.token").read_text(encoding="ascii").strip()
+
+
+def _get(port: int, path: str, state_root: Path) -> object:
+    request = Request(
+        f"http://127.0.0.1:{port}{path}",
+        headers={"Authorization": f"Bearer {_token(state_root)}"},
+    )
+    with urlopen(request, timeout=5) as response:
+        return json.load(response)
+
+
+def _post(
+    port: int,
+    path: str,
+    payload: dict[str, object],
+    state_root: Path,
+) -> dict[str, object]:
     request = Request(
         f"http://127.0.0.1:{port}{path}",
         data=json.dumps(payload).encode(),
-        headers={"Content-Type": "application/json"},
+        headers={
+            "Authorization": f"Bearer {_token(state_root)}",
+            "Content-Type": "application/json",
+        },
         method="POST",
     )
     with urlopen(request, timeout=5) as response:
@@ -133,12 +154,13 @@ def test_researchd_restart_reattaches_live_runtime_and_preserves_audit_order(
     tmp_path: Path,
 ) -> None:
     database = tmp_path / "researchd.db"
+    state = tmp_path / "state"
     port = _free_port()
     config = tmp_path / "researchd.json"
     config.write_text(json.dumps({
         "database": str(database),
         "artifact_root": str(tmp_path / "artifacts"),
-        "state_root": str(tmp_path / "state"),
+        "state_root": str(state),
         "repositories": {},
         "job_commands": {},
         "host": "127.0.0.1",
@@ -162,15 +184,15 @@ def test_researchd_restart_reattaches_live_runtime_and_preserves_audit_order(
             "runtime_session_id": "runtime_session_restart_test",
             "runtime_id": "runtime_crash_test",
             "launch_spec": {"argv": ["/usr/bin/sleep", "60"], "cwd": str(tmp_path)},
-        })
+        }, state)
         started_resource = cast(dict[str, object], started["resource"])
         assert started["status"] == "ACCEPTED"
         assert started_resource["supervisor_state"] == "HEALTHY"
         identity = cast(dict[str, object], started_resource["external_identity"])
         runtime_pid = int(cast(int, identity["pid"]))
 
-        with urlopen(f"http://127.0.0.1:{port}/api/system-events?after=0") as response:
-            before = json.load(response)["events"]
+        before_payload = cast(dict[str, object], _get(port, "/api/system-events?after=0", state))
+        before = cast(list[dict[str, object]], before_payload["events"])
         before_offsets = [item["stream_offset"] for item in before]
         _terminate(first)
 
@@ -181,13 +203,12 @@ def test_researchd_restart_reattaches_live_runtime_and_preserves_audit_order(
         runtime_phase = phases[4]
         assert runtime_phase["phase"] == "RUNTIME_RECONCILIATION"
         assert runtime_phase["affected_count"] == 1
-        with urlopen(f"http://127.0.0.1:{port}/api/runtime-sessions") as response:
-            session = json.load(response)[0]
+        session = cast(list[dict[str, object]], _get(port, "/api/runtime-sessions", state))[0]
         assert session["supervisor_state"] == "HEALTHY"
         assert session["reattach_state"] == "ATTACHED"
 
-        with urlopen(f"http://127.0.0.1:{port}/api/system-events?after=0") as response:
-            after = json.load(response)["events"]
+        after_payload = cast(dict[str, object], _get(port, "/api/system-events?after=0", state))
+        after = cast(list[dict[str, object]], after_payload["events"])
         after_offsets = [item["stream_offset"] for item in after]
         assert after_offsets == list(range(1, len(after_offsets) + 1))
         assert after_offsets[:len(before_offsets)] == before_offsets
@@ -196,7 +217,7 @@ def test_researchd_restart_reattaches_live_runtime_and_preserves_audit_order(
             "command_id": "command_restart_stop",
             "runtime_id": "runtime_crash_test",
             "expected_version": session["version"],
-        })
+        }, state)
         stopped_resource = cast(dict[str, object], stopped["resource"])
         assert stopped["status"] == "ACCEPTED"
         assert stopped_resource["supervisor_state"] == "STOPPED"
@@ -218,12 +239,13 @@ def test_researchd_restart_reattaches_live_runtime_and_preserves_audit_order(
 
 def test_start_intent_crash_never_relaunches_uncertain_process(tmp_path: Path) -> None:
     database = tmp_path / "researchd.db"
+    state = tmp_path / "state"
     port = _free_port()
     config = tmp_path / "researchd.json"
     config.write_text(json.dumps({
         "database": str(database),
         "artifact_root": str(tmp_path / "artifacts"),
-        "state_root": str(tmp_path / "state"),
+        "state_root": str(state),
         "repositories": {}, "job_commands": {},
         "host": "127.0.0.1", "port": port,
     }))
@@ -246,8 +268,7 @@ def test_start_intent_crash_never_relaunches_uncertain_process(tmp_path: Path) -
         assert health["ready"] is False
         assert phases[4]["status"] == "FAIL"
         assert phases[4]["error_type"] == "RuntimeError"
-        with urlopen(f"http://127.0.0.1:{port}/api/runtime-sessions") as response:
-            session = json.load(response)[0]
+        session = cast(list[dict[str, object]], _get(port, "/api/runtime-sessions", state))[0]
         assert session["supervisor_state"] == "RECONCILIATION_REQUIRED"
         assert session["external_identity"] is None
         assert session["exit_reason"] == "missing_external_identity"
@@ -257,7 +278,7 @@ def test_start_intent_crash_never_relaunches_uncertain_process(tmp_path: Path) -
                 "runtime_session_id": "runtime_session_rejected",
                 "runtime_id": "runtime_crash_test",
                 "launch_spec": {"argv": ["/usr/bin/true"], "cwd": str(tmp_path)},
-            })
+            }, state)
         assert rejected.value.code == 409
     finally:
         _terminate(daemon)
@@ -265,12 +286,13 @@ def test_start_intent_crash_never_relaunches_uncertain_process(tmp_path: Path) -
 
 def test_stop_intent_crash_is_finished_by_restart_reconciliation(tmp_path: Path) -> None:
     database = tmp_path / "researchd.db"
+    state = tmp_path / "state"
     port = _free_port()
     config = tmp_path / "researchd.json"
     config.write_text(json.dumps({
         "database": str(database),
         "artifact_root": str(tmp_path / "artifacts"),
-        "state_root": str(tmp_path / "state"),
+        "state_root": str(state),
         "repositories": {}, "job_commands": {},
         "host": "127.0.0.1", "port": port,
     }))
@@ -287,7 +309,7 @@ def test_stop_intent_crash_is_finished_by_restart_reconciliation(tmp_path: Path)
             "runtime_session_id": "runtime_session_crash_test",
             "runtime_id": "runtime_crash_test",
             "launch_spec": {"argv": ["/usr/bin/sleep", "60"], "cwd": str(tmp_path)},
-        })
+        }, state)
         started_resource = cast(dict[str, object], started["resource"])
         assert started["status"] == "ACCEPTED"
         identity = cast(dict[str, object], started_resource["external_identity"])
@@ -306,8 +328,7 @@ def test_stop_intent_crash_is_finished_by_restart_reconciliation(tmp_path: Path)
         startup = cast(dict[str, object], health["startup"])
         phases = cast(list[dict[str, object]], startup["phases"])
         assert phases[4]["affected_count"] == 1
-        with urlopen(f"http://127.0.0.1:{port}/api/runtime-sessions") as response:
-            session = json.load(response)[0]
+        session = cast(list[dict[str, object]], _get(port, "/api/runtime-sessions", state))[0]
         assert session["supervisor_state"] == "STOPPED"
         assert session["exit_reason"] == "reconciled_stop"
         runtime_pid = None
@@ -327,12 +348,13 @@ def test_stop_intent_crash_is_finished_by_restart_reconciliation(tmp_path: Path)
 
 def test_generic_command_crash_blocks_ready_without_replaying(tmp_path: Path) -> None:
     database = tmp_path / "researchd.db"
+    state = tmp_path / "state"
     port = _free_port()
     config = tmp_path / "researchd.json"
     config.write_text(json.dumps({
         "database": str(database),
         "artifact_root": str(tmp_path / "artifacts"),
-        "state_root": str(tmp_path / "state"),
+        "state_root": str(state),
         "repositories": {}, "job_commands": {},
         "host": "127.0.0.1", "port": port,
     }))
@@ -354,17 +376,17 @@ def test_generic_command_crash_blocks_ready_without_replaying(tmp_path: Path) ->
         phases = cast(list[dict[str, object]], startup["phases"])
         assert phases[7]["phase"] == "AUDIT_STREAM_HEALTH"
         assert phases[7]["status"] == "FAIL"
-        with urlopen(
-            f"http://127.0.0.1:{port}/api/daemon-commands?status=ACCEPTED"
-        ) as response:
-            commands = json.load(response)
+        commands = cast(
+            list[dict[str, object]],
+            _get(port, "/api/daemon-commands?status=ACCEPTED", state),
+        )
         assert len(commands) == 1
         assert commands[0]["command_id"] == "command_generic_crash"
         assert commands[0]["status"] == "ACCEPTED"
         with pytest.raises(HTTPError) as rejected:
             _post(port, "/api/runs/run_another/cancel", {
                 "command_id": "command_after_crash",
-            })
+            }, state)
         assert rejected.value.code == 409
     finally:
         _terminate(daemon)

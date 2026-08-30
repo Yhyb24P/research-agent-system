@@ -6,6 +6,7 @@ from pydantic import ValidationError
 
 from researchd.daemon.composition import DaemonConfig, compose_daemon
 from researchd.daemon.cli import main
+from researchd.daemon.security import ControlCredentialError
 
 
 def _payload(tmp_path: Path) -> dict[str, object]:
@@ -64,6 +65,39 @@ def test_init_refuses_existing_database_instead_of_upgrading(tmp_path: Path) -> 
     with pytest.raises(SystemExit, match="refusing to initialize existing database"):
         main(["--config", str(config_path), "init"])
     assert database.read_bytes() == b"not a current database"
+
+
+def test_init_creates_non_secret_owner_only_control_credential(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    payload = _payload(tmp_path)
+    config_path = tmp_path / "researchd.json"
+    config_path.write_text(json.dumps(payload))
+
+    assert main(["--config", str(config_path), "init"]) == 0
+    token_path = tmp_path / "state" / "control.token"
+    token = token_path.read_text(encoding="ascii").strip()
+    assert len(token) == 64
+    assert token_path.stat().st_mode & 0o777 == 0o600
+
+    assert main(["--config", str(config_path), "inspect"]) == 0
+    inspected = capsys.readouterr().out
+    assert token not in inspected
+    assert token not in (tmp_path / "researchd.db").read_bytes().decode(
+        "latin-1", errors="ignore"
+    )
+
+
+def test_serve_rejects_unsafe_control_credential_permissions(tmp_path: Path) -> None:
+    payload = _payload(tmp_path)
+    config_path = tmp_path / "researchd.json"
+    config_path.write_text(json.dumps(payload))
+    assert main(["--config", str(config_path), "init"]) == 0
+    (tmp_path / "state" / "control.token").chmod(0o644)
+
+    with pytest.raises(ControlCredentialError, match="permissions must be 0600"):
+        main(["--config", str(config_path), "serve"])
 
 
 def test_validate_and_inspect_do_not_touch_state_or_expose_arguments(

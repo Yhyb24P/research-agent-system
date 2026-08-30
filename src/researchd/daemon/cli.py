@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import os
 from pathlib import Path
 
 from alembic import command
@@ -9,6 +10,11 @@ from alembic.config import Config
 
 from researchd.api.web import serve_local_control
 from researchd.daemon.composition import DaemonConfig, compose_daemon
+from researchd.daemon.security import (
+    control_token_path,
+    create_control_token,
+    load_control_token,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -45,12 +51,16 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "init":
         if database.exists():
             raise SystemExit(f"refusing to initialize existing database: {database}")
+        credential_path = control_token_path(config.state_root)
+        if os.path.lexists(credential_path):
+            raise SystemExit(f"refusing to replace existing control credential: {credential_path}")
         database.parent.mkdir(parents=True, exist_ok=True)
         command.upgrade(_alembic_config(database), "head")
         config.artifact_root.mkdir(parents=True, exist_ok=True)
-        config.state_root.mkdir(parents=True, exist_ok=True)
+        create_control_token(config.state_root)
         return 0
 
+    control_token = load_control_token(config.state_root)
     application = compose_daemon(config)
     application.daemon.start()
     server = serve_local_control(
@@ -58,6 +68,7 @@ def main(argv: list[str] | None = None) -> int:
         daemon=application.daemon,
         host=config.host,
         port=config.port,
+        control_token=control_token,
     )
     try:
         server.serve_forever()

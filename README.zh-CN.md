@@ -195,6 +195,8 @@ uv run researchd --config researchd.json inspect
 uv run researchd --config researchd.json init
 uv run researchd --config researchd.json serve
 curl http://127.0.0.1:8788/api/health
+TOKEN=$(tr -d '\n' < /absolute/path/state/control.token)
+curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8788/api/runs
 ```
 
 `serve` 不会迁移已有数据库。只有冻结的八阶段恢复屏障全部通过才会进入 READY；
@@ -202,6 +204,12 @@ curl http://127.0.0.1:8788/api/health
 `job_commands` 为空时会有意禁用 job submission。
 `validate` 只解析合同，不接触状态；`inspect` 还会输出配置 SHA256 和非 secret 投影，
 固定命令参数只显示数量，不回显内容。
+
+`init` 会在 `<state_root>/control.token` 新建 256-bit、权限为 `0600` 的凭据，并拒绝
+覆盖已有凭据。凭据缺失、格式错误、所有者不符或权限不安全时，`serve` 会拒绝启动。
+`/api/health` 保留为未认证 liveness/readiness 面；其他 HTTP 读取、stream 和 mutation
+都必须携带 `Authorization: Bearer <token>`。该凭据不会进入 SQLite、audit metadata、
+snapshot、配置 inspect 或 Agent context。
 
 如果恢复后仍存在未解决的 RuntimeSession、workspace、worktree、job 或 invocation，
 `researchd` 只保持运行以暴露 non-ready health 和只读投影；所有经过 daemon 的 mutation
@@ -259,8 +267,8 @@ Migration `0021` 会在派发前预留通用持久化回执。同一命令身份
 回执仍为 `ACCEPTED`，系统绝不会自动重放；该回执会通过 `/api/daemon-commands` 保持可见，
 并阻止 daemon 进入 READY，直到后续的 operator reconciliation 机制明确处置。
 
-本地认证仍未实现。Loopback 监听与服务端 actor 绑定本身不能识别具体客户端；在 PX00
-本地凭据接通前，不得把该控制面视为产品可用边界。
+本地 token 负责认证 owner client，服务端 actor 绑定则阻止 payload 伪造 attribution；
+二者共同构成 PX00 MVP。未来可用 native peer credential 替换 token，而不改变内部命令权威。
 
 系统不存在允许任意 UI event 修改状态的入口。
 

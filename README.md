@@ -213,6 +213,8 @@ uv run researchd --config researchd.json inspect
 uv run researchd --config researchd.json init
 uv run researchd --config researchd.json serve
 curl http://127.0.0.1:8788/api/health
+TOKEN=$(tr -d '\n' < /absolute/path/state/control.token)
+curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8788/api/runs
 ```
 
 `serve` never migrates an existing database. It reaches READY only after the
@@ -222,6 +224,14 @@ fails closed. An empty `job_commands` map intentionally disables job submission.
 `validate` parses the contract without touching state. `inspect` additionally
 prints its SHA256 and a non-secret projection: fixed command arguments are
 represented only by their count and are never echoed.
+
+`init` creates a fresh 256-bit credential at `<state_root>/control.token` with
+mode `0600` and refuses to replace one. `serve` refuses missing, malformed,
+non-owner or incorrectly permissioned credentials. `/api/health` remains the
+unauthenticated liveness/readiness surface; all other HTTP reads,
+streams and mutations require `Authorization: Bearer <token>`. The credential
+is never stored in SQLite, audit metadata, snapshots, configuration inspection
+or Agent context.
 
 If recovery leaves an unresolved RuntimeSession, workspace, worktree, job, or
 invocation, `researchd` remains running only to expose its non-ready health and
@@ -286,9 +296,9 @@ is rejected. A receipt left `ACCEPTED` by an interrupted dispatch is never
 replayed automatically: it remains visible through `/api/daemon-commands` and
 blocks READY until an operator reconciliation mechanism resolves it.
 
-Local authentication is not implemented yet. Loopback binding and server-side
-actor binding do not by themselves identify a client, so this control surface
-must not be treated as product-ready until PX00 local credentials are wired.
+The local token authenticates the owner client while server-side actor binding
+prevents payload attribution. This is the PX00 MVP boundary; later native peer
+credentials may replace the token without changing internal command authority.
 
 Arbitrary UI events have no mutation endpoint.
 

@@ -1,6 +1,7 @@
 """Loopback-only HTTP client facade over the in-process LocalControlAPI."""
 import asyncio
 import inspect
+import hmac
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import time
@@ -178,6 +179,8 @@ class ControlCommandRouter:
 def make_handler(
     api: LocalControlAPI,
     daemon: ResearchDaemon | None = None,
+    *,
+    control_token: str | None = None,
 ) -> type[BaseHTTPRequestHandler]:
     router = ControlResourceRouter(api)
     commands = ControlCommandRouter(api, daemon)
@@ -192,6 +195,8 @@ def make_handler(
             if parts == ["api", "health"] and daemon is not None:
                 self._send_json(200 if daemon.health()["ready"] else 503, daemon.health())
                 return
+            if not self._authorized():
+                return
             if len(parts) == 4 and parts[:2] == ["api", "runs"] and parts[3] == "stream":
                 self._send_event_stream(parts[2], parse_qs(parsed.query))
                 return
@@ -199,6 +204,8 @@ def make_handler(
             self._send_json(status, payload)
 
         def do_POST(self) -> None:  # noqa: N802
+            if not self._authorized():
+                return
             try:
                 content_length = int(self.headers.get("Content-Length", "0"))
                 if content_length < 0 or content_length > 65_536:
@@ -226,6 +233,23 @@ def make_handler(
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+
+        def _authorized(self) -> bool:
+            if control_token is None:
+                return True
+            authorization = self.headers.get("Authorization", "")
+            prefix = "Bearer "
+            presented = authorization[len(prefix):] if authorization.startswith(prefix) else ""
+            if presented and hmac.compare_digest(presented, control_token):
+                return True
+            body = b'{"error": "authentication required"}'
+            self.send_response(401)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("WWW-Authenticate", "Bearer")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return False
 
         def _send_event_stream(self, run_id: str, query: dict[str, list[str]]) -> None:
             try:
@@ -279,10 +303,15 @@ def serve_local_control(
     daemon: ResearchDaemon | None = None,
     host: str = "127.0.0.1",
     port: int = 8788,
+    control_token: str | None = None,
 ) -> ThreadingHTTPServer:
     if host not in {"127.0.0.1", "localhost", "::1"}:
         raise ValueError("control HTTP server must bind loopback")
-    server = ThreadingHTTPServer((host, port), make_handler(api, daemon))
+    if daemon is not None and control_token is None:
+        raise ValueError("mutable control server requires a local credential")
+    server = ThreadingHTTPServer(
+        (host, port), make_handler(api, daemon, control_token=control_token)
+    )
     return server
 
 
