@@ -63,6 +63,8 @@ class ControlResourceRouter:
                 return 200, self.api.agents()
             if len(parts) == 3 and parts[:2] == ["api", "agents"]:
                 return 200, self.api.agent(parts[2])
+            if len(parts) == 4 and parts[:2] == ["api", "agents"] and parts[3] == "console":
+                return 200, self.api.agent_console(parts[2], run_id=query.get("run", [None])[0])
             if parts == ["api", "delegations"]:
                 return 200, self.api.delegations(query.get("run", [None])[0])
             if parts == ["api", "handoffs"]:

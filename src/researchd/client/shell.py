@@ -90,6 +90,8 @@ def parse_line(line: str) -> ParsedCommand:
         return _parse_simple_subcommand(head, tokens[1:], {"watch": (0, 1)})
     if head == "msg":
         return _parse_msg(tokens[1:])
+    if head == "handoff":
+        return _parse_handoff(tokens[1:])
     if head in {"approve", "reject"}:
         _require_arity(head, tokens[1:], 2)
         return ParsedCommand(head, tuple(tokens[1:]), {})
@@ -171,6 +173,33 @@ def _parse_msg(tokens: list[str]) -> ParsedCommand:
     if "purpose" in options and options["purpose"] not in _MESSAGE_PURPOSES:
         raise ShellParseError("purpose must be one of: " + ", ".join(_MESSAGE_PURPOSES))
     return ParsedCommand("msg", tuple(positionals), options)
+
+
+def _parse_handoff(tokens: list[str]) -> ParsedCommand:
+    if not tokens or tokens[0] not in {"list", "accept", "reject"}:
+        raise ShellParseError("handoff requires list, accept, or reject")
+    subcommand, rest = tokens[0], tokens[1:]
+    if subcommand == "list":
+        if len(rest) > 1:
+            raise ShellParseError("handoff list accepts zero or one run id")
+        return ParsedCommand("handoff list", tuple(rest), {})
+    options: dict[str, str] = {}
+    positionals: list[str] = []
+    index = 0
+    while index < len(rest):
+        if rest[index] == "--target":
+            if subcommand != "accept" or index + 1 >= len(rest):
+                raise ShellParseError("--target is only valid for handoff accept")
+            options["target"] = rest[index + 1]
+            index += 2
+        elif rest[index].startswith("--"):
+            raise ShellParseError(f"unknown handoff option: {rest[index]}")
+        else:
+            positionals.append(rest[index])
+            index += 1
+    if len(positionals) < 2:
+        raise ShellParseError(f"handoff {subcommand} requires a proposal id and reason")
+    return ParsedCommand(f"handoff {subcommand}", tuple(positionals), options)
 
 
 def _require_arity(name: str, rest: list[str], expected: int) -> None:
@@ -305,6 +334,28 @@ def _execute(
         if "invocation" in command.options:
             payload["invocation_id"] = command.options["invocation"]
         envelope = client.post_command("/api/collaboration-messages", payload)
+        print_fn(f"{envelope['status']} {envelope['command_id']}")
+    elif command.name == "handoff list":
+        params = {"run": command.args[0]} if command.args else None
+        proposals = client.get("/api/handoffs", params=params)
+        if not proposals:
+            print_fn("(no handoff proposals)")
+        for proposal in proposals:
+            print_fn(
+                f"{proposal['proposal_id']}  {proposal['status']}  "
+                f"{proposal['requested_mode']}  source={proposal['source_agent_id']}"
+            )
+    elif command.name in {"handoff accept", "handoff reject"}:
+        proposal_id = command.args[0]
+        payload: dict[str, Any] = {
+            "decision": command.name.removeprefix("handoff "),
+            "reason": " ".join(command.args[1:]),
+        }
+        if "target" in command.options:
+            payload["target_agent_id"] = command.options["target"]
+        envelope = client.post_command(
+            f"/api/handoffs/{proposal_id}/decision", payload,
+        )
         print_fn(f"{envelope['status']} {envelope['command_id']}")
     elif command.name == "events watch":
         target = command.args[0] if command.args else None

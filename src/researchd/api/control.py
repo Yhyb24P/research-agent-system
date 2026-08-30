@@ -261,6 +261,88 @@ class LocalControlAPI:
                 raise LookupError(agent_id)
             return self._agent_payload(session, row)
 
+    def agent_console(
+        self, agent_id: str, *, run_id: str | None = None,
+    ) -> dict[str, Any]:
+        """One Agent's projection-only collaboration console.
+
+        This is deliberately a read model. It owns neither a terminal nor any
+        control-plane state, so closing a client window cannot stop an Agent.
+        """
+        with self.sessions() as session:
+            agent = session.get(AgentRecord, agent_id)
+            if agent is None:
+                raise LookupError(agent_id)
+            if run_id is not None and session.get(ResearchRunRecord, run_id) is None:
+                raise LookupError(run_id)
+            delegations_query = select(DelegationRecord).where(
+                DelegationRecord.assigned_agent_id == agent_id,
+            ).order_by(DelegationRecord.created_at, DelegationRecord.delegation_id)
+            invocations_query = select(AgentInvocationRecord).where(
+                AgentInvocationRecord.agent_id == agent_id,
+            ).order_by(AgentInvocationRecord.created_at, AgentInvocationRecord.invocation_id)
+            messages_query = select(CollaborationMessageRecord).where(
+                (CollaborationMessageRecord.sender_actor_id == agent_id)
+                | (CollaborationMessageRecord.recipient_agent_id == agent_id),
+            ).order_by(CollaborationMessageRecord.created_at, CollaborationMessageRecord.message_id)
+            handoffs_query = select(HandoffProposalRecord).where(
+                (HandoffProposalRecord.source_agent_id == agent_id)
+                | (HandoffProposalRecord.proposed_target_agent_id == agent_id),
+            ).order_by(HandoffProposalRecord.created_at, HandoffProposalRecord.proposal_id)
+            if run_id is not None:
+                delegations_query = delegations_query.where(DelegationRecord.run_id == run_id)
+                invocations_query = invocations_query.where(AgentInvocationRecord.run_id == run_id)
+                messages_query = messages_query.where(CollaborationMessageRecord.run_id == run_id)
+                handoffs_query = handoffs_query.where(HandoffProposalRecord.run_id == run_id)
+            delegations = session.scalars(delegations_query).all()
+            invocations = session.scalars(invocations_query).all()
+            messages = session.scalars(messages_query).all()
+            handoffs = session.scalars(handoffs_query).all()
+            artifacts_query = select(ArtifactRecord).join(AttemptRecord).join(
+                DelegationRecord,
+                AttemptRecord.delegation_id == DelegationRecord.delegation_id,
+            ).where(DelegationRecord.assigned_agent_id == agent_id).order_by(
+                ArtifactRecord.created_at, ArtifactRecord.artifact_id,
+            )
+            if run_id is not None:
+                artifacts_query = artifacts_query.where(DelegationRecord.run_id == run_id)
+            artifacts = session.scalars(artifacts_query).all()
+            runtimes = session.scalars(select(AgentRuntimeRecord).where(
+                AgentRuntimeRecord.agent_id == agent_id,
+            ).order_by(AgentRuntimeRecord.runtime_id)).all()
+            runtime_ids = [item.runtime_id for item in runtimes]
+            sessions = session.scalars(select(RuntimeSessionRecord).where(
+                RuntimeSessionRecord.runtime_id.in_(runtime_ids),
+            ).order_by(RuntimeSessionRecord.created_at, RuntimeSessionRecord.runtime_session_id)).all() if runtime_ids else []
+            return {
+                "agent": self._agent_payload(session, agent),
+                "messages": [self._message_payload(item) for item in messages],
+                "delegations": [self._delegation_payload(item) for item in delegations],
+                "invocations": [{
+                    "invocation_id": item.invocation_id, "run_id": item.run_id,
+                    "work_order_id": item.work_order_id, "attempt_id": item.attempt_id,
+                    "delegation_id": item.delegation_id, "runtime_id": item.runtime_id,
+                    "purpose": item.purpose, "status": item.status,
+                    "reason_code": item.reason_code,
+                    "created_at": item.created_at.isoformat(),
+                    "completed_at": item.completed_at.isoformat() if item.completed_at else None,
+                } for item in invocations],
+                "artifacts": [{
+                    "artifact_id": item.artifact_id, "attempt_id": item.attempt_id,
+                    "artifact_type": item.artifact_type,
+                    "classification": item.classification,
+                    "created_at": item.created_at.isoformat(),
+                } for item in artifacts],
+                "handoffs": [self._handoff_payload(item) for item in handoffs],
+                "runtime_sessions": [{
+                    "runtime_session_id": item.runtime_session_id,
+                    "runtime_id": item.runtime_id,
+                    "supervisor_state": item.supervisor_state,
+                    "last_health_at": item.last_health_at.isoformat() if item.last_health_at else None,
+                    "exit_reason": item.exit_reason,
+                } for item in sessions],
+            }
+
     def _agent_payload(self, session: Session, row: AgentRecord) -> dict[str, Any]:
         runtimes = session.scalars(select(AgentRuntimeRecord).where(AgentRuntimeRecord.agent_id == row.agent_id).order_by(AgentRuntimeRecord.runtime_id)).all()
         return {"agent_id": row.agent_id, "display_name": row.display_name, "roles": row.roles_json, "skills": row.skills_json, "trust_zone": row.trust_zone, "enabled": row.enabled, "profile_version": row.profile_version, "runtimes": [{"runtime_id": item.runtime_id, "adapter_kind": item.adapter_kind, "runtime_name": item.runtime_name, "framework": item.framework, "model_provider": item.model_provider, "model_name": item.model_name, "protocols": item.protocols_json, "enabled": item.enabled, "lease_expires_at": item.lease_expires_at.isoformat() if item.lease_expires_at else None} for item in runtimes]}
