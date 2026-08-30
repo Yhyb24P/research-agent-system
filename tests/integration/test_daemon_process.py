@@ -15,6 +15,9 @@ from researchd.domain.ids import AgentId, AgentRuntimeId
 from researchd.storage.db import create_sqlite_engine, session_factory
 
 
+ROOT = Path(__file__).resolve().parents[2]
+
+
 def _free_port() -> int:
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
@@ -64,6 +67,21 @@ def _terminate(process: subprocess.Popen[str]) -> None:
         process.wait(timeout=5)
 
 
+def _register_process_runtime(database: Path) -> None:
+    registry = AgentRegistryService(session_factory(create_sqlite_engine(database)))
+    registry.register_profile(AgentProfile(
+        agent_id=AgentId("agent_restart_test"),
+        display_name="Restart test Agent",
+        roles=("executor",),
+        skills=("runtime.test",),
+        trust_zone=AgentTrustZone.LOCAL_PRIVATE,
+    ))
+    registry.register_runtime(AgentRuntime(
+        runtime_id=AgentRuntimeId("runtime_crash_test"),
+        agent_id=AgentId("agent_restart_test"),
+        adapter_kind=AgentAdapterKind.PROCESS,
+        runtime_name="Restart test process",
+    ))
 def test_researchd_starts_as_independent_process(tmp_path: Path) -> None:
     database = tmp_path / "researchd.db"
     artifacts = tmp_path / "artifacts"
@@ -125,20 +143,7 @@ def test_researchd_restart_reattaches_live_runtime_and_preserves_audit_order(
     )
     assert initialized.returncode == 0, initialized.stderr
 
-    registry = AgentRegistryService(session_factory(create_sqlite_engine(database)))
-    registry.register_profile(AgentProfile(
-        agent_id=AgentId("agent_restart_test"),
-        display_name="Restart test Agent",
-        roles=("executor",),
-        skills=("runtime.test",),
-        trust_zone=AgentTrustZone.LOCAL_PRIVATE,
-    ))
-    registry.register_runtime(AgentRuntime(
-        runtime_id=AgentRuntimeId("runtime_restart_test"),
-        agent_id=AgentId("agent_restart_test"),
-        adapter_kind=AgentAdapterKind.PROCESS,
-        runtime_name="Restart test process",
-    ))
+    _register_process_runtime(database)
 
     first = _start(base)
     second: subprocess.Popen[str] | None = None
@@ -148,7 +153,7 @@ def test_researchd_restart_reattaches_live_runtime_and_preserves_audit_order(
         started = _post(port, "/api/runtime-sessions/start", {
             "command_id": "command_restart_start",
             "runtime_session_id": "runtime_session_restart_test",
-            "runtime_id": "runtime_restart_test",
+            "runtime_id": "runtime_crash_test",
             "actor_type": "SYSTEM",
             "actor_id": "restart-test",
             "launch_spec": {"argv": ["/usr/bin/sleep", "60"], "cwd": str(tmp_path)},
@@ -182,7 +187,7 @@ def test_researchd_restart_reattaches_live_runtime_and_preserves_audit_order(
 
         stopped = _post(port, "/api/runtime-sessions/runtime_session_restart_test/stop", {
             "command_id": "command_restart_stop",
-            "runtime_id": "runtime_restart_test",
+            "runtime_id": "runtime_crash_test",
             "actor_type": "SYSTEM",
             "actor_id": "restart-test",
             "expected_version": session["version"],
@@ -198,6 +203,103 @@ def test_researchd_restart_reattaches_live_runtime_and_preserves_audit_order(
             import os
             import signal
 
+            try:
+                os.kill(runtime_pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+
+
+def test_start_intent_crash_never_relaunches_uncertain_process(tmp_path: Path) -> None:
+    database = tmp_path / "researchd.db"
+    port = _free_port()
+    config = tmp_path / "researchd.json"
+    config.write_text(json.dumps({
+        "database": str(database),
+        "artifact_root": str(tmp_path / "artifacts"),
+        "state_root": str(tmp_path / "state"),
+        "repositories": {}, "job_commands": {},
+        "host": "127.0.0.1", "port": port,
+    }))
+    base = [sys.executable, "-m", "researchd.daemon.cli", "--config", str(config)]
+    assert subprocess.run([*base, "init"], check=False).returncode == 0
+    _register_process_runtime(database)
+    crashed = subprocess.run([
+        sys.executable,
+        str(ROOT / "tests/fixtures/runtime_intent_crasher.py"),
+        "start", str(database), str(tmp_path),
+    ], check=False)
+    assert crashed.returncode == 73
+
+    daemon = _start(base)
+    try:
+        health = _wait_for_health(daemon, port)
+        startup = cast(dict[str, object], health["startup"])
+        phases = cast(list[dict[str, object]], startup["phases"])
+        assert phases[4]["affected_count"] == 1
+        with urlopen(f"http://127.0.0.1:{port}/api/runtime-sessions") as response:
+            session = json.load(response)[0]
+        assert session["supervisor_state"] == "RECONCILIATION_REQUIRED"
+        assert session["external_identity"] is None
+        assert session["exit_reason"] == "missing_external_identity"
+    finally:
+        _terminate(daemon)
+
+
+def test_stop_intent_crash_is_finished_by_restart_reconciliation(tmp_path: Path) -> None:
+    database = tmp_path / "researchd.db"
+    port = _free_port()
+    config = tmp_path / "researchd.json"
+    config.write_text(json.dumps({
+        "database": str(database),
+        "artifact_root": str(tmp_path / "artifacts"),
+        "state_root": str(tmp_path / "state"),
+        "repositories": {}, "job_commands": {},
+        "host": "127.0.0.1", "port": port,
+    }))
+    base = [sys.executable, "-m", "researchd.daemon.cli", "--config", str(config)]
+    assert subprocess.run([*base, "init"], check=False).returncode == 0
+    _register_process_runtime(database)
+    first = _start(base)
+    second: subprocess.Popen[str] | None = None
+    runtime_pid: int | None = None
+    try:
+        _wait_for_health(first, port)
+        started = _post(port, "/api/runtime-sessions/start", {
+            "command_id": "command_normal_start",
+            "runtime_session_id": "runtime_session_crash_test",
+            "runtime_id": "runtime_crash_test",
+            "actor_type": "SYSTEM", "actor_id": "crash-test",
+            "launch_spec": {"argv": ["/usr/bin/sleep", "60"], "cwd": str(tmp_path)},
+        })
+        identity = cast(dict[str, object], started["external_identity"])
+        runtime_pid = int(cast(int, identity["pid"]))
+        _terminate(first)
+        crashed = subprocess.run([
+            sys.executable,
+            str(ROOT / "tests/fixtures/runtime_intent_crasher.py"),
+            "stop", str(database), str(tmp_path),
+            "--expected-version", str(started["version"]),
+        ], check=False)
+        assert crashed.returncode == 73
+
+        second = _start(base)
+        health = _wait_for_health(second, port)
+        startup = cast(dict[str, object], health["startup"])
+        phases = cast(list[dict[str, object]], startup["phases"])
+        assert phases[4]["affected_count"] == 1
+        with urlopen(f"http://127.0.0.1:{port}/api/runtime-sessions") as response:
+            session = json.load(response)[0]
+        assert session["supervisor_state"] == "STOPPED"
+        assert session["exit_reason"] == "reconciled_stop"
+        runtime_pid = None
+    finally:
+        if first.poll() is None:
+            _terminate(first)
+        if second is not None and second.poll() is None:
+            _terminate(second)
+        if runtime_pid is not None:
+            import os
+            import signal
             try:
                 os.kill(runtime_pid, signal.SIGTERM)
             except ProcessLookupError:

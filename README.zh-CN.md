@@ -190,6 +190,8 @@ cat > researchd.json <<'JSON'
   "port": 8788
 }
 JSON
+uv run researchd --config researchd.json validate
+uv run researchd --config researchd.json inspect
 uv run researchd --config researchd.json init
 uv run researchd --config researchd.json serve
 curl http://127.0.0.1:8788/api/health
@@ -198,6 +200,8 @@ curl http://127.0.0.1:8788/api/health
 `serve` 不会迁移已有数据库。只有冻结的八阶段恢复屏障全部通过才会进入 READY；
 非当前 schema、缺失 repository、未知配置字段、相对路径或非 loopback 监听都会失败关闭。
 `job_commands` 为空时会有意禁用 job submission。
+`validate` 只解析合同，不接触状态；`inspect` 还会输出配置 SHA256 和非 secret 投影，
+固定命令参数只显示数量，不回显内容。
 
 `researchctl` 会打开已有数据库，但不会构造 Orchestrator：
 

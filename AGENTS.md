@@ -44,6 +44,8 @@ readiness-gated loopback daemon. Normal startup never upgrades a schema. Use
 `researchctl --database <path>` for the local read-only inspection surface.
 The JSON daemon configuration rejects unknown fields and requires absolute
 paths, loopback binding, repository IDs, and fixed argv arrays for job types.
+Use `researchd --config <path> validate` or `inspect` before initialization;
+both are read-only and inspect never echoes fixed command arguments.
 
 ## Structure
 

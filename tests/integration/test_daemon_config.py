@@ -66,6 +66,33 @@ def test_init_refuses_existing_database_instead_of_upgrading(tmp_path: Path) -> 
     assert database.read_bytes() == b"not a current database"
 
 
+def test_validate_and_inspect_do_not_touch_state_or_expose_arguments(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    payload = _payload(tmp_path)
+    payload["job_commands"] = {
+        "typed-check": {"argv": ["/usr/bin/printf", "sensitive-fixed-argument"]},
+    }
+    config_path = tmp_path / "researchd.json"
+    config_path.write_text(json.dumps(payload))
+
+    assert main(["--config", str(config_path), "validate"]) == 0
+    validated = json.loads(capsys.readouterr().out)
+    assert validated == {"config_sha256": _config(payload).sha256(), "valid": True}
+    assert not (tmp_path / "researchd.db").exists()
+    assert not (tmp_path / "artifacts").exists()
+    assert not (tmp_path / "state").exists()
+
+    assert main(["--config", str(config_path), "inspect"]) == 0
+    inspected = json.loads(capsys.readouterr().out)
+    assert inspected["job_commands"] == {
+        "typed-check": {"argument_count": 1, "executable": "/usr/bin/printf"},
+    }
+    assert "sensitive-fixed-argument" not in json.dumps(inspected)
+    assert inspected["config_sha256"] == validated["config_sha256"]
+
+
 def test_composition_rejects_missing_repository(tmp_path: Path) -> None:
     payload = _payload(tmp_path)
     payload["repositories"] = {"source": str(tmp_path / "missing")}

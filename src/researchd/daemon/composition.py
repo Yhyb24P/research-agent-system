@@ -1,6 +1,8 @@
 """Concrete composition root for the trusted local daemon."""
 
 from dataclasses import dataclass
+import hashlib
+import json
 from pathlib import Path
 import re
 
@@ -82,6 +84,36 @@ class DaemonConfig(DomainModel):
         if value not in {"127.0.0.1", "localhost", "::1"}:
             raise ValueError("researchd host must be loopback")
         return value
+
+    def sha256(self) -> str:
+        payload = json.dumps(
+            self.model_dump(mode="json"),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+        return hashlib.sha256(payload).hexdigest()
+
+    def inspection(self) -> dict[str, object]:
+        """Return an operator projection without exposing command arguments."""
+        return {
+            "config_sha256": self.sha256(),
+            "database": str(self.database),
+            "artifact_root": str(self.artifact_root),
+            "state_root": str(self.state_root),
+            "repositories": {
+                key: str(value) for key, value in sorted(self.repositories.items())
+            },
+            "job_commands": {
+                key: {
+                    "executable": value.argv[0],
+                    "argument_count": len(value.argv) - 1,
+                }
+                for key, value in sorted(self.job_commands.items())
+            },
+            "host": self.host,
+            "port": self.port,
+        }
 
 
 @dataclass(frozen=True)

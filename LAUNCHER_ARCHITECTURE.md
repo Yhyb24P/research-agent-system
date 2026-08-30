@@ -222,6 +222,11 @@ The productization branch now contains the first LP01/LP02 foundation:
   shell strings and non-loopback binds are rejected.
 - an independent restart test proves live PROCESS reattachment and monotonic
   audit offsets across daemon replacement before issuing a typed STOP.
+- independent crash-window processes prove that a persisted START intent is
+  never relaunched and a persisted STOP intent is completed by reconciliation.
+- `researchd validate` touches no state, while `researchd inspect` exposes a
+  non-secret projection and canonical configuration digest without command
+  arguments.
 
 产品化分支现已实现首批 LP01/LP02 基础：持久化运行实例和类型化命令凭证、拒绝
 PID 复用的 PROCESS supervisor、受限 REMOTE_HTTP attach、先 intent 后副作用的审计
@@ -230,6 +235,9 @@ PID 复用的 PROCESS supervisor、受限 REMOTE_HTTP attach、先 intent 后副
 单一严格 JSON 配置负责绝对路径、具名 Git repository 和固定 job argv；未知字段、
 shell 字符串及非 loopback 监听均被拒绝。独立重启测试还证明了存活 PROCESS 的重新
 附着和 daemon 更替前后的审计 offset 连续性。
+独立 crash-window 进程进一步证明：已持久化但结果未知的 START 不会被重放，STOP 则由
+重启协调完成。`researchd validate/inspect` 可在不启动 daemon 的情况下验证配置；
+inspect 不回显固定命令参数。
 
 This is still an implementation milestone, not completion of the productized
 launcher. The daily `research` client and LP03 managed Agent pilot remain open.

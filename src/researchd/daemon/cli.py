@@ -1,6 +1,7 @@
 """Executable lifecycle for the loopback researchd process."""
 
 import argparse
+import json
 from pathlib import Path
 
 from alembic import command
@@ -14,6 +15,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="researchd")
     parser.add_argument("--config", type=Path, required=True)
     subparsers = parser.add_subparsers(dest="command", required=True)
+    subparsers.add_parser("validate", help="validate configuration without touching state")
+    subparsers.add_parser("inspect", help="print a non-secret configuration projection")
     subparsers.add_parser("init", help="create a fresh database at the current schema")
     serve = subparsers.add_parser("serve", help="start the loopback control daemon")
     return parser
@@ -33,6 +36,12 @@ def main(argv: list[str] | None = None) -> int:
     except OSError as error:
         raise SystemExit(f"cannot read researchd config: {args.config}") from error
     database = config.database
+    if args.command == "validate":
+        print(json.dumps({"config_sha256": config.sha256(), "valid": True}, sort_keys=True))
+        return 0
+    if args.command == "inspect":
+        print(json.dumps(config.inspection(), ensure_ascii=False, sort_keys=True))
+        return 0
     if args.command == "init":
         if database.exists():
             raise SystemExit(f"refusing to initialize existing database: {database}")

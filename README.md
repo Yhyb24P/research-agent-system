@@ -208,6 +208,8 @@ cat > researchd.json <<'JSON'
   "port": 8788
 }
 JSON
+uv run researchd --config researchd.json validate
+uv run researchd --config researchd.json inspect
 uv run researchd --config researchd.json init
 uv run researchd --config researchd.json serve
 curl http://127.0.0.1:8788/api/health
@@ -217,6 +219,9 @@ curl http://127.0.0.1:8788/api/health
 frozen eight-stage recovery barrier passes; a non-current schema, missing
 repository, unknown configuration field, relative path, or non-loopback bind
 fails closed. An empty `job_commands` map intentionally disables job submission.
+`validate` parses the contract without touching state. `inspect` additionally
+prints its SHA256 and a non-secret projection: fixed command arguments are
+represented only by their count and are never echoed.
 
 `researchctl` opens an existing database without constructing an orchestrator:
 
