@@ -240,7 +240,7 @@ uv run research --config researchd.json
 
 `init` 将 bootstrap 委托给 `researchd init`；`status` 输出一份包含可达性与
 就绪状态的 JSON 文档。不带子命令时，`research` 探测 daemon；若无 daemon 可达，
-则以子进程 spawn `researchd serve`，并在交互 shell 退出时终止该子进程。
+则启动独立于 client 窗口生命周期的 `researchd serve`；退出 shell 不会停止它。
 只有 daemon 报告 READY 之后才进入 shell——non-ready daemon 会连同其失败的
 启动阶段一起呈现，绝不被绕过。首批 shell 命令提供 `status`、
 `agent list`/`agent use`/`agent remove`、`run list`、`task create`、

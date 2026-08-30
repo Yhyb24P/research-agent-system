@@ -120,7 +120,7 @@ class ResearchClient:
         response = self._http.post(
             self._url(path), json=body, headers=self._headers()
         )
-        envelope = cast_payload(response.json())
+        envelope = _json_or_empty(response)
         if response.status_code == 401:
             raise AuthenticationRequired(401, envelope)
         if response.status_code == 409:

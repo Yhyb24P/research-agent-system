@@ -324,8 +324,8 @@ The productization branch now contains the first LP01/LP02 foundation:
   or migrates the database), and `research status` prints one JSON document
   with reachability and readiness. Without a subcommand, `research` probes
   the daemon and, when none is reachable, spawns `researchd serve` as a
-  child process whose log lands in `<state_root>/daemon.log`; the child is
-  terminated when the interactive shell exits. The shell is entered only
+  controller process whose log lands in `<state_root>/daemon.log`; it remains
+  independent when the interactive shell exits. The shell is entered only
   after the health probe reports READY — a FAILED or still-starting daemon
   is surfaced with its failed startup phase, never bypassed.
 - PX02-04 Line shell: the interactive entry now runs a line-oriented shell
@@ -421,7 +421,7 @@ PX02-03 research lifecycle：`research init` 将 bootstrap 委托给受信
 `researchd init` 可执行文件（client 自身从不初始化或迁移数据库）；
 `research status` 输出一份含可达性与就绪状态的 JSON 文档。不带子命令时，
 `research` 探测 daemon；无 daemon 可达则以子进程 spawn `researchd serve`
-（日志落 `<state_root>/daemon.log`），交互 shell 退出时终止该子进程。
+（日志落 `<state_root>/daemon.log`）；它独立于 client 窗口，退出 shell 不会停止它。
 只有健康探测报告 READY 后才进入 shell——FAILED 或仍在启动中的 daemon
 会连同其失败阶段一起呈现，绝不被绕过。
 PX02-04 行式 shell：交互入口现为行式 shell，首批命令——`status`、

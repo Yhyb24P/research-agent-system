@@ -267,8 +267,8 @@ uv run research --config researchd.json
 `init` delegates bootstrap to `researchd init`; `status` prints one JSON
 document with reachability and readiness. Without a subcommand, `research`
 probes the daemon and, when none is reachable, spawns `researchd serve` as a
-child process that is terminated when the interactive shell exits. The shell
-is entered only after the daemon reports READY — a non-ready daemon is
+controller process that remains independent when the interactive shell exits.
+The shell is entered only after the daemon reports READY — a non-ready daemon is
 surfaced with its failed startup phase, never bypassed. The first shell
 batch offers `status`, `agent list` / `agent use` / `agent remove`,
 `run list`, `task create`, `task cancel`, `msg`, `events watch`,

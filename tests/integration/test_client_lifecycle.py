@@ -19,6 +19,7 @@ from researchd.api.web import make_handler
 from researchd.client import lifecycle
 from researchd.client.cli import main
 from researchd.daemon.command_service import DurableDaemonCommandService
+from researchd.daemon.composition import DaemonConfig
 from researchd.daemon.contracts import DaemonCommandResult, WorkspaceCreateCommand
 from researchd.daemon.runtime import ResearchDaemon
 from researchd.daemon.startup import StartupBarrier, StartupPhase
@@ -257,23 +258,44 @@ def test_wait_for_ready_fails_fast_on_a_failed_daemon(tmp_path: Path) -> None:
         server.server_close()
 
 
-def test_interactive_entry_spawns_and_terminates_researchd(tmp_path: Path) -> None:
+def test_interactive_entry_spawns_daemon_without_owning_its_lifecycle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     config = _config_file(tmp_path, _free_port())
     # Bootstrap through the client: it delegates to `researchd init` and
     # therefore never initializes or migrates the database itself.
     assert main(["--config", str(config), "init"]) == 0
     assert (tmp_path / "state" / "control.token").exists()
 
-    lines: list[str] = []
-    code = lifecycle.interactive_entry(
-        config,
-        input_fn=lambda: "quit",
-        print_fn=lines.append,
-    )
-    assert code == 0
-    assert any("interactive shell" in line for line in lines)
-    assert (tmp_path / "state" / "daemon.log").exists()
+    spawned: list[subprocess.Popen[bytes]] = []
+    real_spawn = lifecycle.spawn_daemon
 
-    # The spawned daemon was terminated with the shell.
-    config_model = lifecycle.load_client_config(config)
-    assert lifecycle.probe_health(config_model) is None
+    def capture_spawn(
+        config_model: DaemonConfig,
+        config_path: Path,
+    ) -> subprocess.Popen[bytes]:
+        process = real_spawn(config_model, config_path)
+        spawned.append(process)
+        return process
+
+    monkeypatch.setattr(lifecycle, "spawn_daemon", capture_spawn)
+    try:
+        lines: list[str] = []
+        code = lifecycle.interactive_entry(
+            config,
+            input_fn=lambda: "quit",
+            print_fn=lines.append,
+        )
+        assert code == 0
+        assert any("interactive shell" in line for line in lines)
+        assert (tmp_path / "state" / "daemon.log").exists()
+
+        # Closing the client window does not stop the controller it helped start.
+        config_model = lifecycle.load_client_config(config)
+        assert lifecycle.probe_health(config_model) is not None
+        assert spawned[0].poll() is None
+    finally:
+        for process in spawned:
+            process.terminate()
+            process.wait(timeout=5)

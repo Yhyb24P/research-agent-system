@@ -114,6 +114,18 @@ def test_driver_refuses_a_metric_criterion_without_a_metrics_artifact(
         _driver(fixture).verify(order, attempt, _result())
 
 
+def test_driver_refuses_ambiguous_metrics_artifacts(fixture: Fixture) -> None:
+    first = fixture.artifact(json.dumps({"score": 1}).encode(), "metrics")
+    second = fixture.artifact(json.dumps({"score": 0}).encode(), "metrics")
+    criterion = MetricCriterion(
+        criterion_id="c_score", type="metric", metric="score", operator=">=", threshold=1
+    )
+    fixture.set_criteria((criterion,))
+    order, attempt = _order_and_attempt(fixture)
+    with pytest.raises(VerificationRefused, match="ambiguous metrics artifacts"):
+        _driver(fixture).verify(order, attempt, _result((first, second)))
+
+
 def test_driver_refuses_a_contract_without_acceptance_criteria(
     fixture: Fixture,
 ) -> None:

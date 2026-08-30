@@ -294,9 +294,13 @@ def _execute(
         target = command.args[0] if command.args else None
         path = f"/api/runs/{target}/stream" if target else "/api/system-stream"
         print_fn(f"watching {path}; press Ctrl-C to stop")
+        after: int | None = None
         try:
-            for frame in client.stream(path, follow=True):
-                print_fn(f"[{frame.offset}] {json.dumps(frame.data, sort_keys=True)}")
+            while True:
+                for frame in client.stream(path, after=after, follow=True):
+                    print_fn(f"[{frame.offset}] {json.dumps(frame.data, sort_keys=True)}")
+                    if frame.offset is not None:
+                        after = frame.offset
         except KeyboardInterrupt:
             print_fn("stopped watching")
     elif command.name in {"approve", "reject"}:

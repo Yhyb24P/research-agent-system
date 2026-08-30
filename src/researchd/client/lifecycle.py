@@ -126,18 +126,6 @@ def spawn_daemon(config: DaemonConfig, config_path: Path) -> subprocess.Popen[by
         log_file.close()
 
 
-def terminate_daemon(process: subprocess.Popen[bytes] | None) -> None:
-    """Terminate a spawned daemon without leaving it behind."""
-    if process is None or process.poll() is not None:
-        return
-    process.terminate()
-    try:
-        process.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        process.kill()
-        process.wait(timeout=5)
-
-
 def run_status(
     config_path: Path,
     *,
@@ -164,47 +152,45 @@ def interactive_entry(
 ) -> int:
     """Reach a READY daemon (spawning one when needed) and enter the shell.
 
-    A spawned daemon is terminated when the shell exits; a pre-existing
-    daemon is left running. A daemon that is not READY is never bypassed:
-    the shell is only entered after the health probe reports READY.
+    A spawned or pre-existing daemon remains independent of the client
+    window. A daemon that is not READY is never bypassed: the shell is
+    only entered after the health probe reports READY.
     """
     config = load_client_config(config_path)
     health = probe_health(config)
-    spawned: subprocess.Popen[bytes] | None = None
-    try:
-        if health is None:
-            if not spawn:
-                print_fn(
-                    f"no researchd reachable at {base_url_for(config)}; "
-                    "start one first"
-                )
-                return 1
-            spawned = spawn_daemon(config, config_path)
-            try:
-                health = wait_for_ready(config, timeout=timeout)
-            except (DaemonNotReadyError, TimeoutError) as error:
-                print_fn(f"researchd did not become ready: {error}")
-                return 1
-        elif health.get("ready") is not True:
-            try:
-                health = wait_for_ready(config, timeout=timeout)
-            except (DaemonNotReadyError, TimeoutError) as error:
-                print_fn(f"researchd is not ready: {error}")
-                return 1
-        try:
-            token = load_owner_token(config.state_root)
-        except ControlCredentialError as error:
-            print_fn(f"cannot load the control credential: {error}")
+    if health is None:
+        if not spawn:
+            print_fn(
+                f"no researchd reachable at {base_url_for(config)}; start one first"
+            )
             return 1
-        client = ResearchClient(base_url_for(config), token)
+        # The daily client may help launch the controller, but it never owns
+        # the controller lifecycle. Closing this window must not stop Agent
+        # runtimes or alter any authoritative state.
+        spawn_daemon(config, config_path)
         try:
-            print_fn("research interactive shell; type quit to exit")
-            run_shell(client, input_fn=input_fn, print_fn=print_fn)
-        finally:
-            client.close()
-        return 0
+            health = wait_for_ready(config, timeout=timeout)
+        except (DaemonNotReadyError, TimeoutError) as error:
+            print_fn(f"researchd did not become ready: {error}")
+            return 1
+    elif health.get("ready") is not True:
+        try:
+            health = wait_for_ready(config, timeout=timeout)
+        except (DaemonNotReadyError, TimeoutError) as error:
+            print_fn(f"researchd is not ready: {error}")
+            return 1
+    try:
+        token = load_owner_token(config.state_root)
+    except ControlCredentialError as error:
+        print_fn(f"cannot load the control credential: {error}")
+        return 1
+    client = ResearchClient(base_url_for(config), token)
+    try:
+        print_fn("research interactive shell; type quit to exit")
+        run_shell(client, input_fn=input_fn, print_fn=print_fn)
     finally:
-        terminate_daemon(spawned)
+        client.close()
+    return 0
 
 
 def _failed_phase(health: dict[str, object]) -> dict[str, object] | None:
@@ -230,6 +216,5 @@ __all__ = [
     "run_init",
     "run_status",
     "spawn_daemon",
-    "terminate_daemon",
     "wait_for_ready",
 ]

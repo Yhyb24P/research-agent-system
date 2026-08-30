@@ -100,6 +100,10 @@ class LocalVerificationDriver:
                     raise VerificationRefused(
                         f"metric criterion {criterion.criterion_id} has no metrics artifact"
                     )
+                if len(metric_ids) != 1:
+                    raise VerificationRefused(
+                        f"metric criterion {criterion.criterion_id} has ambiguous metrics artifacts"
+                    )
                 metric_artifacts[criterion.metric] = metric_ids[0]
             elif isinstance(criterion, ReproCriterion):
                 if not repro_ids:

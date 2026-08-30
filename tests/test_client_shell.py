@@ -21,6 +21,7 @@ class _FakeClient:
     def __init__(self) -> None:
         self.gets: list[str] = []
         self.posts: list[tuple[str, dict[str, Any]]] = []
+        self.streams: list[tuple[str, dict[str, Any]]] = []
         self.agents: list[dict[str, Any]] = [
             {
                 "agent_id": "agent_alpha",
@@ -66,7 +67,10 @@ class _FakeClient:
         return {"status": "ACCEPTED", "command_id": command_id or "cmd_fake"}
 
     def stream(self, path: str, **kwargs: Any) -> Any:
-        return iter([StreamFrame(1, {"event_type": "RUN_CREATED"})])
+        self.streams.append((path, kwargs))
+        if len(self.streams) == 1:
+            return iter([StreamFrame(1, {"event_type": "RUN_CREATED"})])
+        raise KeyboardInterrupt
 
 
 def _drive(lines: list[str], client: _FakeClient) -> list[str]:
@@ -270,3 +274,8 @@ def test_shell_streams_events_with_follow() -> None:
     output = _drive(["events watch", "quit"], client)
     assert any("watching /api/system-stream" in line for line in output)
     assert '[1] {"event_type": "RUN_CREATED"}' in output
+    assert client.streams == [
+        ("/api/system-stream", {"after": None, "follow": True}),
+        ("/api/system-stream", {"after": 1, "follow": True}),
+    ]
+    assert "stopped watching" in output
