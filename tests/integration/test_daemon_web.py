@@ -4,6 +4,7 @@ import pytest
 
 from researchd.api.control import LocalControlAPI
 from researchd.api.web import ControlCommandRouter
+from researchd.daemon.contracts import DaemonCommandResult
 from researchd.daemon.runtime import DaemonNotReady, ResearchDaemon
 from researchd.daemon.startup import StartupBarrier, StartupPhase
 from researchd.domain.base import DomainModel
@@ -16,9 +17,15 @@ class RecordingDispatcher:
         self.result = result
         self.commands: list[DomainModel] = []
 
-    def __call__(self, command: DomainModel) -> RuntimeSession:
+    def __call__(self, command: DomainModel) -> DaemonCommandResult:
         self.commands.append(command)
-        return self.result
+        assert isinstance(command, RuntimeSessionStartCommand)
+        return DaemonCommandResult(
+            command_id=command.command_id,
+            command_type="RuntimeSessionStart",
+            status="ACCEPTED",
+            resource=self.result.model_dump(mode="json"),
+        )
 
 
 def _barrier() -> StartupBarrier:
@@ -80,8 +87,14 @@ def test_runtime_http_command_crosses_typed_ready_gate(tmp_path: Path) -> None:
         router.post("/api/runtime-sessions/start", _payload(tmp_path))
     )
 
-    assert status == 200
-    assert response["runtime_session_id"] == "runtime_session_test_1"
+    assert status == 202
+    assert response["command_version"] == 1
+    assert response["command_id"] == "cmd_start_1"
+    assert response["command_type"] == "RuntimeSessionStart"
+    assert response["status"] == "ACCEPTED"
+    resource = response["resource"]
+    assert isinstance(resource, dict)
+    assert resource["runtime_session_id"] == "runtime_session_test_1"
     assert isinstance(dispatcher.commands[0], RuntimeSessionStartCommand)
 
 
@@ -91,3 +104,49 @@ def test_runtime_http_command_requires_daemon(tmp_path: Path) -> None:
 
     with pytest.raises(RuntimeError, match="requires researchd"):
         asyncio.run(router.post("/api/runtime-sessions/start", _payload(tmp_path)))
+
+
+_CONTROL_MUTATIONS: tuple[tuple[str, dict[str, object]], ...] = (
+    ("/api/runs/run_gate/cancel", {
+        "command_id": "cmd_cancel_gate",
+        "actor_type": "HUMAN",
+        "actor_id": "operator",
+    }),
+    ("/api/work-orders/wo_gate/approve", {
+        "command_id": "cmd_approve_gate",
+        "actor_type": "HUMAN",
+        "actor_id": "operator",
+        "grant_id": "grant_gate",
+    }),
+    ("/api/work-orders/wo_gate/human-decision", {
+        "command_id": "cmd_decision_gate",
+        "actor_type": "HUMAN",
+        "actor_id": "operator",
+        "action": "abort",
+    }),
+)
+
+
+@pytest.mark.parametrize(("path", "payload"), _CONTROL_MUTATIONS)
+def test_control_mutations_are_rejected_before_daemon_ready(
+    tmp_path: Path, path: str, payload: dict[str, object],
+) -> None:
+    sessions = session_factory(create_sqlite_engine(tmp_path / "unused.db"))
+    dispatcher = RecordingDispatcher(_result(tmp_path))
+    daemon = ResearchDaemon(_barrier(), dispatcher)
+    router = ControlCommandRouter(LocalControlAPI(sessions), daemon)
+
+    with pytest.raises(DaemonNotReady):
+        asyncio.run(router.post(path, payload))
+    assert dispatcher.commands == []
+
+
+@pytest.mark.parametrize(("path", "payload"), _CONTROL_MUTATIONS)
+def test_control_mutations_require_daemon(
+    tmp_path: Path, path: str, payload: dict[str, object],
+) -> None:
+    sessions = session_factory(create_sqlite_engine(tmp_path / "unused.db"))
+    router = ControlCommandRouter(LocalControlAPI(sessions))
+
+    with pytest.raises(RuntimeError, match="requires researchd"):
+        asyncio.run(router.post(path, payload))

@@ -263,14 +263,18 @@ curl -N http://127.0.0.1:8788/api/runs/<run-id>/stream?follow=1
 
 The read-only bootstrap intentionally rejects state-changing commands. An
 embedding application must construct `LocalControlAPI` with a
-`ResearchOrchestrator`; typed commands then enter the existing policy/state
-machine through these routes:
+`ResearchOrchestrator`; typed commands then cross the `ResearchDaemon`
+readiness gate and enter the existing policy/state machine through these
+routes. Every body carries the command identity fields `command_id`,
+`actor_type` (`HUMAN`/`SYSTEM`) and `actor_id`; an accepted dispatch returns
+`202` with the versioned `DaemonCommandResult` envelope (`command_version`,
+`command_id`, `command_type`, `status`, `resource`):
 
-| Method | Route | Body |
+| Method | Route | Route-specific body fields |
 |---|---|---|
-| `POST` | `/api/runs/{run_id}/cancel` | `{}` |
-| `POST` | `/api/work-orders/{work_order_id}/approve` | `{"grant_id":"..."}` |
-| `POST` | `/api/work-orders/{work_order_id}/human-decision` | `{"action":"abort"}` or `{"action":"revise","objective":"..."}` |
+| `POST` | `/api/runs/{run_id}/cancel` | — |
+| `POST` | `/api/work-orders/{work_order_id}/approve` | `grant_id` |
+| `POST` | `/api/work-orders/{work_order_id}/human-decision` | `action` (`abort` or `revise`; `revise` requires `objective`) |
 
 Arbitrary UI events have no mutation endpoint.
 

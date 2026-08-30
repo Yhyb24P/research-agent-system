@@ -1,9 +1,21 @@
+import asyncio
+from collections.abc import Awaitable, Coroutine
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 from sqlalchemy import text
 
+from researchd.collaboration.registry import AgentRegistryService
+from researchd.daemon.composition import DaemonConfig, compose_daemon
+from researchd.daemon.contracts import (
+    DaemonCommandResult,
+    HumanDecisionCommand,
+    RunCancelCommand,
+    WorkOrderApproveCommand,
+)
+from researchd.daemon.dispatcher import DaemonCommandDispatcher
 from researchd.daemon.runtime import DaemonNotReady, DaemonState, ResearchDaemon
 from researchd.daemon.startup import (
     StartupBarrier,
@@ -14,10 +26,22 @@ from researchd.daemon.startup import (
     verify_migration_head,
     verify_storage_sanity,
 )
+from researchd.domain.base import DomainModel
 from researchd.runtime_sessions.contracts import ProcessLaunchSpec
+from researchd.runtime_sessions.service import RuntimeSessionService
 from researchd.storage.db import create_sqlite_engine, session_factory
 from researchd.storage.models import AuditEventRecord
+from researchd.supervisor.runtime import RuntimeSupervisor
 from tests.integration.test_storage import migrate
+
+
+def _supervisor(tmp_path: Path) -> RuntimeSupervisor:
+    sessions = session_factory(create_sqlite_engine(tmp_path / "dispatcher.db"))
+    return RuntimeSupervisor(RuntimeSessionService(sessions, AgentRegistryService(sessions)))
+
+
+def _await(result: DomainModel | Awaitable[DomainModel]) -> DomainModel:
+    return asyncio.run(cast(Coroutine[Any, Any, DomainModel], result))
 
 
 def ordered_actions(
@@ -130,3 +154,141 @@ def test_database_startup_checks_cover_schema_storage_and_audit(tmp_path: Path) 
         ))
     with pytest.raises(RuntimeError, match="allocator"):
         verify_audit_stream(engine)
+
+
+class _ControlStub:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, ...]] = []
+
+    async def cancel_run(self, run_id: str) -> dict[str, object]:
+        self.calls.append(("cancel", run_id))
+        return {"run_id": run_id, "state": "CANCELLATION_REQUESTED"}
+
+    async def approve(self, work_order_id: str, grant_id: str) -> dict[str, object]:
+        self.calls.append(("approve", work_order_id, grant_id))
+        return {"work_order_id": work_order_id, "state": "APPROVED"}
+
+    def resolve_human(
+        self,
+        work_order_id: str,
+        *,
+        action: str,
+        objective: str | None = None,
+    ) -> dict[str, object]:
+        self.calls.append(("human", work_order_id, action, objective or ""))
+        return {"work_order_id": work_order_id, "action": action}
+
+
+def test_dispatcher_fails_closed_without_control_authority(tmp_path: Path) -> None:
+    dispatcher = DaemonCommandDispatcher(_supervisor(tmp_path))
+    cancel = RunCancelCommand(
+        command_id="cmd_cancel_closed",
+        actor_type="HUMAN",
+        actor_id="operator",
+        run_id="run_1",
+    )
+    approve = WorkOrderApproveCommand(
+        command_id="cmd_approve_closed",
+        actor_type="HUMAN",
+        actor_id="operator",
+        work_order_id="wo_1",
+        grant_id="grant_1",
+    )
+    decision = HumanDecisionCommand(
+        command_id="cmd_decision_closed",
+        actor_type="HUMAN",
+        actor_id="operator",
+        work_order_id="wo_1",
+        action="abort",
+    )
+
+    with pytest.raises(RuntimeError, match="orchestrator mutation authority is not configured"):
+        _await(dispatcher(cancel))
+    with pytest.raises(RuntimeError, match="orchestrator mutation authority is not configured"):
+        _await(dispatcher(approve))
+    with pytest.raises(RuntimeError, match="orchestrator mutation authority is not configured"):
+        dispatcher(decision)
+
+
+def test_dispatcher_wraps_control_mutations_in_versioned_envelope(tmp_path: Path) -> None:
+    control = _ControlStub()
+    dispatcher = DaemonCommandDispatcher(_supervisor(tmp_path), control)
+
+    cancel_result = _await(dispatcher(RunCancelCommand(
+        command_id="cmd_cancel_env",
+        actor_type="HUMAN",
+        actor_id="operator",
+        run_id="run_1",
+    )))
+    assert isinstance(cancel_result, DaemonCommandResult)
+    assert cancel_result.command_version == 1
+    assert cancel_result.command_id == "cmd_cancel_env"
+    assert cancel_result.command_type == "RunCancel"
+    assert cancel_result.status == "ACCEPTED"
+    assert cancel_result.resource == {"run_id": "run_1", "state": "CANCELLATION_REQUESTED"}
+
+    approve_result = _await(dispatcher(WorkOrderApproveCommand(
+        command_id="cmd_approve_env",
+        actor_type="HUMAN",
+        actor_id="operator",
+        work_order_id="wo_1",
+        grant_id="grant_1",
+    )))
+    assert isinstance(approve_result, DaemonCommandResult)
+    assert approve_result.command_version == 1
+    assert approve_result.command_id == "cmd_approve_env"
+    assert approve_result.command_type == "WorkOrderApprove"
+    assert approve_result.status == "ACCEPTED"
+    assert approve_result.resource == {"work_order_id": "wo_1", "state": "APPROVED"}
+
+    decision_result = dispatcher(HumanDecisionCommand(
+        command_id="cmd_decision_env",
+        actor_type="HUMAN",
+        actor_id="operator",
+        work_order_id="wo_1",
+        action="revise",
+        objective="narrow the task",
+    ))
+    assert isinstance(decision_result, DaemonCommandResult)
+    assert decision_result.command_version == 1
+    assert decision_result.command_id == "cmd_decision_env"
+    assert decision_result.command_type == "HumanDecision"
+    assert decision_result.status == "ACCEPTED"
+    assert decision_result.resource == {"work_order_id": "wo_1", "action": "revise"}
+    assert control.calls == [
+        ("cancel", "run_1"),
+        ("approve", "wo_1", "grant_1"),
+        ("human", "wo_1", "revise", "narrow the task"),
+    ]
+
+
+def test_dispatcher_rejects_unknown_command_models(tmp_path: Path) -> None:
+    dispatcher = DaemonCommandDispatcher(_supervisor(tmp_path), _ControlStub())
+
+    with pytest.raises(TypeError, match="unsupported daemon command"):
+        dispatcher(ProcessLaunchSpec(argv=("/usr/bin/true",), cwd="/tmp"))
+
+
+def test_composed_daemon_rejects_control_mutation_until_orchestrator_wired(
+    tmp_path: Path,
+) -> None:
+    # compose_daemon wires LocalControlAPI without an Orchestrator, so the three
+    # control mutations must fail closed with an explicit reason. Injecting the
+    # real Orchestrator into the composition root is a follow-up launcher node.
+    database = tmp_path / "researchd.db"
+    migrate(database)
+    application = compose_daemon(DaemonConfig(
+        database=database,
+        artifact_root=tmp_path / "artifacts",
+        state_root=tmp_path / "state",
+    ))
+    assert application.daemon.start().ready
+
+    command = RunCancelCommand(
+        command_id="cmd_composed_cancel",
+        actor_type="HUMAN",
+        actor_id="operator",
+        run_id="run_missing",
+    )
+    with pytest.raises(RuntimeError, match="controller is required for state-changing commands"):
+        _await(cast(DomainModel | Awaitable[DomainModel], application.daemon.execute(command)))

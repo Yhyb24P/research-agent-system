@@ -240,13 +240,17 @@ curl -N http://127.0.0.1:8788/api/runs/<run-id>/stream?follow=1
 ```
 
 这个只读启动方式会主动拒绝状态修改。嵌入应用必须使用
-`ResearchOrchestrator` 构造 `LocalControlAPI`；类型化命令随后经现有策略/状态机处理：
+`ResearchOrchestrator` 构造 `LocalControlAPI`；类型化命令随后先经过 `ResearchDaemon`
+readiness gate，再进入现有策略/状态机。所有请求体都必须携带命令身份字段
+`command_id`、`actor_type`（`HUMAN`/`SYSTEM`）和 `actor_id`；接受后的派发返回 `202`
+以及带版本的 `DaemonCommandResult` envelope（`command_version`、`command_id`、
+`command_type`、`status`、`resource`）：
 
-| 方法 | 路由 | Body |
+| 方法 | 路由 | 路由特有 Body 字段 |
 |---|---|---|
-| `POST` | `/api/runs/{run_id}/cancel` | `{}` |
-| `POST` | `/api/work-orders/{work_order_id}/approve` | `{"grant_id":"..."}` |
-| `POST` | `/api/work-orders/{work_order_id}/human-decision` | `{"action":"abort"}` 或 `{"action":"revise","objective":"..."}` |
+| `POST` | `/api/runs/{run_id}/cancel` | — |
+| `POST` | `/api/work-orders/{work_order_id}/approve` | `grant_id` |
+| `POST` | `/api/work-orders/{work_order_id}/human-decision` | `action`（`abort` 或 `revise`；`revise` 必须带 `objective`） |
 
 系统不存在允许任意 UI event 修改状态的入口。
 

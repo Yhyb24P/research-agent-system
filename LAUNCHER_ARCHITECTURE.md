@@ -227,6 +227,14 @@ The productization branch now contains the first LP01/LP02 foundation:
 - `researchd validate` touches no state, while `researchd inspect` exposes a
   non-secret projection and canonical configuration digest without command
   arguments.
+- a versioned `DaemonCommand`/`DaemonCommandResult` contract
+  (`command_version=1`, command identity, accepted/rejected envelope) bounds
+  every daemon-dispatched mutation, and the run cancel, work-order approve and
+  human-decision HTTP routes now cross the same `ResearchDaemon.execute()`
+  readiness gate as RuntimeSession commands, returning `202` with the typed
+  envelope. The composition root still wires no Orchestrator, so those control
+  mutations fail closed with an explicit reason until the trusted controller
+  is injected.
 
 产品化分支现已实现首批 LP01/LP02 基础：持久化运行实例和类型化命令凭证、拒绝
 PID 复用的 PROCESS supervisor、受限 REMOTE_HTTP attach、先 intent 后副作用的审计
@@ -238,6 +246,12 @@ shell 字符串及非 loopback 监听均被拒绝。独立重启测试还证明�
 独立 crash-window 进程进一步证明：已持久化但结果未知的 START 不会被重放，STOP 则由
 重启协调完成。`researchd validate/inspect` 可在不启动 daemon 的情况下验证配置；
 inspect 不回显固定命令参数。
+带版本的 `DaemonCommand`/`DaemonCommandResult` 合同（`command_version=1`、命令身份、
+accepted/rejected envelope）现已约束所有经 daemon 派发的 mutation；run cancel、
+work-order approve 和 human-decision 三个 HTTP 路由与 RuntimeSession 命令一样强制经过
+`ResearchDaemon.execute()` readiness gate，并以 `202` 返回类型化 envelope。组合根目前
+仍未注入 Orchestrator，因此这三个控制面 mutation 会以明确原因失败关闭，直到可信
+controller 接入。
 
 This is still an implementation milestone, not completion of the productized
 launcher. The daily `research` client and LP03 managed Agent pilot remain open.
@@ -258,20 +272,26 @@ the frozen requirements. The current evidence is:
 | durable RuntimeSession and idempotent START/ATTACH/STOP receipts | PASS | migration `0020`, `runtime_sessions/service.py`, concurrency/replay tests |
 | PROCESS identity, PID-reuse rejection, restart reattach and crash windows | PASS | supervisor driver and independent-process restart/crash tests |
 | constrained REMOTE_HTTP attach through existing AgentRuntime | PASS | `RemoteHttpDriver`, registry endpoint checks and integration tests |
-| `researchd` owns existing orchestrator/policy/approval/backup command paths | OPEN | composition currently wires recovery authorities and RuntimeSession commands only |
-| every existing HTTP mutation crosses `ResearchDaemon.execute()` | OPEN | run cancellation and approval routes still call `LocalControlAPI` directly |
-| versioned accepted/rejected result envelope for every command family | OPEN | RuntimeSession routes currently return the resulting aggregate directly |
+| `researchd` owns existing orchestrator/policy/approval/backup command paths | OPEN | composition wires `LocalControlAPI` without an Orchestrator; control mutations fail closed until the trusted controller is injected |
+| every existing HTTP mutation crosses `ResearchDaemon.execute()` | PASS | run cancel, work-order approve and human-decision routes dispatch typed commands through the daemon readiness gate (`api/web.py`, gate tests) |
+| versioned accepted/rejected result envelope for every command family | PASS | `daemon/contracts.py`, `DaemonCommandDispatcher` and envelope assertions in daemon web/AG-UI tests |
+| durable generic command receipt with idempotency persistence | OPEN | envelopes are in-memory responses; no durable receipt store exists yet |
 | Workspace, ResearchTask, Approval and Backup typed command families | OPEN | not yet implemented at the daemon boundary |
 
 Therefore LP02's durable runtime/supervision slice is implemented, while LP01
-as a complete trusted mutation host is **not frozen complete**. LP03 must not
-paper over these LP01 gaps with a pilot-only bypass. The next implementation
-order is: shared command/result contracts, existing orchestrator/policy
-composition, migration of current mutations through the readiness gate, then
-the managed Agent pilot.
+as a complete trusted mutation host is **not frozen complete**. The shared
+command/result contract and the migration of the existing HTTP mutations
+through the readiness gate are done; the remaining gaps are the real
+Orchestrator/policy injection into the composition root, the Workspace,
+ResearchTask, Approval and Backup command families, and the durable generic
+command receipt. LP03 must not paper over these LP01 gaps with a pilot-only
+bypass. The next implementation order is: trusted Orchestrator composition,
+the remaining typed command families with durable receipts, then the managed
+Agent pilot.
 
 审计结论：LP02 的持久化运行实例与 supervision 切片已经实现；LP01 作为完整可信
-mutation host 尚未冻结完成。当前 run cancel / approval 等 mutation 仍未统一经过
-`ResearchDaemon.execute()`，且 Workspace、ResearchTask、Approval、Backup 命令族与统一
-accepted/rejected result envelope 仍缺失。LP03 不得用 pilot 专用旁路掩盖这些缺口；
-应先统一命令合同、组合既有 Orchestrator/Policy，再迁移现有 mutation，最后进入 pilot。
+mutation host 尚未冻结完成。统一命令合同以及现有 HTTP mutation 经 readiness gate 的
+迁移已经完成；剩余缺口为组合根中真实 Orchestrator/Policy 的注入、Workspace、
+ResearchTask、Approval、Backup 命令族，以及 durable generic command receipt。LP03 不得用
+pilot 专用旁路掩盖这些缺口；下一步顺序为：接入可信 Orchestrator 组合、实现剩余类型化
+命令族与 durable receipt，最后进入 pilot。

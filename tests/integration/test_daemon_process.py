@@ -61,6 +61,7 @@ def _post(port: int, path: str, payload: dict[str, object]) -> dict[str, object]
         method="POST",
     )
     with urlopen(request, timeout=5) as response:
+        assert response.status == 202
         return cast(dict[str, object], json.load(response))
 
 
@@ -164,8 +165,10 @@ def test_researchd_restart_reattaches_live_runtime_and_preserves_audit_order(
             "actor_id": "restart-test",
             "launch_spec": {"argv": ["/usr/bin/sleep", "60"], "cwd": str(tmp_path)},
         })
-        assert started["supervisor_state"] == "HEALTHY"
-        identity = cast(dict[str, object], started["external_identity"])
+        started_resource = cast(dict[str, object], started["resource"])
+        assert started["status"] == "ACCEPTED"
+        assert started_resource["supervisor_state"] == "HEALTHY"
+        identity = cast(dict[str, object], started_resource["external_identity"])
         runtime_pid = int(cast(int, identity["pid"]))
 
         with urlopen(f"http://127.0.0.1:{port}/api/system-events?after=0") as response:
@@ -198,7 +201,9 @@ def test_researchd_restart_reattaches_live_runtime_and_preserves_audit_order(
             "actor_id": "restart-test",
             "expected_version": session["version"],
         })
-        assert stopped["supervisor_state"] == "STOPPED"
+        stopped_resource = cast(dict[str, object], stopped["resource"])
+        assert stopped["status"] == "ACCEPTED"
+        assert stopped_resource["supervisor_state"] == "STOPPED"
         runtime_pid = None
     finally:
         if first.poll() is None:
@@ -289,14 +294,16 @@ def test_stop_intent_crash_is_finished_by_restart_reconciliation(tmp_path: Path)
             "actor_type": "SYSTEM", "actor_id": "crash-test",
             "launch_spec": {"argv": ["/usr/bin/sleep", "60"], "cwd": str(tmp_path)},
         })
-        identity = cast(dict[str, object], started["external_identity"])
+        started_resource = cast(dict[str, object], started["resource"])
+        assert started["status"] == "ACCEPTED"
+        identity = cast(dict[str, object], started_resource["external_identity"])
         runtime_pid = int(cast(int, identity["pid"]))
         _terminate(first)
         crashed = subprocess.run([
             sys.executable,
             str(ROOT / "tests/fixtures/runtime_intent_crasher.py"),
             "stop", str(database), str(tmp_path),
-            "--expected-version", str(started["version"]),
+            "--expected-version", str(started_resource["version"]),
         ], check=False)
         assert crashed.returncode == 73
 

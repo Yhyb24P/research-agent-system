@@ -1,6 +1,6 @@
 """Readiness-gated mutation boundary for the trusted local daemon."""
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from enum import StrEnum
 
 from researchd.domain.base import DomainModel
@@ -25,7 +25,7 @@ class ResearchDaemon:
     def __init__(
         self,
         barrier: StartupBarrier,
-        dispatcher: Callable[[DomainModel], object],
+        dispatcher: Callable[[DomainModel], object | Awaitable[object]],
     ) -> None:
         self.barrier = barrier
         self.dispatcher = dispatcher

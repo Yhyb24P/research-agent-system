@@ -1,45 +1,28 @@
 """Loopback-only HTTP client facade over the in-process LocalControlAPI."""
 import asyncio
+import inspect
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import time
-from typing import Any, Literal
+from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import BaseModel, ValidationError
 
 from researchd.api.agui import AGUIProjectionAdapter
 from researchd.api.control import LocalControlAPI
 from researchd.daemon.runtime import ResearchDaemon
+from researchd.daemon.contracts import (
+    HumanDecisionCommand,
+    RunCancelCommand,
+    WorkOrderApproveCommand,
+)
 from researchd.domain.base import DomainModel
 from researchd.runtime_sessions.contracts import (
     RuntimeSessionAttachCommand,
     RuntimeSessionStartCommand,
     RuntimeSessionStopCommand,
 )
-
-
-class _ControlCommand(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
-
-
-class CancelRunCommand(_ControlCommand):
-    pass
-
-
-class ApproveWorkOrderCommand(_ControlCommand):
-    grant_id: str = Field(min_length=1, max_length=128)
-
-
-class ResolveHumanCommand(_ControlCommand):
-    action: Literal["abort", "revise"]
-    objective: str | None = Field(default=None, min_length=1, max_length=16_384)
-
-    @model_validator(mode="after")
-    def revision_requires_objective(self) -> "ResolveHumanCommand":
-        if self.action == "revise" and self.objective is None:
-            raise ValueError("revision objective is required")
-        return self
 
 
 class ControlResourceRouter:
@@ -102,30 +85,36 @@ class ControlCommandRouter:
     async def post(self, path: str, payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
         parts = [unquote(item) for item in urlparse(path).path.split("/") if item]
         if parts == ["api", "runtime-sessions", "start"]:
-            return 200, self._execute(RuntimeSessionStartCommand.model_validate(payload))
+            return 202, await self._execute(RuntimeSessionStartCommand.model_validate(payload))
         if parts == ["api", "runtime-sessions", "attach"]:
-            return 200, self._execute(RuntimeSessionAttachCommand.model_validate(payload))
+            return 202, await self._execute(RuntimeSessionAttachCommand.model_validate(payload))
         if len(parts) == 4 and parts[:2] == ["api", "runtime-sessions"] and parts[3] == "stop":
-            command = RuntimeSessionStopCommand.model_validate({
+            stop_command = RuntimeSessionStopCommand.model_validate({
                 **payload,
                 "runtime_session_id": parts[2],
             })
-            return 200, self._execute(command)
+            return 202, await self._execute(stop_command)
         if len(parts) == 4 and parts[:2] == ["api", "runs"] and parts[3] == "cancel":
-            CancelRunCommand.model_validate(payload)
-            return 200, await self.api.cancel_run(parts[2])
+            cancel_command = RunCancelCommand.model_validate({**payload, "run_id": parts[2]})
+            return 202, await self._execute(cancel_command)
         if len(parts) == 4 and parts[:2] == ["api", "work-orders"] and parts[3] == "approve":
-            approval = ApproveWorkOrderCommand.model_validate(payload)
-            return 200, await self.api.approve(parts[2], approval.grant_id)
+            approve_command = WorkOrderApproveCommand.model_validate({
+                **payload, "work_order_id": parts[2],
+            })
+            return 202, await self._execute(approve_command)
         if len(parts) == 4 and parts[:2] == ["api", "work-orders"] and parts[3] == "human-decision":
-            decision = ResolveHumanCommand.model_validate(payload)
-            return 200, self.api.resolve_human(parts[2], action=decision.action, objective=decision.objective)
+            decision_command = HumanDecisionCommand.model_validate({
+                **payload, "work_order_id": parts[2],
+            })
+            return 202, await self._execute(decision_command)
         return 404, {"error": "unknown command"}
 
-    def _execute(self, command: DomainModel) -> dict[str, Any]:
+    async def _execute(self, command: DomainModel) -> dict[str, Any]:
         if self.daemon is None:
-            raise RuntimeError("runtime mutation requires researchd")
+            raise RuntimeError("mutation requires researchd")
         result = self.daemon.execute(command)
+        if inspect.isawaitable(result):
+            result = await result
         if not isinstance(result, BaseModel):
             raise TypeError("daemon command result must be a typed model")
         return result.model_dump(mode="json")

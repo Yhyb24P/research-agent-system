@@ -164,8 +164,9 @@ def compose_daemon(config: DaemonConfig) -> DaemonApplication:
         jobs=jobs,
         invocations=invocations,
     )
-    daemon = ResearchDaemon(barrier, DaemonCommandDispatcher(supervisor))
-    return DaemonApplication(config=config, daemon=daemon, api=LocalControlAPI(sessions))
+    api = LocalControlAPI(sessions)
+    daemon = ResearchDaemon(barrier, DaemonCommandDispatcher(supervisor, api))
+    return DaemonApplication(config=config, daemon=daemon, api=api)
 
 
 __all__ = ["DaemonApplication", "DaemonConfig", "JobCommandConfig", "compose_daemon"]

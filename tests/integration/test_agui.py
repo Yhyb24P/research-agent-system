@@ -15,8 +15,14 @@ from sqlalchemy.orm import Session, sessionmaker
 from researchd.api.agui import AGUIProjectionAdapter, CustomEvent
 from researchd.api.control import LocalControlAPI
 from researchd.api.web import ControlCommandRouter, ControlResourceRouter, serve_local_control
+from researchd.collaboration.registry import AgentRegistryService
+from researchd.daemon.dispatcher import DaemonCommandDispatcher
+from researchd.daemon.runtime import ResearchDaemon
+from researchd.daemon.startup import StartupBarrier, StartupPhase
 from researchd.policy.approval import ApprovalNotValid, ApprovalService
+from researchd.runtime_sessions.service import RuntimeSessionService
 from researchd.storage.db import create_sqlite_engine, session_factory
+from researchd.supervisor.runtime import RuntimeSupervisor
 from researchd.storage.models import (
     AuditEventRecord,
     CollaborationMessageRecord,
@@ -183,22 +189,76 @@ class _CommandSpy:
         return {"work_order_id": work_order_id}
 
 
-def test_ui_commands_are_typed_and_cannot_submit_arbitrary_mutation_events() -> None:
+def _ready_command_router(control: LocalControlAPI, database: Path) -> ControlCommandRouter:
+    sessions = session_factory(create_sqlite_engine(database))
+    supervisor = RuntimeSupervisor(RuntimeSessionService(sessions, AgentRegistryService(sessions)))
+    barrier = StartupBarrier({phase: lambda: None for phase in StartupPhase})
+    daemon = ResearchDaemon(barrier, DaemonCommandDispatcher(supervisor, control))
+    assert daemon.start().ready
+    return ControlCommandRouter(LocalControlAPI(sessions), daemon)
+
+
+def test_ui_commands_are_typed_and_cannot_submit_arbitrary_mutation_events(tmp_path: Path) -> None:
     spy = _CommandSpy()
-    router = ControlCommandRouter(cast(LocalControlAPI, spy))
-    assert asyncio.run(router.post("/api/runs/run_1/cancel", {}))[0] == 200
-    assert asyncio.run(router.post("/api/work-orders/wo_1/approve", {"grant_id": "grant_1"}))[0] == 200
-    assert asyncio.run(router.post(
+    router = _ready_command_router(cast(LocalControlAPI, spy), tmp_path / "commands.db")
+
+    cancel_status, cancel = asyncio.run(router.post("/api/runs/run_1/cancel", {
+        "command_id": "cmd_cancel_1",
+        "actor_type": "HUMAN",
+        "actor_id": "operator",
+    }))
+    assert cancel_status == 202
+    assert cancel["command_version"] == 1
+    assert cancel["command_id"] == "cmd_cancel_1"
+    assert cancel["command_type"] == "RunCancel"
+    assert cancel["status"] == "ACCEPTED"
+    assert cancel["resource"] == {"run_id": "run_1"}
+
+    approve_status, approve = asyncio.run(router.post("/api/work-orders/wo_1/approve", {
+        "command_id": "cmd_approve_1",
+        "actor_type": "HUMAN",
+        "actor_id": "operator",
+        "grant_id": "grant_1",
+    }))
+    assert approve_status == 202
+    assert approve["command_id"] == "cmd_approve_1"
+    assert approve["command_type"] == "WorkOrderApprove"
+    assert approve["status"] == "ACCEPTED"
+    assert approve["resource"] == {"work_order_id": "wo_1"}
+
+    decision_status, decision = asyncio.run(router.post(
         "/api/work-orders/wo_1/human-decision",
-        {"action": "revise", "objective": "narrow the task"},
-    ))[0] == 200
+        {
+            "command_id": "cmd_decision_1",
+            "actor_type": "HUMAN",
+            "actor_id": "operator",
+            "action": "revise",
+            "objective": "narrow the task",
+        },
+    ))
+    assert decision_status == 202
+    assert decision["command_id"] == "cmd_decision_1"
+    assert decision["command_type"] == "HumanDecision"
+    assert decision["status"] == "ACCEPTED"
+    assert decision["resource"] == {"work_order_id": "wo_1"}
+    assert spy.calls == [
+        ("cancel", "run_1"),
+        ("approve", "wo_1", "grant_1"),
+        ("human", "wo_1", "revise", "narrow the task"),
+    ]
+
     calls_before = list(spy.calls)
     assert asyncio.run(router.post("/api/events/run_1", {"event_type": "RUN_COMPLETED"}))[0] == 404
     assert spy.calls == calls_before
     with pytest.raises(ValidationError):
         asyncio.run(router.post("/api/runs/run_1/cancel", {"event_type": "RUN_COMPLETED"}))
     with pytest.raises(ValidationError):
-        asyncio.run(router.post("/api/work-orders/wo_1/human-decision", {"action": "revise"}))
+        asyncio.run(router.post("/api/work-orders/wo_1/human-decision", {
+            "command_id": "cmd_decision_invalid",
+            "actor_type": "HUMAN",
+            "actor_id": "operator",
+            "action": "revise",
+        }))
 
 
 def test_loopback_sse_honors_last_event_id(tmp_path: Path) -> None:
@@ -351,13 +411,21 @@ def test_simultaneous_typed_approval_commands_preserve_one_shot_authority(tmp_pa
             )
             return {"work_order_id": work_order_id, "authorized": True}
 
-    router = ControlCommandRouter(cast(LocalControlAPI, ApprovalAPI()))
+    router = _ready_command_router(
+        cast(LocalControlAPI, ApprovalAPI()),
+        tmp_path / "approve.db",
+    )
 
     async def invoke() -> object:
         try:
             return await router.post(
                 "/api/work-orders/wo_stream/approve",
-                {"grant_id": grant.grant_id},
+                {
+                    "command_id": "cmd_approve_concurrent",
+                    "actor_type": "HUMAN",
+                    "actor_id": "human_reviewer",
+                    "grant_id": grant.grant_id,
+                },
             )
         except ApprovalNotValid as error:
             return error
@@ -368,5 +436,12 @@ def test_simultaneous_typed_approval_commands_preserve_one_shot_authority(tmp_pa
     results = asyncio.run(invoke_concurrently())
     successes = [item for item in results if isinstance(item, tuple)]
     failures = [item for item in results if isinstance(item, ApprovalNotValid)]
-    assert len(successes) == 1 and successes[0][0] == 200
+    assert len(successes) == 1
+    status, envelope = successes[0]
+    assert status == 202
+    assert envelope["command_version"] == 1
+    assert envelope["command_id"] == "cmd_approve_concurrent"
+    assert envelope["command_type"] == "WorkOrderApprove"
+    assert envelope["status"] == "ACCEPTED"
+    assert envelope["resource"] == {"work_order_id": "wo_stream", "authorized": True}
     assert len(failures) == 1 and "already been used" in str(failures[0])

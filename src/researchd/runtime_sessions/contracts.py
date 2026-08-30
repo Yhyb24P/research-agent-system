@@ -94,6 +94,7 @@ class RemoteHttpAttachSpec(DomainModel):
 
 
 class _RuntimeSessionCommand(DomainModel):
+    command_version: Literal[1] = 1
     command_id: str = Field(min_length=1, max_length=128)
     runtime_session_id: RuntimeSessionId
     runtime_id: AgentRuntimeId
