@@ -255,6 +255,9 @@ invocation 仅调用 Registry 持有的 loopback endpoint，绝不二次执行�
 不含凭据的 managed coder 安装示例位于
 `examples/managed_coder_agent_definition.example.json`。其中绝对可执行文件与
 工作目录属于部署配置，安装前应明确调整；client 不能通过 runtime API 提交它们。
+`research-coder-agent` 参考进程实现对应的无凭据 loopback turn protocol。
+它只能提出类型化 action；`researchd` 经 `CapabilityBroker` 执行已授权 action，
+并由控制面构造权威 `ExecutorResult`。
 
 如需明确不允许 daemon mutation 的只读投影，可只嵌入 local API：
 

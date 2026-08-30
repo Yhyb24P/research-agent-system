@@ -1,5 +1,7 @@
 """Adapters for non-model Agent Runtimes; controller records remain authoritative."""
 import json
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, Protocol
 from urllib.parse import urlparse
 import httpx
@@ -10,9 +12,25 @@ from researchd.adapters.a2a.adapter import A2AAdapter
 from researchd.adapters.a2a.codec import A2ACodecError, decode_executor_result, encode_granted_work_order
 from researchd.collaboration.contracts import AgentHealth, AgentInvocationRequest, AgentInvocationResult, AgentRuntime, EvidenceInvocationInput, ExecuteInvocationInput, PlanInvocationInput, ReviewInvocationInput
 from researchd.domain.enums import InvocationStatus
-from researchd.executor.contracts import ExecutorResult
+from researchd.domain.base import DomainModel
+from researchd.executor.capability_broker import CapabilityBroker
+from researchd.executor.contracts import (
+    ExecutorResult,
+    GrantedWorkOrder,
+    LocalAgentRequest,
+    LocalAgentResponse,
+)
+from researchd.executor.worker import LocalExecutorWorker
+from researchd.models.base import LocalModelUnavailable
 from researchd.runtime_sessions.launch_profiles import RuntimeLaunchProfileService
-from researchd.storage.models import AgentRecord, AgentRuntimeRecord, RuntimeSessionRecord
+from researchd.storage.models import (
+    AgentInvocationRecord,
+    AgentRecord,
+    AgentRuntimeRecord,
+    RuntimeSessionRecord,
+    WorkspaceGrantRecord,
+    WorkspaceTransportRecord,
+)
 
 
 class HttpAgentClient(Protocol):
@@ -21,6 +39,12 @@ class HttpAgentClient(Protocol):
 
 class ProcessAgentRunner(Protocol):
     async def invoke(self, command: tuple[str, ...], payload: dict[str, Any]) -> dict[str, Any]: ...
+
+
+class ManagedAgentTurnRequest(DomainModel):
+    invocation_id: str
+    attempt_id: str
+    request: LocalAgentRequest
 
 
 def _request_payload(request: AgentInvocationRequest) -> dict[str, Any] | None:
@@ -213,10 +237,12 @@ class ManagedProcessAgentAdapter:
         sessions: sessionmaker[Session],
         launch_profiles: RuntimeLaunchProfileService,
         client: HttpAgentClient,
+        broker: CapabilityBroker,
     ) -> None:
         self.sessions = sessions
         self.launch_profiles = launch_profiles
-        self.delegate = HttpAgentAdapter(client)
+        self.client = client
+        self.broker = broker
 
     def _require_live(self, runtime_id: object) -> str:
         profile = self.launch_profiles.resolve_process(str(runtime_id))
@@ -258,7 +284,8 @@ class ManagedProcessAgentAdapter:
             endpoint = self._require_live(runtime.runtime_id)
         except ValueError as error:
             return AgentHealth(healthy=False, reason=str(error))
-        return await self.delegate.health(runtime.model_copy(update={"endpoint_ref": endpoint}))
+        del endpoint
+        return AgentHealth(healthy=True)
 
     async def invoke(self, request: AgentInvocationRequest) -> AgentInvocationResult:
         try:
@@ -269,8 +296,87 @@ class ManagedProcessAgentAdapter:
                 status=InvocationStatus.FAILED,
                 reason_code="PROCESS_RUNTIME_UNAVAILABLE",
             )
-        trusted = request.model_copy(update={"endpoint_ref": endpoint})
-        return await self.delegate.invoke(trusted)
+        typed = request.typed_input
+        if not isinstance(typed, ExecuteInvocationInput):
+            return AgentInvocationResult(
+                invocation_id=request.invocation_id,
+                status=InvocationStatus.FAILED,
+                reason_code="GRANTED_WORK_ORDER_REQUIRED",
+            )
+        try:
+            work_order = self._controller_work_order(request, typed)
+        except ValueError:
+            return AgentInvocationResult(
+                invocation_id=request.invocation_id,
+                status=InvocationStatus.FAILED,
+                reason_code="WORKSPACE_GRANT_UNAVAILABLE",
+            )
+
+        class EndpointModel:
+            async def complete(inner_self, model_request: LocalAgentRequest) -> LocalAgentResponse:
+                del inner_self
+                try:
+                    response = await self.client.invoke(
+                        endpoint,
+                        ManagedAgentTurnRequest(
+                            invocation_id=str(request.invocation_id),
+                            attempt_id=work_order.attempt_id,
+                            request=model_request,
+                        ).model_dump(mode="json"),
+                    )
+                    return LocalAgentResponse.model_validate(response)
+                except Exception as error:
+                    raise LocalModelUnavailable(type(error).__name__) from error
+
+        result = await LocalExecutorWorker(
+            EndpointModel(),
+            self.broker,
+            self.sessions,
+        ).execute(work_order)
+        return AgentInvocationResult(
+            invocation_id=request.invocation_id,
+            status=(
+                InvocationStatus.SUCCEEDED
+                if result.status == "execution_complete"
+                else InvocationStatus.FAILED
+            ),
+            output_type="ExecutorResult",
+            output=result.model_dump(mode="json"),
+            reason_code=None if result.status == "execution_complete" else result.status,
+        )
 
     async def cancel(self, invocation_id: str) -> None:
-        await self.delegate.cancel(invocation_id)
+        del invocation_id
+
+    def _controller_work_order(
+        self,
+        request: AgentInvocationRequest,
+        typed: ExecuteInvocationInput,
+    ) -> GrantedWorkOrder:
+        grant_id = request.workspace_grant_id
+        if grant_id is None:
+            raise ValueError("managed execution requires a workspace grant")
+        now = datetime.now(UTC)
+        with self.sessions() as session:
+            invocation = session.get(AgentInvocationRecord, str(request.invocation_id))
+            grant = session.get(WorkspaceGrantRecord, grant_id)
+            transport = session.scalar(select(WorkspaceTransportRecord).where(
+                WorkspaceTransportRecord.workspace_grant_id == grant_id,
+                WorkspaceTransportRecord.state == "ACTIVE",
+            ).order_by(WorkspaceTransportRecord.created_at.desc()).limit(1))
+        if (
+            invocation is None
+            or invocation.runtime_id != str(request.runtime_id)
+            or invocation.workspace_grant_id != grant_id
+            or grant is None
+            or grant.state != "ACTIVE"
+            or grant.lease_expires_at is None
+            or grant.lease_expires_at <= now
+            or transport is None
+        ):
+            raise ValueError("workspace authority is not active")
+        workspace = Path(transport.remote_workspace_handle).resolve(strict=True)
+        if not workspace.is_dir():
+            raise ValueError("workspace transport is not a directory")
+        sandbox = typed.work_order.sandbox.model_copy(update={"workspace": str(workspace)})
+        return typed.work_order.model_copy(update={"sandbox": sandbox})

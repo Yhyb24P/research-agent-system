@@ -33,6 +33,9 @@ from researchd.daemon.startup import build_startup_barrier
 from researchd.domain.base import DomainModel
 from researchd.domain.enums import AgentAdapterKind
 from researchd.executor.jobs import JobManager, LocalDurableJobBackend
+from researchd.executor.capability_broker import CapabilityBroker
+from researchd.executor.contracts import CommandLimits
+from researchd.executor.sandbox import BubblewrapBackend
 from researchd.executor.worktree import WorktreeManager
 from researchd.orchestrator.engine import ResearchOrchestrator
 from researchd.policy.approval import ApprovalService
@@ -70,6 +73,13 @@ class DaemonConfig(DomainModel):
     state_root: Path
     repositories: dict[str, Path] = Field(default_factory=dict)
     job_commands: dict[str, JobCommandConfig] = Field(default_factory=dict)
+    executor_command_limits: CommandLimits = Field(default_factory=lambda: CommandLimits(
+        wall_seconds=300,
+        cpu_seconds=300,
+        memory_mb=2048,
+        file_size_mb=128,
+        output_bytes=1_000_000,
+    ))
     host: str = "127.0.0.1"
     port: int = Field(default=8788, ge=0, le=65_535)
 
@@ -133,6 +143,7 @@ class DaemonConfig(DomainModel):
                 }
                 for key, value in sorted(self.job_commands.items())
             },
+            "executor_command_limits": self.executor_command_limits.model_dump(mode="json"),
             "host": self.host,
             "port": self.port,
         }
@@ -207,6 +218,13 @@ def compose_daemon(
     # fails closed for them. The adapter targets the already-supervised Agent
     # service and never launches the profile argv again.
     verifier_driver = LocalVerificationDriver(sessions, store)
+    capability_broker = CapabilityBroker(
+        BubblewrapBackend(),
+        artifact_service,
+        sessions,
+        command_limits=config.executor_command_limits,
+        inline_output_bytes=0,
+    )
     catalog = AgentAdapterCatalog(sessions)
     catalog.register(
         AgentAdapterKind.PROCESS,
@@ -214,6 +232,7 @@ def compose_daemon(
             sessions,
             launch_profiles,
             agent_client or HttpxAgentClient(),
+            capability_broker,
         ),
     )
     orchestrator = ResearchOrchestrator(

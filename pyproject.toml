@@ -25,6 +25,7 @@ qualification = [
 
 [project.scripts]
 research = "researchd.client.cli:entrypoint"
+research-coder-agent = "researchd.pilot.coder_agent:entrypoint"
 researchctl = "researchd.cli.main:entrypoint"
 researchd = "researchd.daemon.cli:entrypoint"
 
