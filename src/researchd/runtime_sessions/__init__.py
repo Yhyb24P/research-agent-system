@@ -12,9 +12,11 @@ from researchd.runtime_sessions.contracts import (
 )
 from researchd.runtime_sessions.service import RuntimeSessionService
 from researchd.runtime_sessions.launch_profiles import RuntimeLaunchProfileService
+from researchd.runtime_sessions.managed_start import ManagedAgentStartService
 
 __all__ = [
     "LaunchMode",
+    "ManagedAgentStartService",
     "ProcessLaunchSpec",
     "RemoteHttpAttachSpec",
     "RuntimeSession",

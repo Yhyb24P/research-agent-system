@@ -301,8 +301,7 @@ internal command. An accepted dispatch returns `202` with the versioned
 
 | Method | Route | Route-specific body fields |
 |---|---|---|
-| `POST` | `/api/runtime-sessions/start` | `runtime_session_id`, `runtime_id` |
-| `POST` | `/api/runtime-sessions/attach` | `runtime_session_id`, `runtime_id` |
+| `POST` | `/api/agents/{agent_id}/start` | `runtime_id` (optional) |
 | `POST` | `/api/runtime-sessions/{runtime_session_id}/stop` | `runtime_id`, `expected_version` |
 | `POST` | `/api/runs/{run_id}/cancel` | — |
 | `POST` | `/api/work-orders/{work_order_id}/approve` | `grant_id` |
@@ -315,6 +314,15 @@ internal command. An accepted dispatch returns `202` with the versioned
 | `POST` | `/api/backups/verify` | `snapshot` |
 | `POST` | `/api/restores/plan` | `snapshot`, `database_destination`, `artifact_destination`, `expected_candidate_commit`, `expected_candidate_tag` |
 | `POST` | `/api/daemon-commands/{command_id}/resolve` | `resource_ref` (family-specific key/value pairs), `abandon` (optional) |
+
+`POST /api/agents/{agent_id}/start` is the only public launch route: it
+accepts just an optional `runtime_id` and the daemon resolves the launch spec
+from the trusted launch catalog (PROCESS runtimes start a supervised process
+session, HTTP runtimes attach to the registered endpoint), deriving the
+runtime session identity from the command identity so a replayed command maps
+to the same session. The former arbitrary
+`/api/runtime-sessions/start` and `/api/runtime-sessions/attach` routes are
+disabled; stopping a session still uses the per-session stop route above.
 
 The workspace, research-task, reject, and collaboration-message routes run
 through the orchestrator control authority, so they require the embedding

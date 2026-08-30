@@ -271,8 +271,7 @@ HUMAN 身份，再构造内部命令。接受后的派发返回 `202` 以及带�
 
 | 方法 | 路由 | 路由特有 Body 字段 |
 |---|---|---|
-| `POST` | `/api/runtime-sessions/start` | `runtime_session_id`、`runtime_id` |
-| `POST` | `/api/runtime-sessions/attach` | `runtime_session_id`、`runtime_id` |
+| `POST` | `/api/agents/{agent_id}/start` | `runtime_id`（可选） |
 | `POST` | `/api/runtime-sessions/{runtime_session_id}/stop` | `runtime_id`、`expected_version` |
 | `POST` | `/api/runs/{run_id}/cancel` | — |
 | `POST` | `/api/work-orders/{work_order_id}/approve` | `grant_id` |
@@ -285,6 +284,13 @@ HUMAN 身份，再构造内部命令。接受后的派发返回 `202` 以及带�
 | `POST` | `/api/backups/verify` | `snapshot` |
 | `POST` | `/api/restores/plan` | `snapshot`、`database_destination`、`artifact_destination`、`expected_candidate_commit`、`expected_candidate_tag` |
 | `POST` | `/api/daemon-commands/{command_id}/resolve` | `resource_ref`（命令族专属 key/value）、`abandon`（可选） |
+
+`POST /api/agents/{agent_id}/start` 是唯一的公开启动路由：它只接受可选的
+`runtime_id`，由 daemon 从受信 launch catalog 解析 launch spec（PROCESS
+runtime 启动受监督进程会话，HTTP runtime attach 到已注册端点），并按命令
+身份派生 runtime session 身份，使同一命令的重放映射到同一会话。原先任意的
+`/api/runtime-sessions/start` 与 `/api/runtime-sessions/attach` 路由已被禁用；
+停止会话仍使用上述按会话的 stop 路由。
 
 workspace、research-task、reject 与 collaboration-message 路由经由 orchestrator
 控制权威执行，因此要求嵌入应用暴露 `ResearchOrchestrator`；缺失时失败关闭。

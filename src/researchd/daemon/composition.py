@@ -32,6 +32,7 @@ from researchd.policy.approval import ApprovalService
 from researchd.policy.engine import DeterministicPolicyEngine, RecordingPolicyEngine
 from researchd.runtime_sessions.service import RuntimeSessionService
 from researchd.runtime_sessions.launch_profiles import RuntimeLaunchProfileService
+from researchd.runtime_sessions.managed_start import ManagedAgentStartService
 from researchd.storage.db import create_sqlite_engine, session_factory
 from researchd.supervisor.runtime import RuntimeSupervisor
 from researchd.workspace.service import WorkspaceDelegationService
@@ -134,7 +135,7 @@ class DaemonApplication:
     config: DaemonConfig
     daemon: ResearchDaemon
     api: LocalControlAPI
-    launch_profiles: RuntimeLaunchProfileService
+    managed_start: ManagedAgentStartService
     resolution: DaemonCommandResolutionService
 
 
@@ -167,6 +168,7 @@ def compose_daemon(config: DaemonConfig) -> DaemonApplication:
     invocations = InvocationService(sessions)
     registry = AgentRegistryService(sessions)
     launch_profiles = RuntimeLaunchProfileService(sessions, registry)
+    managed_start = ManagedAgentStartService(registry, launch_profiles)
     supervisor = RuntimeSupervisor(RuntimeSessionService(sessions, registry))
     barrier = build_startup_barrier(
         engine=engine,
@@ -204,6 +206,7 @@ def compose_daemon(config: DaemonConfig) -> DaemonApplication:
         supervisor,
         api,
         backups=BackupCommandService(database, artifacts_path),
+        managed_start=managed_start,
     )
     daemon = ResearchDaemon(barrier, DurableDaemonCommandService(sessions, dispatcher))
     resolution = DaemonCommandResolutionService(sessions, build_builtin_observers(sessions))
@@ -211,7 +214,7 @@ def compose_daemon(config: DaemonConfig) -> DaemonApplication:
         config=config,
         daemon=daemon,
         api=api,
-        launch_profiles=launch_profiles,
+        managed_start=managed_start,
         resolution=resolution,
     )
 

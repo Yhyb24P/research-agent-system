@@ -180,6 +180,21 @@ class AgentRegistryService:
                 query = query.where(AgentRuntimeRecord.agent_id == agent_id)
             return tuple(self._runtime_from_record(row) for row in session.scalars(query).all())
 
+    def list_enabled_runtimes(self, agent_id: str) -> tuple[AgentRuntime, ...]:
+        """Enabled runtimes owned by an enabled agent, ordered by runtime_id."""
+        with self.sessions() as session:
+            rows = session.scalars(
+                select(AgentRuntimeRecord)
+                .join(AgentRecord, AgentRecord.agent_id == AgentRuntimeRecord.agent_id)
+                .where(
+                    AgentRuntimeRecord.agent_id == agent_id,
+                    AgentRuntimeRecord.enabled.is_(True),
+                    AgentRecord.enabled.is_(True),
+                )
+                .order_by(AgentRuntimeRecord.runtime_id)
+            ).all()
+            return tuple(self._runtime_from_record(row) for row in rows)
+
     @staticmethod
     def _runtime_from_record(row: AgentRuntimeRecord) -> AgentRuntime:
         return AgentRuntime(runtime_id=AgentRuntimeId(row.runtime_id), agent_id=AgentId(row.agent_id), adapter_kind=AgentAdapterKind(row.adapter_kind), runtime_name=row.runtime_name, endpoint_ref=row.endpoint_ref, framework=row.framework, model_provider=row.model_provider, model_name=row.model_name, protocols=tuple(row.protocols_json), metadata=dict(row.metadata_json))

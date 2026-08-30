@@ -10,6 +10,7 @@ from researchd.daemon.contracts import (
     CollaborationMessageSendCommand,
     DaemonCommandResult,
     HumanDecisionCommand,
+    ManagedAgentStartCommand,
     ResearchTaskCreateCommand,
     RestorePlanCommand,
     RunCancelCommand,
@@ -36,10 +37,12 @@ class DaemonCommandDispatcher:
         supervisor: RuntimeSupervisor,
         control: "ControlMutationAuthority | None" = None,
         backups: "BackupMutationAuthority | None" = None,
+        managed_start: "ManagedAgentStartAuthority | None" = None,
     ) -> None:
         self.supervisor = supervisor
         self.control = control
         self.backups = backups
+        self.managed_start = managed_start
 
     def __call__(self, command: DomainModel) -> DomainModel | Awaitable[DomainModel]:
         if isinstance(command, RuntimeSessionStartCommand):
@@ -48,6 +51,17 @@ class DaemonCommandDispatcher:
             return self._accepted(command.command_id, "RuntimeSessionAttach", self.supervisor.attach(command))
         if isinstance(command, RuntimeSessionStopCommand):
             return self._accepted(command.command_id, "RuntimeSessionStop", self.supervisor.stop(command))
+        if isinstance(command, ManagedAgentStartCommand):
+            internal = self._managed_start().resolve(
+                command.agent_id,
+                command.runtime_id,
+                command_id=command.command_id,
+                actor_type=command.actor_type,
+                actor_id=command.actor_id,
+            )
+            if isinstance(internal, RuntimeSessionStartCommand):
+                return self._accepted(command.command_id, "ManagedAgentStart", self.supervisor.start(internal))
+            return self._accepted(command.command_id, "ManagedAgentStart", self.supervisor.attach(internal))
         if isinstance(command, RunCancelCommand):
             return self._cancel(command)
         if isinstance(command, WorkOrderApproveCommand):
@@ -139,6 +153,11 @@ class DaemonCommandDispatcher:
             raise RuntimeError("backup mutation authority is not configured")
         return self.backups
 
+    def _managed_start(self) -> "ManagedAgentStartAuthority":
+        if self.managed_start is None:
+            raise RuntimeError("managed agent start authority is not configured")
+        return self.managed_start
+
     @staticmethod
     def _accepted(command_id: str, command_type: str, resource: DomainModel | dict[str, object]) -> DaemonCommandResult:
         payload = (
@@ -204,4 +223,21 @@ class BackupMutationAuthority(Protocol):
     ) -> dict[str, object]: ...
 
 
-__all__ = ["BackupMutationAuthority", "ControlMutationAuthority", "DaemonCommandDispatcher"]
+class ManagedAgentStartAuthority(Protocol):
+    def resolve(
+        self,
+        agent_id: str,
+        runtime_id: str | None,
+        *,
+        command_id: str,
+        actor_type: str,
+        actor_id: str,
+    ) -> RuntimeSessionStartCommand | RuntimeSessionAttachCommand: ...
+
+
+__all__ = [
+    "BackupMutationAuthority",
+    "ControlMutationAuthority",
+    "DaemonCommandDispatcher",
+    "ManagedAgentStartAuthority",
+]

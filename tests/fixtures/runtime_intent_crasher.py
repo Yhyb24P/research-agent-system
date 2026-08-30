@@ -21,13 +21,14 @@ def main() -> None:
     parser.add_argument("database", type=Path)
     parser.add_argument("workspace", type=Path)
     parser.add_argument("--expected-version", type=int)
+    parser.add_argument("--session-id", default="runtime_session_crash_test")
     args = parser.parse_args()
     sessions = session_factory(create_sqlite_engine(args.database))
     service = RuntimeSessionService(sessions, AgentRegistryService(sessions))
     if args.action == "start":
         service.begin_start(RuntimeSessionStartCommand(
             command_id="command_crash_start",
-            runtime_session_id=RuntimeSessionId("runtime_session_crash_test"),
+            runtime_session_id=RuntimeSessionId(args.session_id),
             runtime_id=AgentRuntimeId("runtime_crash_test"),
             actor_type="SYSTEM",
             actor_id="crash-fixture",
@@ -41,7 +42,7 @@ def main() -> None:
             raise ValueError("stop requires expected version")
         service.begin_stop(RuntimeSessionStopCommand(
             command_id="command_crash_stop",
-            runtime_session_id=RuntimeSessionId("runtime_session_crash_test"),
+            runtime_session_id=RuntimeSessionId(args.session_id),
             runtime_id=AgentRuntimeId("runtime_crash_test"),
             actor_type="SYSTEM",
             actor_id="crash-fixture",

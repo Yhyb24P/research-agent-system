@@ -165,22 +165,6 @@ class RuntimeSessionStopCommand(_RuntimeSessionCommand):
     expected_version: PositiveInt
 
 
-class ExternalRuntimeSessionStartRequest(DomainModel):
-    """Untrusted intent selecting a server-owned PROCESS launch profile."""
-
-    request_version: Literal[1] = 1
-    command_id: str = Field(min_length=1, max_length=128)
-    runtime_session_id: RuntimeSessionId
-    runtime_id: AgentRuntimeId
-
-
-class ExternalRuntimeSessionAttachRequest(DomainModel):
-    request_version: Literal[1] = 1
-    command_id: str = Field(min_length=1, max_length=128)
-    runtime_session_id: RuntimeSessionId
-    runtime_id: AgentRuntimeId
-
-
 class ExternalRuntimeSessionStopRequest(DomainModel):
     request_version: Literal[1] = 1
     command_id: str = Field(min_length=1, max_length=128)

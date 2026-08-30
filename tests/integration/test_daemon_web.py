@@ -13,6 +13,7 @@ from researchd.daemon.contracts import (
     CollaborationMessageSendCommand,
     DaemonCommand,
     DaemonCommandResult,
+    ManagedAgentStartCommand,
     ResearchTaskCreateCommand,
     RestorePlanCommand,
     WorkOrderRejectCommand,
@@ -25,13 +26,7 @@ from researchd.daemon.reconciliation import (
 from researchd.daemon.runtime import DaemonNotReady, DaemonState, ResearchDaemon
 from researchd.daemon.startup import StartupBarrier, StartupPhase
 from researchd.domain.base import DomainModel
-from researchd.runtime_sessions.contracts import (
-    ProcessLaunchSpec,
-    ResolvedProcessLaunch,
-    ResolvedRemoteHttpLaunch,
-    RuntimeSession,
-    RuntimeSessionStartCommand,
-)
+from researchd.runtime_sessions.contracts import RuntimeSession
 from researchd.storage.db import create_sqlite_engine, session_factory
 
 
@@ -42,35 +37,22 @@ class RecordingDispatcher:
 
     def __call__(self, command: DomainModel) -> DaemonCommandResult:
         self.commands.append(command)
-        assert isinstance(command, RuntimeSessionStartCommand)
+        assert isinstance(command, ManagedAgentStartCommand)
         return DaemonCommandResult(
             command_id=command.command_id,
-            command_type="RuntimeSessionStart",
+            command_type="ManagedAgentStart",
             status="ACCEPTED",
             resource=self.result.model_dump(mode="json"),
         )
-
-
-class FakeLaunchProfiles:
-    def __init__(self, tmp_path: Path) -> None:
-        self.process = ProcessLaunchSpec(argv=("/usr/bin/true",), cwd=str(tmp_path))
-
-    def resolve_process(self, runtime_id: str) -> ResolvedProcessLaunch:
-        assert runtime_id == "runtime_test_1"
-        return ResolvedProcessLaunch(launch_spec=self.process, spec_sha256="a" * 64)
-
-    def resolve_remote_http(self, runtime_id: str) -> ResolvedRemoteHttpLaunch:
-        raise AssertionError(runtime_id)
 
 
 def _barrier() -> StartupBarrier:
     return StartupBarrier({phase: lambda: None for phase in StartupPhase})
 
 
-def _payload(tmp_path: Path) -> dict[str, object]:
+def _payload() -> dict[str, object]:
     return {
         "command_id": "cmd_start_1",
-        "runtime_session_id": "runtime_session_test_1",
         "runtime_id": "runtime_test_1",
     }
 
@@ -80,7 +62,7 @@ def _result(tmp_path: Path) -> RuntimeSession:
 
     now = datetime.now(UTC)
     return RuntimeSession.model_validate({
-        "runtime_session_id": "runtime_session_test_1",
+        "runtime_session_id": "runtime_session_managed_test_1",
         "runtime_id": "runtime_test_1",
         "launch_mode": "PROCESS",
         "supervisor_state": "HEALTHY",
@@ -97,44 +79,42 @@ def _result(tmp_path: Path) -> RuntimeSession:
     })
 
 
-def test_runtime_http_command_is_rejected_before_daemon_ready(tmp_path: Path) -> None:
+def test_managed_start_is_rejected_before_daemon_ready(tmp_path: Path) -> None:
     sessions = session_factory(create_sqlite_engine(tmp_path / "unused.db"))
     dispatcher = RecordingDispatcher(_result(tmp_path))
     daemon = ResearchDaemon(_barrier(), dispatcher)
-    router = ControlCommandRouter(
-        LocalControlAPI(sessions), daemon, launch_profiles=FakeLaunchProfiles(tmp_path)
-    )
+    router = ControlCommandRouter(LocalControlAPI(sessions), daemon)
 
     with pytest.raises(DaemonNotReady):
-        asyncio.run(router.post("/api/runtime-sessions/start", _payload(tmp_path)))
+        asyncio.run(router.post("/api/agents/agent_test_1/start", _payload()))
     assert dispatcher.commands == []
 
 
-def test_runtime_http_command_crosses_typed_ready_gate(tmp_path: Path) -> None:
+def test_managed_start_crosses_typed_ready_gate(tmp_path: Path) -> None:
     sessions = session_factory(create_sqlite_engine(tmp_path / "unused.db"))
     dispatcher = RecordingDispatcher(_result(tmp_path))
     daemon = ResearchDaemon(_barrier(), dispatcher)
     assert daemon.start().ready
-    router = ControlCommandRouter(
-        LocalControlAPI(sessions), daemon, launch_profiles=FakeLaunchProfiles(tmp_path)
-    )
+    router = ControlCommandRouter(LocalControlAPI(sessions), daemon)
 
     status, response = asyncio.run(
-        router.post("/api/runtime-sessions/start", _payload(tmp_path))
+        router.post("/api/agents/agent_test_1/start", _payload())
     )
 
     assert status == 202
     assert response["command_version"] == 1
     assert response["command_id"] == "cmd_start_1"
-    assert response["command_type"] == "RuntimeSessionStart"
+    assert response["command_type"] == "ManagedAgentStart"
     assert response["status"] == "ACCEPTED"
     resource = response["resource"]
     assert isinstance(resource, dict)
-    assert resource["runtime_session_id"] == "runtime_session_test_1"
-    assert isinstance(dispatcher.commands[0], RuntimeSessionStartCommand)
-    assert dispatcher.commands[0].actor_type == "HUMAN"
-    assert dispatcher.commands[0].actor_id == "local-control-client"
-    assert dispatcher.commands[0].launch_profile_sha256 == "a" * 64
+    assert resource["runtime_session_id"] == "runtime_session_managed_test_1"
+    command = dispatcher.commands[0]
+    assert isinstance(command, ManagedAgentStartCommand)
+    assert command.agent_id == "agent_test_1"
+    assert command.runtime_id == "runtime_test_1"
+    assert command.actor_type == "HUMAN"
+    assert command.actor_id == "local-control-client"
 
 
 def test_external_http_request_cannot_claim_trusted_actor(tmp_path: Path) -> None:
@@ -142,44 +122,57 @@ def test_external_http_request_cannot_claim_trusted_actor(tmp_path: Path) -> Non
     dispatcher = RecordingDispatcher(_result(tmp_path))
     daemon = ResearchDaemon(_barrier(), dispatcher)
     assert daemon.start().ready
-    router = ControlCommandRouter(
-        LocalControlAPI(sessions), daemon, launch_profiles=FakeLaunchProfiles(tmp_path)
-    )
-    payload = _payload(tmp_path)
+    router = ControlCommandRouter(LocalControlAPI(sessions), daemon)
+    payload = _payload()
     payload["actor_type"] = "SYSTEM"
     payload["actor_id"] = "forged-system"
 
     with pytest.raises(ValidationError):
-        asyncio.run(router.post("/api/runtime-sessions/start", payload))
+        asyncio.run(router.post("/api/agents/agent_test_1/start", payload))
 
     assert dispatcher.commands == []
 
 
-def test_external_http_request_cannot_override_process_launch_spec(tmp_path: Path) -> None:
+def test_external_http_request_cannot_carry_launch_body(tmp_path: Path) -> None:
     sessions = session_factory(create_sqlite_engine(tmp_path / "unused.db"))
     dispatcher = RecordingDispatcher(_result(tmp_path))
     daemon = ResearchDaemon(_barrier(), dispatcher)
     assert daemon.start().ready
-    router = ControlCommandRouter(
-        LocalControlAPI(sessions), daemon, launch_profiles=FakeLaunchProfiles(tmp_path)
-    )
-    payload = _payload(tmp_path)
+    router = ControlCommandRouter(LocalControlAPI(sessions), daemon)
+    payload = _payload()
     payload["launch_spec"] = {"argv": ["/bin/sh", "-c", "id"], "cwd": "/"}
 
     with pytest.raises(ValidationError):
-        asyncio.run(router.post("/api/runtime-sessions/start", payload))
+        asyncio.run(router.post("/api/agents/agent_test_1/start", payload))
 
     assert dispatcher.commands == []
 
 
-def test_runtime_http_command_requires_daemon(tmp_path: Path) -> None:
+def test_legacy_runtime_session_launch_routes_are_disabled(tmp_path: Path) -> None:
     sessions = session_factory(create_sqlite_engine(tmp_path / "unused.db"))
-    router = ControlCommandRouter(
-        LocalControlAPI(sessions), launch_profiles=FakeLaunchProfiles(tmp_path)
+    dispatcher = RecordingDispatcher(_result(tmp_path))
+    daemon = ResearchDaemon(_barrier(), dispatcher)
+    assert daemon.start().ready
+    router = ControlCommandRouter(LocalControlAPI(sessions), daemon)
+
+    status, response = asyncio.run(
+        router.post("/api/runtime-sessions/start", _payload())
     )
+    assert status == 404
+    assert response == {"error": "unknown command"}
+    status, response = asyncio.run(
+        router.post("/api/runtime-sessions/attach", _payload())
+    )
+    assert status == 404
+    assert dispatcher.commands == []
+
+
+def test_managed_start_requires_daemon(tmp_path: Path) -> None:
+    sessions = session_factory(create_sqlite_engine(tmp_path / "unused.db"))
+    router = ControlCommandRouter(LocalControlAPI(sessions))
 
     with pytest.raises(RuntimeError, match="requires researchd"):
-        asyncio.run(router.post("/api/runtime-sessions/start", _payload(tmp_path)))
+        asyncio.run(router.post("/api/agents/agent_test_1/start", _payload()))
 
 
 _CONTROL_MUTATIONS: tuple[tuple[str, dict[str, object]], ...] = (

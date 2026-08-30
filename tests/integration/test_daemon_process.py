@@ -186,10 +186,10 @@ def test_researchd_restart_reattaches_live_runtime_and_preserves_audit_order(
     runtime_pid: int | None = None
     try:
         _wait_for_health(first, port)
-        started = _post(port, "/api/runtime-sessions/start", {
+        # The managed flow omits runtime_id: the daemon selects the agent's
+        # single enabled runtime and derives the session identity itself.
+        started = _post(port, "/api/agents/agent_restart_test/start", {
             "command_id": "command_restart_start",
-            "runtime_session_id": "runtime_session_restart_test",
-            "runtime_id": "runtime_crash_test",
         }, state)
         started_resource = cast(dict[str, object], started["resource"])
         assert started["status"] == "ACCEPTED"
@@ -232,7 +232,7 @@ def test_researchd_restart_reattaches_live_runtime_and_preserves_audit_order(
         assert after_offsets == list(range(1, len(after_offsets) + 1))
         assert after_offsets[:len(before_offsets)] == before_offsets
 
-        stopped = _post(port, "/api/runtime-sessions/runtime_session_restart_test/stop", {
+        stopped = _post(port, f"/api/runtime-sessions/{started_resource['runtime_session_id']}/stop", {
             "command_id": "command_restart_stop",
             "runtime_id": "runtime_crash_test",
             "expected_version": session["version"],
@@ -292,9 +292,8 @@ def test_start_intent_crash_never_relaunches_uncertain_process(tmp_path: Path) -
         assert session["external_identity"] is None
         assert session["exit_reason"] == "missing_external_identity"
         with pytest.raises(HTTPError) as rejected:
-            _post(port, "/api/runtime-sessions/start", {
+            _post(port, "/api/agents/agent_restart_test/start", {
                 "command_id": "command_must_be_rejected",
-                "runtime_session_id": "runtime_session_rejected",
                 "runtime_id": "runtime_crash_test",
             }, state)
         assert rejected.value.code == 409
@@ -322,9 +321,8 @@ def test_stop_intent_crash_is_finished_by_restart_reconciliation(tmp_path: Path)
     runtime_pid: int | None = None
     try:
         _wait_for_health(first, port)
-        started = _post(port, "/api/runtime-sessions/start", {
+        started = _post(port, "/api/agents/agent_restart_test/start", {
             "command_id": "command_normal_start",
-            "runtime_session_id": "runtime_session_crash_test",
             "runtime_id": "runtime_crash_test",
         }, state)
         started_resource = cast(dict[str, object], started["resource"])
@@ -337,6 +335,7 @@ def test_stop_intent_crash_is_finished_by_restart_reconciliation(tmp_path: Path)
             str(ROOT / "tests/fixtures/runtime_intent_crasher.py"),
             "stop", str(database), str(tmp_path),
             "--expected-version", str(started_resource["version"]),
+            "--session-id", str(started_resource["runtime_session_id"]),
         ], check=False)
         assert crashed.returncode == 73
 

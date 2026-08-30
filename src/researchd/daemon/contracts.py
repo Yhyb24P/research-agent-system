@@ -76,6 +76,14 @@ class ExternalCollaborationMessageSendRequest(ExternalCommandRequest):
     ] = "PROJECT_PRIVATE"
 
 
+class ExternalManagedAgentStartRequest(ExternalCommandRequest):
+    """Agent-scoped launch intent; the daemon resolves the launch spec."""
+
+    runtime_id: str | None = Field(
+        default=None, pattern=r"^runtime_[A-Za-z0-9][A-Za-z0-9_-]*$"
+    )
+
+
 class ExternalBackupCreateRequest(ExternalCommandRequest):
     destination: str = Field(min_length=1, max_length=1024)
     candidate_commit: str = Field(pattern=r"^[0-9a-f]{40}$")
@@ -158,6 +166,15 @@ class CollaborationMessageSendCommand(DaemonCommand):
     ] = "PROJECT_PRIVATE"
 
 
+class ManagedAgentStartCommand(DaemonCommand):
+    """Agent-scoped launch intent; only the daemon may see a launch spec."""
+
+    agent_id: str = Field(pattern=r"^agent_[A-Za-z0-9][A-Za-z0-9_-]*$")
+    runtime_id: str | None = Field(
+        default=None, pattern=r"^runtime_[A-Za-z0-9][A-Za-z0-9_-]*$"
+    )
+
+
 class BackupCreateCommand(DaemonCommand):
     destination: str = Field(min_length=1, max_length=1024)
     candidate_commit: str = Field(pattern=r"^[0-9a-f]{40}$")
@@ -198,6 +215,7 @@ __all__ = [
     "ExternalCollaborationMessageSendRequest",
     "ExternalDaemonCommandResolveRequest",
     "ExternalHumanDecisionRequest",
+    "ExternalManagedAgentStartRequest",
     "ExternalResearchTaskCreateRequest",
     "ExternalRestorePlanRequest",
     "ExternalRunCancelRequest",
@@ -205,6 +223,7 @@ __all__ = [
     "ExternalWorkOrderRejectRequest",
     "ExternalWorkspaceCreateRequest",
     "HumanDecisionCommand",
+    "ManagedAgentStartCommand",
     "ResearchTaskCreateCommand",
     "RestorePlanCommand",
     "RunCancelCommand",

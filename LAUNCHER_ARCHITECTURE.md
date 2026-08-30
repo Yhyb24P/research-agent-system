@@ -291,6 +291,16 @@ The productization branch now contains the first LP01/LP02 foundation:
   reads a stored message record including its classification. The AG-UI
   projection keeps its explicit key selection, so `LOCAL_ONLY`/`SECRET`
   bodies remain redacted from the AG-UI stream.
+- PX01-03 ManagedAgentStart: the public launch surface is now
+  `POST /api/agents/{agent_id}/start` with an optional `runtime_id` — the
+  daemon resolves the launch spec from the trusted launch catalog
+  (`ManagedAgentStartService` over the existing registry and
+  `RuntimeLaunchProfileService`) and dispatches the internal
+  `RuntimeSessionStart`/`RuntimeSessionAttach` command through the
+  supervisor. The runtime session identity is derived from the command
+  identity, so a replayed command maps to the same session. The arbitrary
+  public `/api/runtime-sessions/start` and `/api/runtime-sessions/attach`
+  routes are disabled; the per-session stop route remains.
 
 产品化分支现已实现首批 LP01/LP02 基础：持久化运行实例和类型化命令凭证、拒绝
 PID 复用的 PROCESS supervisor、受限 REMOTE_HTTP attach、先 intent 后副作用的审计
@@ -341,6 +351,13 @@ PX00-06 事件投影补全：run event payload 现携带权威审计流的 `acto
 `Last-Event-ID`/`after` 续读与可选 follow，与 JSON `/api/system-events` 投影同源；
 `GET /api/collaboration-messages/{id}` 按 id 读取消息记录（含 classification）。
 AG-UI 投影保持显式选键，`LOCAL_ONLY`/`SECRET` 正文在 AG-UI 流中依旧脱敏。
+PX01-03 ManagedAgentStart：公开启动面收敛为 `POST /api/agents/{agent_id}/start`
+（仅可选 `runtime_id`）——daemon 经 `ManagedAgentStartService`（复用既有
+registry 与 `RuntimeLaunchProfileService`）从受信 launch catalog 解析 launch
+spec，再向 supervisor 派发内部 `RuntimeSessionStart`/`RuntimeSessionAttach`
+命令；runtime session 身份由命令身份派生，同一命令重放映射到同一会话。
+原先任意的公开 `/api/runtime-sessions/start` 与 `/api/runtime-sessions/attach`
+路由已禁用，按会话的 stop 路由保留。
 
 This is still an implementation milestone, not completion of the productized
 launcher. The daily `research` client and LP03 managed Agent pilot remain open.
