@@ -146,6 +146,14 @@ class DelegationPurpose(StrEnum):
     SPECIALIST = "SPECIALIST"
 
 
+class CollaborationPurpose(StrEnum):
+    DISCUSSION = "DISCUSSION"
+    STATUS = "STATUS"
+    QUESTION = "QUESTION"
+    DIRECTIVE = "DIRECTIVE"
+    NOTICE = "NOTICE"
+
+
 class DelegationState(StrEnum):
     PENDING = "PENDING"
     ASSIGNED = "ASSIGNED"

@@ -20,7 +20,7 @@ from researchd.daemon.contracts import (
 )
 from researchd.domain.base import DomainModel
 from researchd.domain.enums import DataClassification
-from researchd.domain.ids import AgentId, MessageId
+from researchd.domain.ids import AgentId, DelegationId, InvocationId, MessageId
 from researchd.runtime_sessions.contracts import (
     RuntimeSessionAttachCommand,
     RuntimeSessionStartCommand,
@@ -101,6 +101,9 @@ class DaemonCommandDispatcher:
                 message_id=MessageId(command.message_id),
                 run_id=command.run_id,
                 work_order_id=command.work_order_id,
+                delegation_id=(DelegationId(command.delegation_id) if command.delegation_id else None),
+                invocation_id=(InvocationId(command.invocation_id) if command.invocation_id else None),
+                reply_to_message_id=(MessageId(command.reply_to_message_id) if command.reply_to_message_id else None),
                 sender_actor_type=command.actor_type,
                 sender_actor_id=command.actor_id,
                 recipient_agent_id=(

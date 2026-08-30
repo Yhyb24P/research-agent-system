@@ -181,7 +181,7 @@ shell command batch (`status`, agent working set, `run list`,
 the browser application bootstrap remains open.
 
 An embedding composition must register its trusted services and use
-`build_startup_barrier(...)`. The barrier verifies migration `0022` and live
+`build_startup_barrier(...)`. The barrier verifies migration `0023` and live
 DB/CAS state, then invokes the existing workspace, worktree, RuntimeSession,
 job, and invocation recovery paths in the frozen order. A failed or skipped
 phase leaves `ResearchDaemon` non-ready; callers cannot bypass that state with
@@ -290,6 +290,11 @@ The `research-coder-agent` reference process implements the corresponding
 credential-free loopback turn protocol. It proposes typed actions only;
 `researchd` executes granted actions through `CapabilityBroker` and constructs
 the authoritative `ExecutorResult`.
+
+Collaboration messages use a closed purpose vocabulary (`DISCUSSION`,
+`STATUS`, `QUESTION`, `DIRECTIVE`, `NOTICE`) and may durably reference one
+WorkOrder, Delegation, Invocation, or prior message in the same run. These
+links remain communication context and never confer workflow authority.
 
 For a deliberately read-only projection without daemon mutations, embed only
 the local API:

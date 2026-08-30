@@ -66,10 +66,13 @@ class ExternalCollaborationMessageSendRequest(ExternalCommandRequest):
     message_id: str = Field(pattern=r"^msg_[A-Za-z0-9][A-Za-z0-9_-]*$")
     run_id: str = Field(min_length=1, max_length=128)
     work_order_id: str | None = Field(default=None, min_length=1, max_length=128)
+    delegation_id: str | None = Field(default=None, min_length=1, max_length=128)
+    invocation_id: str | None = Field(default=None, min_length=1, max_length=128)
+    reply_to_message_id: str | None = Field(default=None, min_length=1, max_length=128)
     recipient_agent_id: str | None = Field(
         default=None, pattern=r"^agent_[A-Za-z0-9][A-Za-z0-9_-]*$"
     )
-    purpose: str = Field(min_length=1, max_length=64)
+    purpose: Literal["DISCUSSION", "STATUS", "QUESTION", "DIRECTIVE", "NOTICE"]
     body: str = Field(min_length=1, max_length=32_768)
     classification: Literal[
         "PUBLIC", "CLOUD_SAFE", "PROJECT_PRIVATE", "LOCAL_ONLY", "SECRET"
@@ -156,10 +159,13 @@ class CollaborationMessageSendCommand(DaemonCommand):
     message_id: str = Field(pattern=r"^msg_[A-Za-z0-9][A-Za-z0-9_-]*$")
     run_id: str = Field(min_length=1, max_length=128)
     work_order_id: str | None = Field(default=None, min_length=1, max_length=128)
+    delegation_id: str | None = Field(default=None, min_length=1, max_length=128)
+    invocation_id: str | None = Field(default=None, min_length=1, max_length=128)
+    reply_to_message_id: str | None = Field(default=None, min_length=1, max_length=128)
     recipient_agent_id: str | None = Field(
         default=None, pattern=r"^agent_[A-Za-z0-9][A-Za-z0-9_-]*$"
     )
-    purpose: str = Field(min_length=1, max_length=64)
+    purpose: Literal["DISCUSSION", "STATUS", "QUESTION", "DIRECTIVE", "NOTICE"]
     body: str = Field(min_length=1, max_length=32_768)
     classification: Literal[
         "PUBLIC", "CLOUD_SAFE", "PROJECT_PRIVATE", "LOCAL_ONLY", "SECRET"

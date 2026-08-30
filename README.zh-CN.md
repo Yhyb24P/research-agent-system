@@ -164,7 +164,7 @@ agent 工作集、`run list`、`task create`/`task cancel`、`msg`、`events wat
 `approve`、`reject`）；浏览器应用启动入口仍未完成。
 
 嵌入式 composition 必须注册可信服务并使用 `build_startup_barrier(...)`。该屏障先验证
-migration `0022` 和实时 DB/CAS 状态，再按冻结顺序调用已有 workspace、worktree、
+migration `0023` 和实时 DB/CAS 状态，再按冻结顺序调用已有 workspace、worktree、
 RuntimeSession、job 和 invocation 恢复路径。任一阶段失败或跳过都会让
 `ResearchDaemon` 保持 non-ready；调用方不能用 free-text 或直接 SQL mutation 绕过。
 
@@ -258,6 +258,10 @@ invocation 仅调用 Registry 持有的 loopback endpoint，绝不二次执行�
 `research-coder-agent` 参考进程实现对应的无凭据 loopback turn protocol。
 它只能提出类型化 action；`researchd` 经 `CapabilityBroker` 执行已授权 action，
 并由控制面构造权威 `ExecutorResult`。
+
+CollaborationMessage 使用封闭 purpose 集合（`DISCUSSION`、`STATUS`、
+`QUESTION`、`DIRECTIVE`、`NOTICE`），并可持久关联同一 run 内的 WorkOrder、
+Delegation、Invocation 或前序消息。这些关联只提供沟通上下文，不授予工作流权威。
 
 如需明确不允许 daemon mutation 的只读投影，可只嵌入 local API：
 

@@ -3,7 +3,7 @@ from typing import Annotated, Literal
 from pydantic import Field, PositiveInt, model_validator
 
 from researchd.domain.base import DomainModel
-from researchd.domain.enums import AgentAdapterKind, AgentTrustZone, DataClassification, DelegationPurpose, DelegationState, InvocationStatus
+from researchd.domain.enums import AgentAdapterKind, AgentTrustZone, CollaborationPurpose, DataClassification, DelegationPurpose, DelegationState, InvocationStatus
 from researchd.domain.ids import AgentId, AgentRuntimeId, DelegationId, InvocationId, MessageId
 from researchd.context.builder import CloudContextSelection
 from researchd.context.agent_context import AgentContextBundle
@@ -164,10 +164,13 @@ class CollaborationMessage(DomainModel):
     message_id: MessageId
     run_id: str
     work_order_id: str | None = None
+    delegation_id: DelegationId | None = None
+    invocation_id: InvocationId | None = None
+    reply_to_message_id: MessageId | None = None
     sender_actor_type: str = Field(min_length=1)
     sender_actor_id: str = Field(min_length=1)
     recipient_agent_id: AgentId | None = None
-    purpose: str = Field(min_length=1)
+    purpose: CollaborationPurpose
     body: str = Field(min_length=1, max_length=32_768)
     classification: DataClassification = DataClassification.PROJECT_PRIVATE
     metadata: dict[str, str] = Field(default_factory=dict)

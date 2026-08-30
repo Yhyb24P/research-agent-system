@@ -19,6 +19,7 @@ from uuid import uuid4
 from researchd.client.transport import StreamFrame, TransportError
 
 _CLASSIFICATIONS = ("PUBLIC", "CLOUD_SAFE", "PROJECT_PRIVATE", "LOCAL_ONLY", "SECRET")
+_MESSAGE_PURPOSES = ("DISCUSSION", "STATUS", "QUESTION", "DIRECTIVE", "NOTICE")
 
 
 class ShellTransport(Protocol):
@@ -160,6 +161,8 @@ def _parse_msg(tokens: list[str]) -> ParsedCommand:
         raise ShellParseError(
             "classification must be one of: " + ", ".join(_CLASSIFICATIONS)
         )
+    if "purpose" in options and options["purpose"] not in _MESSAGE_PURPOSES:
+        raise ShellParseError("purpose must be one of: " + ", ".join(_MESSAGE_PURPOSES))
     return ParsedCommand("msg", tuple(positionals), options)
 
 
@@ -281,7 +284,7 @@ def _execute(
         payload: dict[str, Any] = {
             "message_id": f"msg_{uuid4().hex}",
             "run_id": run_id,
-            "purpose": command.options.get("purpose", "operator-message"),
+            "purpose": command.options.get("purpose", "DISCUSSION"),
             "body": body,
         }
         if "to" in command.options:

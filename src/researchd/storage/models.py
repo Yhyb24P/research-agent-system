@@ -425,10 +425,19 @@ class AgentInvocationRecord(Base):
 
 class CollaborationMessageRecord(Base):
     __tablename__ = "collaboration_messages"
-    __table_args__ = (Index("ix_collaboration_messages_run_created", "run_id", "created_at"),)
+    __table_args__ = (
+        CheckConstraint(
+            "purpose IN ('DISCUSSION','STATUS','QUESTION','DIRECTIVE','NOTICE')",
+            name="ck_messages_purpose",
+        ),
+        Index("ix_collaboration_messages_run_created", "run_id", "created_at"),
+    )
     message_id: Mapped[str] = mapped_column(String(128), primary_key=True)
     run_id: Mapped[str] = mapped_column(ForeignKey("research_runs.run_id"), nullable=False)
     work_order_id: Mapped[str | None] = mapped_column(ForeignKey("work_orders.work_order_id"))
+    delegation_id: Mapped[str | None] = mapped_column(ForeignKey("delegations.delegation_id"))
+    invocation_id: Mapped[str | None] = mapped_column(ForeignKey("agent_invocations.invocation_id"))
+    reply_to_message_id: Mapped[str | None] = mapped_column(ForeignKey("collaboration_messages.message_id"))
     sender_actor_type: Mapped[str] = mapped_column(String(32), nullable=False)
     sender_actor_id: Mapped[str] = mapped_column(String(128), nullable=False)
     recipient_agent_id: Mapped[str | None] = mapped_column(ForeignKey("agents.agent_id"))
