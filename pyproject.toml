@@ -24,6 +24,7 @@ qualification = [
 ]
 
 [project.scripts]
+research = "researchd.client.cli:entrypoint"
 researchctl = "researchd.cli.main:entrypoint"
 researchd = "researchd.daemon.cli:entrypoint"
 
