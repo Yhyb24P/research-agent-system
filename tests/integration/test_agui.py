@@ -204,8 +204,6 @@ def test_ui_commands_are_typed_and_cannot_submit_arbitrary_mutation_events(tmp_p
 
     cancel_status, cancel = asyncio.run(router.post("/api/runs/run_1/cancel", {
         "command_id": "cmd_cancel_1",
-        "actor_type": "HUMAN",
-        "actor_id": "operator",
     }))
     assert cancel_status == 202
     assert cancel["command_version"] == 1
@@ -216,8 +214,6 @@ def test_ui_commands_are_typed_and_cannot_submit_arbitrary_mutation_events(tmp_p
 
     approve_status, approve = asyncio.run(router.post("/api/work-orders/wo_1/approve", {
         "command_id": "cmd_approve_1",
-        "actor_type": "HUMAN",
-        "actor_id": "operator",
         "grant_id": "grant_1",
     }))
     assert approve_status == 202
@@ -230,8 +226,6 @@ def test_ui_commands_are_typed_and_cannot_submit_arbitrary_mutation_events(tmp_p
         "/api/work-orders/wo_1/human-decision",
         {
             "command_id": "cmd_decision_1",
-            "actor_type": "HUMAN",
-            "actor_id": "operator",
             "action": "revise",
             "objective": "narrow the task",
         },
@@ -255,8 +249,6 @@ def test_ui_commands_are_typed_and_cannot_submit_arbitrary_mutation_events(tmp_p
     with pytest.raises(ValidationError):
         asyncio.run(router.post("/api/work-orders/wo_1/human-decision", {
             "command_id": "cmd_decision_invalid",
-            "actor_type": "HUMAN",
-            "actor_id": "operator",
             "action": "revise",
         }))
 
@@ -422,8 +414,6 @@ def test_simultaneous_typed_approval_commands_preserve_one_shot_authority(tmp_pa
                 "/api/work-orders/wo_stream/approve",
                 {
                     "command_id": "cmd_approve_concurrent",
-                    "actor_type": "HUMAN",
-                    "actor_id": "human_reviewer",
                     "grant_id": grant.grant_id,
                 },
             )

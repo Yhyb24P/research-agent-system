@@ -1,6 +1,7 @@
 import asyncio
 from pathlib import Path
 import pytest
+from pydantic import ValidationError
 
 from researchd.api.control import LocalControlAPI
 from researchd.api.web import ControlCommandRouter
@@ -37,8 +38,6 @@ def _payload(tmp_path: Path) -> dict[str, object]:
         "command_id": "cmd_start_1",
         "runtime_session_id": "runtime_session_test_1",
         "runtime_id": "runtime_test_1",
-        "actor_type": "HUMAN",
-        "actor_id": "operator",
         "launch_spec": {"argv": ["/usr/bin/true"], "cwd": str(tmp_path)},
     }
 
@@ -96,6 +95,24 @@ def test_runtime_http_command_crosses_typed_ready_gate(tmp_path: Path) -> None:
     assert isinstance(resource, dict)
     assert resource["runtime_session_id"] == "runtime_session_test_1"
     assert isinstance(dispatcher.commands[0], RuntimeSessionStartCommand)
+    assert dispatcher.commands[0].actor_type == "HUMAN"
+    assert dispatcher.commands[0].actor_id == "local-control-client"
+
+
+def test_external_http_request_cannot_claim_trusted_actor(tmp_path: Path) -> None:
+    sessions = session_factory(create_sqlite_engine(tmp_path / "unused.db"))
+    dispatcher = RecordingDispatcher(_result(tmp_path))
+    daemon = ResearchDaemon(_barrier(), dispatcher)
+    assert daemon.start().ready
+    router = ControlCommandRouter(LocalControlAPI(sessions), daemon)
+    payload = _payload(tmp_path)
+    payload["actor_type"] = "SYSTEM"
+    payload["actor_id"] = "forged-system"
+
+    with pytest.raises(ValidationError):
+        asyncio.run(router.post("/api/runtime-sessions/start", payload))
+
+    assert dispatcher.commands == []
 
 
 def test_runtime_http_command_requires_daemon(tmp_path: Path) -> None:
@@ -109,19 +126,13 @@ def test_runtime_http_command_requires_daemon(tmp_path: Path) -> None:
 _CONTROL_MUTATIONS: tuple[tuple[str, dict[str, object]], ...] = (
     ("/api/runs/run_gate/cancel", {
         "command_id": "cmd_cancel_gate",
-        "actor_type": "HUMAN",
-        "actor_id": "operator",
     }),
     ("/api/work-orders/wo_gate/approve", {
         "command_id": "cmd_approve_gate",
-        "actor_type": "HUMAN",
-        "actor_id": "operator",
         "grant_id": "grant_gate",
     }),
     ("/api/work-orders/wo_gate/human-decision", {
         "command_id": "cmd_decision_gate",
-        "actor_type": "HUMAN",
-        "actor_id": "operator",
         "action": "abort",
     }),
 )

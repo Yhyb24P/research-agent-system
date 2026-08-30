@@ -266,9 +266,11 @@ The read-only bootstrap intentionally rejects state-changing commands. An
 embedding application must construct `LocalControlAPI` with a
 `ResearchOrchestrator`; typed commands then cross the `ResearchDaemon`
 readiness gate and enter the existing policy/state machine through these
-routes. Every body carries the command identity fields `command_id`,
-`actor_type` (`HUMAN`/`SYSTEM`) and `actor_id`; an accepted dispatch returns
-`202` with the versioned `DaemonCommandResult` envelope (`command_version`,
+routes. An external request carries `request_version`, `command_id`, and only
+route-specific intent fields. It cannot submit `actor_type` or `actor_id`;
+the HTTP adapter binds a HUMAN identity server-side before constructing the
+internal command. An accepted dispatch returns `202` with the versioned
+`DaemonCommandResult` envelope (`command_version`,
 `command_id`, `command_type`, `status`, `resource`):
 
 | Method | Route | Route-specific body fields |
@@ -283,6 +285,10 @@ without repeating the side effect; reusing the identity with different input
 is rejected. A receipt left `ACCEPTED` by an interrupted dispatch is never
 replayed automatically: it remains visible through `/api/daemon-commands` and
 blocks READY until an operator reconciliation mechanism resolves it.
+
+Local authentication is not implemented yet. Loopback binding and server-side
+actor binding do not by themselves identify a client, so this control surface
+must not be treated as product-ready until PX00 local credentials are wired.
 
 Arbitrary UI events have no mutation endpoint.
 

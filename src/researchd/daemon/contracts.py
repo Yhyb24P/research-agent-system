@@ -14,6 +14,32 @@ class DaemonCommand(DomainModel):
     actor_id: str = Field(min_length=1, max_length=128)
 
 
+class ExternalCommandRequest(DomainModel):
+    """Untrusted transport intent; actor identity is deliberately absent."""
+
+    request_version: Literal[1] = 1
+    command_id: str = Field(min_length=1, max_length=128)
+
+
+class ExternalRunCancelRequest(ExternalCommandRequest):
+    pass
+
+
+class ExternalWorkOrderApproveRequest(ExternalCommandRequest):
+    grant_id: str = Field(min_length=1, max_length=128)
+
+
+class ExternalHumanDecisionRequest(ExternalCommandRequest):
+    action: Literal["abort", "revise"]
+    objective: str | None = Field(default=None, min_length=1, max_length=16_384)
+
+    @model_validator(mode="after")
+    def revision_requires_objective(self) -> "ExternalHumanDecisionRequest":
+        if self.action == "revise" and self.objective is None:
+            raise ValueError("revision objective is required")
+        return self
+
+
 class RunCancelCommand(DaemonCommand):
     run_id: str = Field(min_length=1, max_length=128)
 
@@ -47,6 +73,10 @@ class DaemonCommandResult(DomainModel):
 __all__ = [
     "DaemonCommand",
     "DaemonCommandResult",
+    "ExternalCommandRequest",
+    "ExternalHumanDecisionRequest",
+    "ExternalRunCancelRequest",
+    "ExternalWorkOrderApproveRequest",
     "HumanDecisionCommand",
     "RunCancelCommand",
     "WorkOrderApproveCommand",

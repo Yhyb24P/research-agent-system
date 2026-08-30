@@ -244,6 +244,11 @@ The productization branch now contains the first LP01/LP02 foundation:
   verification driver satisfies the `VerificationDriver` protocol yet, and the
   cloud/executor Agent adapters remain unwired until managed Agents attach
   (LP03/LP04).
+- PX00 external request DTOs now exclude trusted actor fields. The HTTP adapter
+  derives a HUMAN actor before constructing internal commands, and rejects
+  caller-supplied `SYSTEM`/actor attribution before dispatch. Local client
+  authentication and the server-owned RuntimeLaunchProfile remain P0 gaps;
+  loopback binding alone is not treated as authentication.
 
 产品化分支现已实现首批 LP01/LP02 基础：持久化运行实例和类型化命令凭证、拒绝
 PID 复用的 PROCESS supervisor、受限 REMOTE_HTTP attach、先 intent 后副作用的审计
@@ -265,6 +270,9 @@ work-order approve 和 human-decision 三个 HTTP 路由与 RuntimeSession 命�
 因此经 gate 派发的控制面 mutation 均由可信 controller 真实执行。两个槽位刻意留空并失败
 关闭：尚无可满足 `VerificationDriver` 协议的验证 driver；cloud/executor Agent adapter
 待受管 Agent 接入（LP03/LP04）。
+PX00 外部请求 DTO 现已排除可信 actor 字段；HTTP adapter 在构造内部命令前由服务端绑定
+HUMAN actor，调用方自报的 `SYSTEM` 或 actor attribution 会在派发前被拒绝。本地客户端
+认证和 server-owned RuntimeLaunchProfile 仍是 P0 缺口；loopback 监听不等于认证。
 
 This is still an implementation milestone, not completion of the productized
 launcher. The daily `research` client and LP03 managed Agent pilot remain open.

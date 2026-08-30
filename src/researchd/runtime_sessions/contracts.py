@@ -129,6 +129,31 @@ class RuntimeSessionStopCommand(_RuntimeSessionCommand):
     expected_version: PositiveInt
 
 
+class ExternalRuntimeSessionStartRequest(DomainModel):
+    """Temporary external start intent; launch specs move server-side in PX00-03."""
+
+    request_version: Literal[1] = 1
+    command_id: str = Field(min_length=1, max_length=128)
+    runtime_session_id: RuntimeSessionId
+    runtime_id: AgentRuntimeId
+    launch_spec: ProcessLaunchSpec
+
+
+class ExternalRuntimeSessionAttachRequest(DomainModel):
+    request_version: Literal[1] = 1
+    command_id: str = Field(min_length=1, max_length=128)
+    runtime_session_id: RuntimeSessionId
+    runtime_id: AgentRuntimeId
+    launch_spec: RemoteHttpAttachSpec
+
+
+class ExternalRuntimeSessionStopRequest(DomainModel):
+    request_version: Literal[1] = 1
+    command_id: str = Field(min_length=1, max_length=128)
+    runtime_id: AgentRuntimeId
+    expected_version: PositiveInt
+
+
 class RuntimeSession(DomainModel):
     runtime_session_id: RuntimeSessionId
     runtime_id: AgentRuntimeId

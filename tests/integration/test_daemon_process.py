@@ -161,8 +161,6 @@ def test_researchd_restart_reattaches_live_runtime_and_preserves_audit_order(
             "command_id": "command_restart_start",
             "runtime_session_id": "runtime_session_restart_test",
             "runtime_id": "runtime_crash_test",
-            "actor_type": "SYSTEM",
-            "actor_id": "restart-test",
             "launch_spec": {"argv": ["/usr/bin/sleep", "60"], "cwd": str(tmp_path)},
         })
         started_resource = cast(dict[str, object], started["resource"])
@@ -197,8 +195,6 @@ def test_researchd_restart_reattaches_live_runtime_and_preserves_audit_order(
         stopped = _post(port, "/api/runtime-sessions/runtime_session_restart_test/stop", {
             "command_id": "command_restart_stop",
             "runtime_id": "runtime_crash_test",
-            "actor_type": "SYSTEM",
-            "actor_id": "restart-test",
             "expected_version": session["version"],
         })
         stopped_resource = cast(dict[str, object], stopped["resource"])
@@ -260,7 +256,6 @@ def test_start_intent_crash_never_relaunches_uncertain_process(tmp_path: Path) -
                 "command_id": "command_must_be_rejected",
                 "runtime_session_id": "runtime_session_rejected",
                 "runtime_id": "runtime_crash_test",
-                "actor_type": "SYSTEM", "actor_id": "crash-test",
                 "launch_spec": {"argv": ["/usr/bin/true"], "cwd": str(tmp_path)},
             })
         assert rejected.value.code == 409
@@ -291,7 +286,6 @@ def test_stop_intent_crash_is_finished_by_restart_reconciliation(tmp_path: Path)
             "command_id": "command_normal_start",
             "runtime_session_id": "runtime_session_crash_test",
             "runtime_id": "runtime_crash_test",
-            "actor_type": "SYSTEM", "actor_id": "crash-test",
             "launch_spec": {"argv": ["/usr/bin/sleep", "60"], "cwd": str(tmp_path)},
         })
         started_resource = cast(dict[str, object], started["resource"])
@@ -370,8 +364,6 @@ def test_generic_command_crash_blocks_ready_without_replaying(tmp_path: Path) ->
         with pytest.raises(HTTPError) as rejected:
             _post(port, "/api/runs/run_another/cancel", {
                 "command_id": "command_after_crash",
-                "actor_type": "SYSTEM",
-                "actor_id": "crash-test",
             })
         assert rejected.value.code == 409
     finally:

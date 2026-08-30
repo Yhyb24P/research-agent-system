@@ -242,9 +242,10 @@ curl -N http://127.0.0.1:8788/api/runs/<run-id>/stream?follow=1
 
 这个只读启动方式会主动拒绝状态修改。嵌入应用必须使用
 `ResearchOrchestrator` 构造 `LocalControlAPI`；类型化命令随后先经过 `ResearchDaemon`
-readiness gate，再进入现有策略/状态机。所有请求体都必须携带命令身份字段
-`command_id`、`actor_type`（`HUMAN`/`SYSTEM`）和 `actor_id`；接受后的派发返回 `202`
-以及带版本的 `DaemonCommandResult` envelope（`command_version`、`command_id`、
+readiness gate，再进入现有策略/状态机。外部请求只携带 `request_version`、`command_id`
+和路由特有的意图字段，不得提交 `actor_type` 或 `actor_id`；HTTP adapter 会在服务端绑定
+HUMAN 身份，再构造内部命令。接受后的派发返回 `202` 以及带版本的
+`DaemonCommandResult` envelope（`command_version`、`command_id`、
 `command_type`、`status`、`resource`）：
 
 | 方法 | 路由 | 路由特有 Body 字段 |
@@ -257,6 +258,9 @@ Migration `0021` 会在派发前预留通用持久化回执。同一命令身份
 已完成或已拒绝的结果，不重复执行副作用；用不同输入复用同一身份会被拒绝。若派发中断后
 回执仍为 `ACCEPTED`，系统绝不会自动重放；该回执会通过 `/api/daemon-commands` 保持可见，
 并阻止 daemon 进入 READY，直到后续的 operator reconciliation 机制明确处置。
+
+本地认证仍未实现。Loopback 监听与服务端 actor 绑定本身不能识别具体客户端；在 PX00
+本地凭据接通前，不得把该控制面视为产品可用边界。
 
 系统不存在允许任意 UI event 修改状态的入口。
 

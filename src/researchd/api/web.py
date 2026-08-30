@@ -13,12 +13,19 @@ from researchd.api.agui import AGUIProjectionAdapter
 from researchd.api.control import LocalControlAPI
 from researchd.daemon.runtime import ResearchDaemon
 from researchd.daemon.contracts import (
+    ExternalHumanDecisionRequest,
+    ExternalRunCancelRequest,
+    ExternalWorkOrderApproveRequest,
     HumanDecisionCommand,
     RunCancelCommand,
     WorkOrderApproveCommand,
 )
 from researchd.domain.base import DomainModel
+from researchd.domain.ids import RuntimeSessionId
 from researchd.runtime_sessions.contracts import (
+    ExternalRuntimeSessionAttachRequest,
+    ExternalRuntimeSessionStartRequest,
+    ExternalRuntimeSessionStopRequest,
     RuntimeSessionAttachCommand,
     RuntimeSessionStartCommand,
     RuntimeSessionStopCommand,
@@ -80,34 +87,79 @@ class ControlResourceRouter:
 class ControlCommandRouter:
     """Narrow command adapter; arbitrary UI events have no mutation path."""
 
-    def __init__(self, api: LocalControlAPI, daemon: ResearchDaemon | None = None) -> None:
+    def __init__(
+        self,
+        api: LocalControlAPI,
+        daemon: ResearchDaemon | None = None,
+        *,
+        human_actor_id: str = "local-control-client",
+    ) -> None:
         self.api = api
         self.daemon = daemon
+        self.human_actor_id = human_actor_id
 
     async def post(self, path: str, payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
         parts = [unquote(item) for item in urlparse(path).path.split("/") if item]
         if parts == ["api", "runtime-sessions", "start"]:
-            return await self._execute(RuntimeSessionStartCommand.model_validate(payload))
+            start_request = ExternalRuntimeSessionStartRequest.model_validate(payload)
+            return await self._execute(RuntimeSessionStartCommand(
+                command_id=start_request.command_id,
+                runtime_session_id=start_request.runtime_session_id,
+                runtime_id=start_request.runtime_id,
+                actor_type="HUMAN",
+                actor_id=self.human_actor_id,
+                launch_spec=start_request.launch_spec,
+            ))
         if parts == ["api", "runtime-sessions", "attach"]:
-            return await self._execute(RuntimeSessionAttachCommand.model_validate(payload))
+            attach_request = ExternalRuntimeSessionAttachRequest.model_validate(payload)
+            return await self._execute(RuntimeSessionAttachCommand(
+                command_id=attach_request.command_id,
+                runtime_session_id=attach_request.runtime_session_id,
+                runtime_id=attach_request.runtime_id,
+                actor_type="HUMAN",
+                actor_id=self.human_actor_id,
+                launch_spec=attach_request.launch_spec,
+            ))
         if len(parts) == 4 and parts[:2] == ["api", "runtime-sessions"] and parts[3] == "stop":
-            stop_command = RuntimeSessionStopCommand.model_validate({
-                **payload,
-                "runtime_session_id": parts[2],
-            })
+            stop_request = ExternalRuntimeSessionStopRequest.model_validate(payload)
+            stop_command = RuntimeSessionStopCommand(
+                command_id=stop_request.command_id,
+                runtime_session_id=RuntimeSessionId(parts[2]),
+                runtime_id=stop_request.runtime_id,
+                actor_type="HUMAN",
+                actor_id=self.human_actor_id,
+                expected_version=stop_request.expected_version,
+            )
             return await self._execute(stop_command)
         if len(parts) == 4 and parts[:2] == ["api", "runs"] and parts[3] == "cancel":
-            cancel_command = RunCancelCommand.model_validate({**payload, "run_id": parts[2]})
+            cancel_request = ExternalRunCancelRequest.model_validate(payload)
+            cancel_command = RunCancelCommand(
+                command_id=cancel_request.command_id,
+                actor_type="HUMAN",
+                actor_id=self.human_actor_id,
+                run_id=parts[2],
+            )
             return await self._execute(cancel_command)
         if len(parts) == 4 and parts[:2] == ["api", "work-orders"] and parts[3] == "approve":
-            approve_command = WorkOrderApproveCommand.model_validate({
-                **payload, "work_order_id": parts[2],
-            })
+            approve_request = ExternalWorkOrderApproveRequest.model_validate(payload)
+            approve_command = WorkOrderApproveCommand(
+                command_id=approve_request.command_id,
+                actor_type="HUMAN",
+                actor_id=self.human_actor_id,
+                work_order_id=parts[2],
+                grant_id=approve_request.grant_id,
+            )
             return await self._execute(approve_command)
         if len(parts) == 4 and parts[:2] == ["api", "work-orders"] and parts[3] == "human-decision":
-            decision_command = HumanDecisionCommand.model_validate({
-                **payload, "work_order_id": parts[2],
-            })
+            decision_request = ExternalHumanDecisionRequest.model_validate(payload)
+            decision_command = HumanDecisionCommand(
+                command_id=decision_request.command_id,
+                actor_type="HUMAN",
+                actor_id=self.human_actor_id,
+                work_order_id=parts[2],
+                action=decision_request.action,
+                objective=decision_request.objective,
+            )
             return await self._execute(decision_command)
         return 404, {"error": "unknown command"}
 
