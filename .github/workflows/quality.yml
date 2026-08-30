@@ -32,7 +32,7 @@ jobs:
           test "$(stat -c '%A' /usr/bin/bwrap | cut -c4)" != "s"
           test -z "$(getcap /usr/bin/bwrap)"
       - name: Install from committed lock
-        run: uv sync --frozen --extra a2a --extra langgraph-agent --extra qualification
+        run: uv sync --frozen --extra a2a --extra langgraph-agent --extra qualification --extra tui
       - name: Verify optional Agent runtimes
         run: uv run python -c 'import a2a, langgraph; print("optional Agent runtimes available")'
       - name: Generate lock-derived SBOM
