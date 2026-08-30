@@ -298,6 +298,10 @@ links remain communication context and never confer workflow authority.
 The authenticated `msg` command may add `--reply-to`, `--delegation`, or
 `--invocation` links. Sender identity is absent from the request schema and is
 bound by the daemon as the authenticated local human.
+Native collaboration reads are available by message ID and at
+`GET /api/runs/<run_id>/messages`; the run timeline carries the same durable
+reply/delegation/invocation links. `LOCAL_ONLY` and `SECRET` bodies are
+redacted from these presentation projections.
 
 For a deliberately read-only projection without daemon mutations, embed only
 the local API:

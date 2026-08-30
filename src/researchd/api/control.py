@@ -178,7 +178,25 @@ class LocalControlAPI:
             row = session.get(CollaborationMessageRecord, message_id)
             if row is None:
                 raise LookupError(message_id)
-            return {
+            return self._message_payload(row)
+
+    def collaboration_messages(self, run_id: str) -> list[dict[str, Any]]:
+        """List the native message read model in durable creation order."""
+        with self.sessions() as session:
+            if session.get(ResearchRunRecord, run_id) is None:
+                raise LookupError(run_id)
+            rows = session.scalars(select(CollaborationMessageRecord).where(
+                CollaborationMessageRecord.run_id == run_id,
+            ).order_by(
+                CollaborationMessageRecord.created_at,
+                CollaborationMessageRecord.message_id,
+            )).all()
+            return [self._message_payload(row) for row in rows]
+
+    @staticmethod
+    def _message_payload(row: CollaborationMessageRecord) -> dict[str, Any]:
+        protected = row.classification in {"LOCAL_ONLY", "SECRET"}
+        return {
                 "message_id": row.message_id,
                 "run_id": row.run_id,
                 "work_order_id": row.work_order_id,
@@ -189,8 +207,10 @@ class LocalControlAPI:
                 "sender_actor_id": row.sender_actor_id,
                 "recipient_agent_id": row.recipient_agent_id,
                 "purpose": row.purpose,
-                "body": row.body,
+                "body": None if protected else row.body,
+                "body_redacted": protected,
                 "classification": row.classification,
+                "created_at": row.created_at.isoformat(),
             }
 
     def agents(self) -> list[dict[str, Any]]:
@@ -309,7 +329,7 @@ class LocalControlAPI:
             items.extend({"kind": "claim", "entity_id": item.claim_id, "timestamp": item.created_at.isoformat(), "attempt_id": item.attempt_id, "producer_type": item.producer_type, "producer_id": item.producer_id} for item in claims)
             items.extend({"kind": "verification", "entity_id": item.verification_id, "timestamp": item.created_at.isoformat(), "attempt_id": item.attempt_id, "work_order_id": item.work_order_id, "overall": item.overall, "verifier_version": item.verifier_version, "valid": item.valid} for item in verifications)
             items.extend({"kind": "review", "entity_id": item.review_id, "timestamp": item.created_at.isoformat(), "work_order_id": item.work_order_id, "attempt_id": item.attempt_id, "decision": item.decision} for item in reviews)
-            items.extend({"kind": "directive" if item.purpose == "DIRECTIVE" else "message", "entity_id": item.message_id, "timestamp": item.created_at.isoformat(), "work_order_id": item.work_order_id, "sender_actor_type": item.sender_actor_type, "sender_actor_id": item.sender_actor_id, "recipient_agent_id": item.recipient_agent_id, "classification": item.classification} for item in messages)
+            items.extend({"kind": "directive" if item.purpose == "DIRECTIVE" else "message", "entity_id": item.message_id, "timestamp": item.created_at.isoformat(), "work_order_id": item.work_order_id, "delegation_id": item.delegation_id, "invocation_id": item.invocation_id, "reply_to_message_id": item.reply_to_message_id, "purpose": item.purpose, "sender_actor_type": item.sender_actor_type, "sender_actor_id": item.sender_actor_id, "recipient_agent_id": item.recipient_agent_id, "classification": item.classification} for item in messages)
         return sorted(items, key=lambda item: (item["timestamp"], item["kind"], item["entity_id"]))
 
     async def cancel_run(self, run_id: str) -> dict[str, Any]:

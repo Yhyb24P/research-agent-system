@@ -264,6 +264,9 @@ CollaborationMessage 使用封闭 purpose 集合（`DISCUSSION`、`STATUS`、
 Delegation、Invocation 或前序消息。这些关联只提供沟通上下文，不授予工作流权威。
 认证后的 `msg` 命令可用 `--reply-to`、`--delegation` 或 `--invocation`
 添加关联。请求 schema 不包含 sender 身份；daemon 将其绑定为已认证的本地 human。
+原生 collaboration read model 支持按 message ID 查询及
+`GET /api/runs/<run_id>/messages` 列表，run timeline 同步携带持久的
+reply/delegation/invocation 关联。展示投影会遮蔽 `LOCAL_ONLY` 与 `SECRET` 正文。
 
 如需明确不允许 daemon mutation 的只读投影，可只嵌入 local API：
 

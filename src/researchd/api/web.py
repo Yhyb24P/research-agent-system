@@ -95,6 +95,8 @@ class ControlResourceRouter:
                 return 200, {"events": self.api.events(parts[2], after_stream_offset=offset)}
             if len(parts) == 3 and parts[:2] == ["api", "collaboration-messages"]:
                 return 200, {"message": self.api.collaboration_message(parts[2])}
+            if len(parts) == 4 and parts[:2] == ["api", "runs"] and parts[3] == "messages":
+                return 200, {"messages": self.api.collaboration_messages(parts[2])}
         except LookupError:
             return 404, {"error": "not found"}
         except ValueError:
