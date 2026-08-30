@@ -232,9 +232,15 @@ The productization branch now contains the first LP01/LP02 foundation:
   every daemon-dispatched mutation, and the run cancel, work-order approve and
   human-decision HTTP routes now cross the same `ResearchDaemon.execute()`
   readiness gate as RuntimeSession commands, returning `202` with the typed
-  envelope. The composition root still wires no Orchestrator, so those control
-  mutations fail closed with an explicit reason until the trusted controller
-  is injected.
+  envelope. The composition root now injects the real `ResearchOrchestrator`
+  built from existing authorities only — `CollaborationGateway`
+  (delegations/invocations/selector), `RecordingPolicyEngine` over
+  `DeterministicPolicyEngine`, `ApprovalService` and `JobManager`, with empty
+  capabilities — so gate-dispatched control mutations execute against the
+  trusted controller. Two slots stay deliberately open and fail closed: no
+  verification driver satisfies the `VerificationDriver` protocol yet, and the
+  cloud/executor Agent adapters remain unwired until managed Agents attach
+  (LP03/LP04).
 
 产品化分支现已实现首批 LP01/LP02 基础：持久化运行实例和类型化命令凭证、拒绝
 PID 复用的 PROCESS supervisor、受限 REMOTE_HTTP attach、先 intent 后副作用的审计
@@ -249,9 +255,13 @@ inspect 不回显固定命令参数。
 带版本的 `DaemonCommand`/`DaemonCommandResult` 合同（`command_version=1`、命令身份、
 accepted/rejected envelope）现已约束所有经 daemon 派发的 mutation；run cancel、
 work-order approve 和 human-decision 三个 HTTP 路由与 RuntimeSession 命令一样强制经过
-`ResearchDaemon.execute()` readiness gate，并以 `202` 返回类型化 envelope。组合根目前
-仍未注入 Orchestrator，因此这三个控制面 mutation 会以明确原因失败关闭，直到可信
-controller 接入。
+`ResearchDaemon.execute()` readiness gate，并以 `202` 返回类型化 envelope。组合根现已
+注入真实 `ResearchOrchestrator`——仅由现有权威构成：`CollaborationGateway`
+（delegations/invocations/selector）、基于 `DeterministicPolicyEngine` 的
+`RecordingPolicyEngine`、`ApprovalService` 与 `JobManager`，capabilities 默认为空——
+因此经 gate 派发的控制面 mutation 均由可信 controller 真实执行。两个槽位刻意留空并失败
+关闭：尚无可满足 `VerificationDriver` 协议的验证 driver；cloud/executor Agent adapter
+待受管 Agent 接入（LP03/LP04）。
 
 This is still an implementation milestone, not completion of the productized
 launcher. The daily `research` client and LP03 managed Agent pilot remain open.
@@ -272,7 +282,7 @@ the frozen requirements. The current evidence is:
 | durable RuntimeSession and idempotent START/ATTACH/STOP receipts | PASS | migration `0020`, `runtime_sessions/service.py`, concurrency/replay tests |
 | PROCESS identity, PID-reuse rejection, restart reattach and crash windows | PASS | supervisor driver and independent-process restart/crash tests |
 | constrained REMOTE_HTTP attach through existing AgentRuntime | PASS | `RemoteHttpDriver`, registry endpoint checks and integration tests |
-| `researchd` owns existing orchestrator/policy/approval/backup command paths | OPEN | composition wires `LocalControlAPI` without an Orchestrator; control mutations fail closed until the trusted controller is injected |
+| `researchd` owns existing orchestrator/policy/approval command paths | PASS | `compose_daemon` builds the real `ResearchOrchestrator` from `CollaborationGateway`, `RecordingPolicyEngine(DeterministicPolicyEngine())`, `ApprovalService` and `JobManager` with empty capabilities; gate-dispatched cancel/approve/human-decision mutations execute against it (`daemon/composition.py`, composed-daemon mutation tests in `tests/integration/test_daemon.py`); the verification driver and cloud/executor adapters remain deliberate fail-closed gaps |
 | every existing HTTP mutation crosses `ResearchDaemon.execute()` | PASS | run cancel, work-order approve and human-decision routes dispatch typed commands through the daemon readiness gate (`api/web.py`, gate tests) |
 | versioned accepted/rejected result envelope for every command family | PASS | `daemon/contracts.py`, `DaemonCommandDispatcher` and envelope assertions in daemon web/AG-UI tests |
 | durable generic command receipt with idempotency persistence | OPEN | envelopes are in-memory responses; no durable receipt store exists yet |
@@ -280,18 +290,20 @@ the frozen requirements. The current evidence is:
 
 Therefore LP02's durable runtime/supervision slice is implemented, while LP01
 as a complete trusted mutation host is **not frozen complete**. The shared
-command/result contract and the migration of the existing HTTP mutations
-through the readiness gate are done; the remaining gaps are the real
-Orchestrator/policy injection into the composition root, the Workspace,
-ResearchTask, Approval and Backup command families, and the durable generic
-command receipt. LP03 must not paper over these LP01 gaps with a pilot-only
-bypass. The next implementation order is: trusted Orchestrator composition,
-the remaining typed command families with durable receipts, then the managed
-Agent pilot.
+command/result contract, the migration of the existing HTTP mutations through
+the readiness gate, and the real Orchestrator/policy/approval injection into
+the composition root are done; the remaining gaps are the Workspace,
+ResearchTask, Approval and Backup typed command families, the durable generic
+command receipt, a real `VerificationDriver` wiring, and the cloud/executor
+Agent adapters (LP03/LP04). LP03 must not paper over these LP01 gaps with a
+pilot-only bypass. The next implementation order is: the remaining typed
+command families with durable receipts plus the verification driver, then the
+managed Agent pilot.
 
 审计结论：LP02 的持久化运行实例与 supervision 切片已经实现；LP01 作为完整可信
-mutation host 尚未冻结完成。统一命令合同以及现有 HTTP mutation 经 readiness gate 的
-迁移已经完成；剩余缺口为组合根中真实 Orchestrator/Policy 的注入、Workspace、
-ResearchTask、Approval、Backup 命令族，以及 durable generic command receipt。LP03 不得用
-pilot 专用旁路掩盖这些缺口；下一步顺序为：接入可信 Orchestrator 组合、实现剩余类型化
-命令族与 durable receipt，最后进入 pilot。
+mutation host 尚未冻结完成。统一命令合同、现有 HTTP mutation 经 readiness gate 的迁移，
+以及组合根中真实 Orchestrator/Policy/Approval 的注入均已完成；剩余缺口为 Workspace、
+ResearchTask、Approval、Backup 类型化命令族、durable generic command receipt、真实
+`VerificationDriver` 接线，以及 cloud/executor Agent adapter（LP03/LP04）。LP03 不得用
+pilot 专用旁路掩盖这些缺口；下一步顺序为：实现剩余类型化命令族与 durable receipt、接
+通验证 driver，最后进入 pilot。

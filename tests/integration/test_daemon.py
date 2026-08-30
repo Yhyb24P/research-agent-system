@@ -1,14 +1,19 @@
 import asyncio
 from collections.abc import Awaitable, Coroutine
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, cast
 
 import pytest
 from sqlalchemy import text
 
+from researchd.agents.cloud_lead import CloudLeadAdapter
+from researchd.artifacts.store import ContentAddressedArtifactStore
 from researchd.collaboration.registry import AgentRegistryService
-from researchd.daemon.composition import DaemonConfig, compose_daemon
+from researchd.context.builder import ContextBuilder
+from researchd.context.redaction import DeterministicRedactor
+from researchd.daemon.composition import DaemonApplication, DaemonConfig, compose_daemon
 from researchd.daemon.contracts import (
     DaemonCommandResult,
     HumanDecisionCommand,
@@ -27,11 +32,26 @@ from researchd.daemon.startup import (
     verify_storage_sanity,
 )
 from researchd.domain.base import DomainModel
+from researchd.domain.enums import Capability
+from researchd.models.cloud import CloudCallBudget, CloudPricing
+from researchd.orchestrator.engine import ResearchOrchestrator
+from researchd.policy.approval import ApprovalService
+from researchd.policy.engine import BudgetLimits, DeterministicPolicyEngine, RecordingPolicyEngine
 from researchd.runtime_sessions.contracts import ProcessLaunchSpec
 from researchd.runtime_sessions.service import RuntimeSessionService
 from researchd.storage.db import create_sqlite_engine, session_factory
-from researchd.storage.models import AuditEventRecord
+from researchd.storage.models import AuditEventRecord, WorkOrderRecord, WorkspaceRecord
 from researchd.supervisor.runtime import RuntimeSupervisor
+from tests.integration.test_orchestrator import (
+    FakeCloud,
+    FakeExecutor,
+    FakeVerifier,
+    cloud_configuration,
+    collaboration_gateway,
+    _proposal,
+    _proposal_with_capability,
+    _review,
+)
 from tests.integration.test_storage import migrate
 
 
@@ -269,12 +289,7 @@ def test_dispatcher_rejects_unknown_command_models(tmp_path: Path) -> None:
         dispatcher(ProcessLaunchSpec(argv=("/usr/bin/true",), cwd="/tmp"))
 
 
-def test_composed_daemon_rejects_control_mutation_until_orchestrator_wired(
-    tmp_path: Path,
-) -> None:
-    # compose_daemon wires LocalControlAPI without an Orchestrator, so the three
-    # control mutations must fail closed with an explicit reason. Injecting the
-    # real Orchestrator into the composition root is a follow-up launcher node.
+def _composed_application(tmp_path: Path) -> DaemonApplication:
     database = tmp_path / "researchd.db"
     migrate(database)
     application = compose_daemon(DaemonConfig(
@@ -283,12 +298,157 @@ def test_composed_daemon_rejects_control_mutation_until_orchestrator_wired(
         state_root=tmp_path / "state",
     ))
     assert application.daemon.start().ready
+    return application
 
-    command = RunCancelCommand(
+
+def _driver_orchestrator(
+    application: DaemonApplication,
+    tmp_path: Path,
+    cloud_responses: list[str],
+) -> tuple[Any, ResearchOrchestrator, ApprovalService]:
+    """Drive durable runs to a human gate with the existing reference doubles."""
+    sessions = session_factory(create_sqlite_engine(application.config.database))
+    now = datetime.now(UTC)
+    with sessions.begin() as session:
+        if session.get(WorkspaceRecord, "ws_e2e") is None:
+            session.add(WorkspaceRecord(
+                workspace_id="ws_e2e", name="e2e", version=1, created_at=now, updated_at=now,
+            ))
+    builder = ContextBuilder(
+        sessions,
+        ContentAddressedArtifactStore(tmp_path / "driver-artifacts"),
+        DeterministicRedactor(),
+    )
+    cloud = CloudLeadAdapter(
+        FakeCloud(cloud_responses), sessions, builder,
+        configuration=cloud_configuration(),
+        budget=CloudCallBudget(
+            max_requests=3, max_input_bytes=100_000, max_response_bytes=100_000,
+            max_output_tokens=512, max_total_tokens=2_000,
+        ),
+        pricing=CloudPricing(prompt_usd_per_million=Decimal("0"), completion_usd_per_million=Decimal("0")),
+    )
+    approvals = ApprovalService(sessions)
+    orchestrator = ResearchOrchestrator(
+        sessions,
+        collaboration=collaboration_gateway(sessions, cloud, FakeExecutor()),
+        policy=RecordingPolicyEngine(DeterministicPolicyEngine(), sessions),
+        verifier=FakeVerifier(sessions),
+        approvals=approvals,
+        workspace_capabilities=frozenset({Capability.NETWORK_EXTERNAL}),
+        user_capabilities=frozenset({Capability.NETWORK_EXTERNAL}),
+        maximum_budget=BudgetLimits(100, 100, 0, 100, 100),
+    )
+    return sessions, orchestrator, approvals
+
+
+def test_composed_daemon_executes_real_run_cancel(tmp_path: Path) -> None:
+    application = _composed_application(tmp_path)
+    orchestrator = application.api.orchestrator
+    assert orchestrator is not None
+    now = datetime.now(UTC)
+    with application.api.sessions.begin() as session:
+        session.add(WorkspaceRecord(
+            workspace_id="ws_cancel", name="cancel", version=1, created_at=now, updated_at=now,
+        ))
+    run_id = orchestrator.create_run(workspace_id="ws_cancel", objective="cancel me")
+
+    result = _await(cast(DomainModel | Awaitable[DomainModel], application.daemon.execute(RunCancelCommand(
         command_id="cmd_composed_cancel",
         actor_type="HUMAN",
         actor_id="operator",
-        run_id="run_missing",
+        run_id=run_id,
+    ))))
+
+    assert isinstance(result, DaemonCommandResult)
+    assert result.command_version == 1
+    assert result.command_type == "RunCancel"
+    assert result.status == "ACCEPTED"
+    status = application.api.run_status(run_id)
+    assert status["state"] == "CANCELLED"
+    assert status["cancellation_requested"] is True
+
+
+def test_composed_daemon_executes_real_work_order_approve(tmp_path: Path) -> None:
+    application = _composed_application(tmp_path)
+    _, driver, approvals = _driver_orchestrator(
+        application, tmp_path, [_proposal_with_capability("network.external")],
     )
-    with pytest.raises(RuntimeError, match="controller is required for state-changing commands"):
-        _await(cast(DomainModel | Awaitable[DomainModel], application.daemon.execute(command)))
+    run_id = driver.create_run(workspace_id="ws_e2e", objective="approved external step")
+    snapshot = asyncio.run(driver.run(run_id, max_steps=10))
+    assert snapshot.state.value == "WAITING_HUMAN" and snapshot.pending_approval_ids
+    work_order_id = snapshot.work_orders[0][0]
+    grant = approvals.approve(snapshot.pending_approval_ids[0], granted_by="test-human")
+
+    result = _await(cast(DomainModel | Awaitable[DomainModel], application.daemon.execute(WorkOrderApproveCommand(
+        command_id="cmd_composed_approve",
+        actor_type="HUMAN",
+        actor_id="operator",
+        work_order_id=work_order_id,
+        grant_id=grant.grant_id,
+    ))))
+
+    assert isinstance(result, DaemonCommandResult)
+    assert result.command_type == "WorkOrderApprove"
+    assert result.status == "ACCEPTED"
+    assert result.resource is not None and result.resource["state"] == "POLICY_CHECK"
+    assert application.api.work_order_status(work_order_id)["state"] == "POLICY_CHECK"
+    assert application.api.run_status(run_id)["state"] == "ACTIVE"
+
+
+def _drive_to_human_required(application: DaemonApplication, tmp_path: Path) -> tuple[str, str]:
+    _, driver, _ = _driver_orchestrator(
+        application, tmp_path, [_proposal(), _review("HUMAN_REQUIRED")],
+    )
+    run_id = driver.create_run(workspace_id="ws_e2e", objective="human decision")
+    snapshot = asyncio.run(driver.run(run_id, max_steps=30))
+    assert snapshot.state.value == "WAITING_HUMAN"
+    work_order_id = snapshot.work_orders[0][0]
+    assert application.api.work_order_status(work_order_id)["state"] == "HUMAN_REQUIRED"
+    return run_id, work_order_id
+
+
+def test_composed_daemon_executes_real_human_decision_revise(tmp_path: Path) -> None:
+    application = _composed_application(tmp_path)
+    run_id, work_order_id = _drive_to_human_required(application, tmp_path)
+
+    result = application.daemon.execute(HumanDecisionCommand(
+        command_id="cmd_composed_revise",
+        actor_type="HUMAN",
+        actor_id="operator",
+        work_order_id=work_order_id,
+        action="revise",
+        objective="narrow the objective",
+    ))
+
+    assert isinstance(result, DaemonCommandResult)
+    assert result.command_type == "HumanDecision"
+    assert result.status == "ACCEPTED"
+    status = application.api.work_order_status(work_order_id)
+    assert status["state"] == "REVISION_REQUIRED"
+    sessions = session_factory(create_sqlite_engine(application.config.database))
+    with sessions() as session:
+        orders = session.query(WorkOrderRecord).order_by(WorkOrderRecord.created_at).all()
+        assert len(orders) == 2
+        assert orders[1].parent_work_order_id == work_order_id
+        assert orders[1].objective == "narrow the objective"
+    assert application.api.run_status(run_id)["state"] == "ACTIVE"
+
+
+def test_composed_daemon_executes_real_human_decision_abort(tmp_path: Path) -> None:
+    application = _composed_application(tmp_path)
+    run_id, work_order_id = _drive_to_human_required(application, tmp_path)
+
+    result = application.daemon.execute(HumanDecisionCommand(
+        command_id="cmd_composed_abort",
+        actor_type="HUMAN",
+        actor_id="operator",
+        work_order_id=work_order_id,
+        action="abort",
+    ))
+
+    assert isinstance(result, DaemonCommandResult)
+    assert result.command_type == "HumanDecision"
+    assert result.status == "ACCEPTED"
+    assert application.api.work_order_status(work_order_id)["state"] == "FAILED"
+    assert application.api.run_status(run_id)["state"] == "FAILED"

@@ -62,7 +62,7 @@ class ResearchOrchestrator:
     def __init__(
         self, sessions: sessionmaker[Session], *, collaboration: CollaborationGateway,
         policy: RecordingPolicyEngine | PolicyEvaluator,
-        verifier: VerificationDriver, approvals: ApprovalService | None = None,
+        verifier: VerificationDriver | None = None, approvals: ApprovalService | None = None,
         jobs: JobManager | None = None,
         workspace_capabilities: frozenset[Capability] = frozenset(),
         user_capabilities: frozenset[Capability] = frozenset(),
@@ -413,6 +413,10 @@ class ResearchOrchestrator:
         result_json = self._stored_execution_result(attempt.attempt_id)
         if result_json is None:
             raise OrchestrationError("verification has no executor result")
+        if self.verifier is None:
+            # No honest verification driver is wired yet; fail closed instead of
+            # auto-passing an unverified executor result.
+            raise OrchestrationError("verification requires a configured verifier")
         verification = self.verifier.verify(order, attempt, result_json)
         current_attempt = self._attempt(attempt.attempt_id)
         target_attempt = AttemptState.SUCCEEDED if verification.overall is VerificationOverall.PASS else AttemptState.FAILED

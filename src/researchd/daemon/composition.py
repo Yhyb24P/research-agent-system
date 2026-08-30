@@ -10,14 +10,20 @@ from pydantic import ConfigDict, Field, field_validator, model_validator
 
 from researchd.api.control import LocalControlAPI
 from researchd.artifacts import ArtifactService, ContentAddressedArtifactStore
+from researchd.collaboration.delegation import DelegationService
+from researchd.collaboration.gateway import CollaborationGateway
 from researchd.collaboration.invocation import InvocationService
 from researchd.collaboration.registry import AgentRegistryService
+from researchd.collaboration.selector import AgentSelector
 from researchd.daemon.dispatcher import DaemonCommandDispatcher
 from researchd.daemon.runtime import ResearchDaemon
 from researchd.daemon.startup import build_startup_barrier
 from researchd.domain.base import DomainModel
 from researchd.executor.jobs import JobManager, LocalDurableJobBackend
 from researchd.executor.worktree import WorktreeManager
+from researchd.orchestrator.engine import ResearchOrchestrator
+from researchd.policy.approval import ApprovalService
+from researchd.policy.engine import DeterministicPolicyEngine, RecordingPolicyEngine
 from researchd.runtime_sessions.service import RuntimeSessionService
 from researchd.storage.db import create_sqlite_engine, session_factory
 from researchd.supervisor.runtime import RuntimeSupervisor
@@ -164,7 +170,26 @@ def compose_daemon(config: DaemonConfig) -> DaemonApplication:
         jobs=jobs,
         invocations=invocations,
     )
-    api = LocalControlAPI(sessions)
+    # The real trusted controller is composed here from existing authorities
+    # only. Capabilities default to empty (fail-closed grants); budget and
+    # iteration limits use the orchestrator constructor defaults. Two slots are
+    # deliberately left open: no verification driver satisfies the
+    # VerificationDriver protocol yet, so verification fails closed, and the
+    # cloud/executor Agent adapters stay unwired until managed Agents attach
+    # (LP03/LP04).
+    orchestrator = ResearchOrchestrator(
+        sessions,
+        collaboration=CollaborationGateway(
+            delegations=DelegationService(sessions),
+            invocations=invocations,
+            selector=AgentSelector(sessions),
+        ),
+        policy=RecordingPolicyEngine(DeterministicPolicyEngine(), sessions),
+        verifier=None,
+        approvals=ApprovalService(sessions),
+        jobs=jobs,
+    )
+    api = LocalControlAPI(sessions, orchestrator)
     daemon = ResearchDaemon(barrier, DaemonCommandDispatcher(supervisor, api))
     return DaemonApplication(config=config, daemon=daemon, api=api)
 

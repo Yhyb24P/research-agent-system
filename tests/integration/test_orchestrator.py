@@ -22,7 +22,7 @@ from researchd.domain.verification import CriterionEvaluation, VerificationResul
 from researchd.domain.ids import AgentId, AgentRuntimeId, VerificationId
 from researchd.executor.contracts import ExecutorResult
 from researchd.models.cloud import CloudCallBudget, CloudModelRequest, CloudModelResponse, CloudPricing, CloudProviderConfiguration, CloudUsage
-from researchd.orchestrator.engine import OrchestrationLimits, ResearchOrchestrator
+from researchd.orchestrator.engine import OrchestrationError, OrchestrationLimits, ResearchOrchestrator
 from researchd.collaboration.gateway import CollaborationGateway
 from researchd.collaboration.invocation import InvocationService
 from researchd.collaboration.registry import AgentRegistryService
@@ -335,6 +335,15 @@ def test_cancel_before_execution_prevents_dispatch(tmp_path: Path) -> None:
         asyncio.run(orchestrator.advance(run_id))
     snapshot = asyncio.run(orchestrator.cancel(run_id))
     assert snapshot.state.value == "CANCELLED" and executor.calls == 0
+
+
+def test_unconfigured_verifier_fails_closed_at_verification(tmp_path: Path) -> None:
+    sessions, orchestrator, executor, model = make_orchestrator(tmp_path, cloud_responses=[_proposal()])
+    orchestrator.verifier = None
+    run_id = orchestrator.create_run(workspace_id="ws_e2e", objective="verification gap fails closed")
+    with pytest.raises(OrchestrationError, match="verification requires a configured verifier"):
+        asyncio.run(orchestrator.run(run_id, max_steps=30))
+    assert orchestrator.snapshot(run_id).work_orders[0][1].value == "VERIFYING"
 
 
 def test_max_iteration_budget_fails_without_unbounded_revisions(tmp_path: Path) -> None:
