@@ -1,5 +1,6 @@
 """Trusted Agent Collaboration Plane contracts and registry."""
 
+from researchd.collaboration.agent_definitions import AgentDefinition
 from researchd.collaboration.registry import (
     AgentRegistryService,
     RuntimeLeaseConflict,
@@ -15,4 +16,4 @@ from researchd.collaboration.heterogeneous import A2ARemoteAgentAdapter, HttpAge
 from researchd.collaboration.runtime import AgentAdapterCatalog
 from researchd.collaboration.langgraph_runtime import LangGraphAgentAdapter
 
-__all__ = ["AgentRegistryService", "RuntimeLeaseConflict", "RuntimeLeaseInvalid", "DelegationService", "InvocationService", "StaleInvocationResult", "CloudLeadAgentAdapter", "LocalExecutorAgentAdapter", "CollaborationGateway", "AgentSelector", "AgentSelection", "CollaborationMessageService", "A2ARemoteAgentAdapter", "HttpAgentAdapter", "LocalProcessAgentAdapter", "AgentAdapterCatalog", "LangGraphAgentAdapter"]
+__all__ = ["AgentDefinition", "AgentRegistryService", "RuntimeLeaseConflict", "RuntimeLeaseInvalid", "DelegationService", "InvocationService", "StaleInvocationResult", "CloudLeadAgentAdapter", "LocalExecutorAgentAdapter", "CollaborationGateway", "AgentSelector", "AgentSelection", "CollaborationMessageService", "A2ARemoteAgentAdapter", "HttpAgentAdapter", "LocalProcessAgentAdapter", "AgentAdapterCatalog", "LangGraphAgentAdapter"]
