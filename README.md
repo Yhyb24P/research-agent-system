@@ -282,6 +282,11 @@ launch-profile hash still matches the trusted catalog. Invocation uses the
 runtime's registry-owned loopback endpoint and never starts the launch command
 a second time.
 
+The credential-free managed coder installation example is
+`examples/managed_coder_agent_definition.example.json`. Its absolute executable
+and working directory are deployment-owned values and must be deliberately
+adapted before installation; clients never submit them through the runtime API.
+
 For a deliberately read-only projection without daemon mutations, embed only
 the local API:
 

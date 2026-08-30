@@ -252,6 +252,10 @@ uv run research --config researchd.json
 RuntimeSession 且其 launch-profile hash 仍与可信目录一致时才可被选择。
 invocation 仅调用 Registry 持有的 loopback endpoint，绝不二次执行启动命令。
 
+不含凭据的 managed coder 安装示例位于
+`examples/managed_coder_agent_definition.example.json`。其中绝对可执行文件与
+工作目录属于部署配置，安装前应明确调整；client 不能通过 runtime API 提交它们。
+
 如需明确不允许 daemon mutation 的只读投影，可只嵌入 local API：
 
 ```bash
