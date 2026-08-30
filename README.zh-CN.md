@@ -268,6 +268,10 @@ Delegation、Invocation 或前序消息。这些关联只提供沟通上下文�
 `GET /api/runs/<run_id>/messages` 列表，run timeline 同步携带持久的
 reply/delegation/invocation 关联。展示投影会遮蔽 `LOCAL_ONLY` 与 `SECRET` 正文。
 
+安装可选 `tui` extra 后，可运行 `research --config researchd.json tui` 打开
+包含 Collab、Agents、Tasks、Approvals、System 的只读投影工作区。刷新与布局
+状态仅存在于 client；TUI 不直连数据库，也不承载业务逻辑。
+
 如需明确不允许 daemon mutation 的只读投影，可只嵌入 local API：
 
 ```bash

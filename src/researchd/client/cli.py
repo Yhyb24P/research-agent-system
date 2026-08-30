@@ -21,6 +21,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command")
     subparsers.add_parser("init", help="bootstrap state via researchd init")
     subparsers.add_parser("status", help="report daemon reachability and readiness")
+    subparsers.add_parser("tui", help="open the optional collaboration workspace")
     return parser
 
 
@@ -30,6 +31,10 @@ def main(argv: list[str] | None = None) -> int:
         return run_init(args.config)
     if args.command == "status":
         return run_status(args.config)
+    if args.command == "tui":
+        from researchd.client.tui import tui_entry
+
+        return tui_entry(args.config)
     return interactive_entry(args.config)
 
 

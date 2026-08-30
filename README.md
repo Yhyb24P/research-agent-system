@@ -303,6 +303,11 @@ Native collaboration reads are available by message ID and at
 reply/delegation/invocation links. `LOCAL_ONLY` and `SECRET` bodies are
 redacted from these presentation projections.
 
+Install the optional `tui` extra and run `research --config researchd.json tui`
+for the projection-only workspace with Collab, Agents, Tasks, Approvals and
+System tabs. Refresh and layout state stay client-local; the TUI has no direct
+database or business-logic path.
+
 For a deliberately read-only projection without daemon mutations, embed only
 the local API:
 
