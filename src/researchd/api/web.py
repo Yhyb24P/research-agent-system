@@ -364,14 +364,18 @@ def make_handler(
             self._send_json(status, payload)
 
         def do_POST(self) -> None:  # noqa: N802
+            # Consume the request body before replying so a 401 on a reused
+            # keep-alive connection cannot desynchronize the stream.
+            content_length = self._content_length()
+            if content_length < 0 or content_length > 65_536:
+                # An oversized body is not drained; close to keep the stream clean.
+                self.close_connection = True
+                self._send_json(413, {"error": "command payload too large"})
+                return
+            raw_body = self.rfile.read(content_length)
             if not self._authorized():
                 return
             try:
-                content_length = int(self.headers.get("Content-Length", "0"))
-                if content_length < 0 or content_length > 65_536:
-                    self._send_json(413, {"error": "command payload too large"})
-                    return
-                raw_body = self.rfile.read(content_length)
                 decoded = json.loads(raw_body) if raw_body else {}
                 if not isinstance(decoded, dict):
                     raise ValueError("command payload must be an object")
@@ -410,6 +414,15 @@ def make_handler(
             self.send_header("X-Content-Type-Options", "nosniff")
             self.end_headers()
             self.wfile.write(body)
+
+        def _content_length(self) -> int:
+            raw_value = self.headers.get("Content-Length")
+            if raw_value is None:
+                return 0
+            try:
+                return int(raw_value)
+            except ValueError:
+                return -1
 
         def _authorized(self) -> bool:
             if control_token is None:
