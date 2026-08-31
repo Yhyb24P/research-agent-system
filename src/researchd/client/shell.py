@@ -94,9 +94,8 @@ def parse_line(line: str) -> ParsedCommand:
         return _parse_handoff(tokens[1:])
     if head == "remote":
         return _parse_simple_subcommand("remote", tokens[1:], {"attach": 1, "renew": 1, "detach": 1})
-    if head in {"approve", "reject"}:
-        _require_arity(head, tokens[1:], 2)
-        return ParsedCommand(head, tuple(tokens[1:]), {})
+    if head == "approval":
+        return _parse_simple_subcommand("approval", tokens[1:], {"approve": 1})
     raise ShellParseError(f"unknown command: {head}")
 
 
@@ -378,18 +377,10 @@ def _execute(
                         after = frame.offset
         except KeyboardInterrupt:
             print_fn("stopped watching")
-    elif command.name in {"approve", "reject"}:
-        work_order_id, reference = command.args
-        if command.name == "approve":
-            envelope = client.post_command(
-                f"/api/work-orders/{work_order_id}/approve",
-                {"grant_id": reference},
-            )
-        else:
-            envelope = client.post_command(
-                f"/api/work-orders/{work_order_id}/reject",
-                {"approval_id": reference},
-            )
+    elif command.name == "approval approve":
+        envelope = client.post_command(
+            f"/api/approvals/{command.args[0]}/approve",
+        )
         print_fn(f"{envelope['status']} {envelope['command_id']}")
 
 

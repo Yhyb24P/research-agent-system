@@ -462,6 +462,17 @@ class LocalControlAPI:
         await self.orchestrator.approve(work_order_id, grant_id)
         return self.work_order_status(work_order_id)
 
+    async def approve_request(self, approval_id: str, *, granted_by: str) -> dict[str, Any]:
+        """Resolve HUMAN intent through the pending request, never a grant ID."""
+        if self.orchestrator is None:
+            raise RuntimeError("approval controller is required for approval commands")
+        work_order_id, _ = self.orchestrator.approve_request(
+            approval_id, granted_by=granted_by,
+        )
+        resource = self.work_order_status(work_order_id)
+        resource["approval_id"] = approval_id
+        return resource
+
     def resolve_human(self, work_order_id: str, *, action: str, objective: str | None = None) -> dict[str, Any]:
         if self.orchestrator is None:
             raise RuntimeError("controller is required for state-changing commands")

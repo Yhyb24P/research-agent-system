@@ -29,6 +29,12 @@ class ExternalWorkOrderApproveRequest(ExternalCommandRequest):
     grant_id: str = Field(min_length=1, max_length=128)
 
 
+class ExternalApprovalApproveRequest(ExternalCommandRequest):
+    """A HUMAN approves the pending request identified by the route."""
+
+    pass
+
+
 class ExternalHumanDecisionRequest(ExternalCommandRequest):
     action: Literal["abort", "revise"]
     objective: str | None = Field(default=None, min_length=1, max_length=16_384)
@@ -140,6 +146,12 @@ class RunCancelCommand(DaemonCommand):
 class WorkOrderApproveCommand(DaemonCommand):
     work_order_id: str = Field(min_length=1, max_length=128)
     grant_id: str = Field(min_length=1, max_length=128)
+
+
+class ApprovalApproveCommand(DaemonCommand):
+    """External HUMAN intent; grant identity is controller-owned."""
+
+    approval_id: str = Field(min_length=1, max_length=128)
 
 
 class HumanDecisionCommand(DaemonCommand):
@@ -265,12 +277,14 @@ class DaemonCommandResult(DomainModel):
 
 __all__ = [
     "BackupCreateCommand",
+    "ApprovalApproveCommand",
     "BackupVerifyCommand",
     "CollaborationMessageSendCommand",
     "DaemonCommand",
     "DaemonCommandResolveCommand",
     "DaemonCommandResult",
     "ExternalBackupCreateRequest",
+    "ExternalApprovalApproveRequest",
     "ExternalBackupVerifyRequest",
     "ExternalCommandRequest",
     "ExternalCollaborationMessageSendRequest",
