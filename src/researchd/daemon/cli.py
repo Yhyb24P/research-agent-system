@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+from importlib.resources import files
 from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 
@@ -39,8 +40,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _alembic_config(database: Path) -> Config:
-    root = Path(__file__).resolve().parents[3]
-    config = Config(str(root / "alembic.ini"))
+    """Use packaged migration resources; never infer a source checkout root."""
+    config = Config()
+    config.set_main_option(
+        "script_location",
+        str(files("researchd.storage").joinpath("migrations")),
+    )
     config.set_main_option("sqlalchemy.url", f"sqlite:///{database.resolve()}")
     return config
 
