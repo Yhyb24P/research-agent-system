@@ -19,18 +19,20 @@ from researchd.domain.enums import (
 )
 from researchd.domain.ids import AgentId, DelegationId
 from researchd.domain.review import ReviewDecision
+from researchd.domain.transitions import RUN_TRANSITIONS, WORK_ORDER_TRANSITIONS, require_transition
 from researchd.executor.contracts import ExecutorResult
 from researchd.executor.jobs import JobManager
 from researchd.models.cloud import CloudBudgetExceeded, CloudProviderUnavailable, CloudSchemaInvalid
 from researchd.policy.approval import ApprovalService
 from researchd.policy.engine import BudgetLimits, PolicyEvaluator, PolicyRequest, RecordingPolicyEngine
 from researchd.storage.models import (
-    AgentInteractionRecord, AttemptRecord, AuditEventRecord, ExecutorDispatchRecord, PlanRecord,
+    AgentInteractionRecord, AttemptRecord, AuditEventRecord, ClaimRecord, ExecutorDispatchRecord, PlanRecord,
     ResearchRunRecord, ReviewDecisionRecord, VerificationResultRecord, WorkOrderRecord,
 )
 from researchd.storage.repositories import utc_now
 from researchd.storage.transitions import TransactionalTransitionService
 from researchd.domain.verification import VerificationResult
+from researchd.verifier.engine import ClaimRecorder
 
 
 class VerificationDriver(Protocol):
@@ -81,6 +83,7 @@ class ResearchOrchestrator:
         self.maximum_budget = maximum_budget
         self.limits = limits
         self.transitions = TransactionalTransitionService(sessions)
+        self.claims = ClaimRecorder(sessions)
 
     def _agent_actor(self, work_order_id: str) -> tuple[str, str]:
         agent_id = self.collaboration.assigned_agent_for(work_order_id)
@@ -325,6 +328,72 @@ class ResearchOrchestrator:
             metadata={"grant_id": grant_id})
         self._transition_run(order.run_id, ResearchRunState.ACTIVE, "APPROVAL_RESUMED")
         return True
+
+    def approve_request(self, approval_id: str, *, granted_by: str) -> tuple[str, str]:
+        """Atomically turn one HUMAN approval request into a resumed Run.
+
+        The request, generated grant, one-shot consumption and authoritative
+        controller transitions commit together.  Thus an interrupted daemon
+        command leaves either no grant or a fully resumable WorkOrder, never a
+        grant-only crash window.
+        """
+        if self.approvals is None:
+            raise OrchestrationError("approval service is not configured")
+        now = utc_now()
+        with self.sessions.begin() as session:
+            order = session.scalar(select(WorkOrderRecord).where(
+                WorkOrderRecord.approval_id == approval_id,
+            ))
+            if order is None:
+                raise OrchestrationError("approval is not bound to a work order")
+            run = session.get(ResearchRunRecord, order.run_id)
+            if run is None:
+                raise OrchestrationError("approval work order has no run")
+            if WorkOrderState(order.state) is not WorkOrderState.WAITING_APPROVAL:
+                raise OrchestrationError("work order is not awaiting approval")
+            if ResearchRunState(run.state) is not ResearchRunState.WAITING_HUMAN:
+                raise OrchestrationError("run is not awaiting human approval")
+            grant = self.approvals.approve_or_reuse_in_session(
+                session, approval_id, granted_by=granted_by,
+            )
+            self.approvals.authorize_in_session(
+                session,
+                grant.grant_id,
+                operation_type="work_order.capabilities",
+                parameters={
+                    "work_order_id": order.work_order_id,
+                    "capabilities": sorted(order.contract.get("requested_capabilities", [])),
+                },
+            )
+            require_transition(
+                WorkOrderState(order.state), WorkOrderState.POLICY_CHECK,
+                WORK_ORDER_TRANSITIONS,
+            )
+            require_transition(
+                ResearchRunState(run.state), ResearchRunState.ACTIVE, RUN_TRANSITIONS,
+            )
+            order.approval_grant_id = grant.grant_id
+            order.state = WorkOrderState.POLICY_CHECK.value
+            order.version += 1
+            order.updated_at = now
+            run.state = ResearchRunState.ACTIVE.value
+            run.version += 1
+            run.updated_at = now
+            session.add(AuditEventRecord(
+                event_id=f"evt_{uuid4().hex}", event_type="APPROVAL_GRANTED",
+                run_id=run.run_id, entity_type="work_order", entity_id=order.work_order_id,
+                actor_type="human", actor_id=granted_by, timestamp=now,
+                correlation_id=order.work_order_id, causation_id=None,
+                metadata_json={"approval_id": approval_id},
+            ))
+            session.add(AuditEventRecord(
+                event_id=f"evt_{uuid4().hex}", event_type="APPROVAL_RESUMED",
+                run_id=run.run_id, entity_type="research_run", entity_id=run.run_id,
+                actor_type="controller", actor_id="orchestrator", timestamp=now,
+                correlation_id=run.run_id, causation_id=order.work_order_id,
+                metadata_json={"approval_id": approval_id},
+            ))
+            return order.work_order_id, run.run_id
 
     def reject(self, work_order_id: str, approval_id: str, *, actor_type: str, actor_id: str) -> bool:
         """Reject a pending approval; the order fails exactly like a policy denial."""
@@ -718,10 +787,27 @@ class ResearchOrchestrator:
                     attempt_id=attempt_id, status="COMPLETED", result_json=result.model_dump(mode="json"),
                     created_at=now, updated_at=now,
                 ))
+                durable_result = result
             elif record.result_json is None:
                 record.status = "COMPLETED"
                 record.result_json = result.model_dump(mode="json")
                 record.updated_at = now
+                durable_result = result
+            else:
+                # A managed executor may complete its durable dispatch before
+                # returning control to the orchestrator.  Its persisted result
+                # is the authority; a retry cannot replace its claims.
+                durable_result = ExecutorResult.model_validate(record.result_json)
+            if durable_result.reported_claims:
+                existing = tuple(session.scalars(select(ClaimRecord.statement).where(
+                    ClaimRecord.attempt_id == attempt_id,
+                ).order_by(ClaimRecord.claim_id)).all())
+                if not existing:
+                    self.claims.record_executor_claims_in_session(
+                        session, attempt_id, durable_result.reported_claims,
+                    )
+                elif existing != durable_result.reported_claims:
+                    raise OrchestrationError("durable executor claims do not match dispatch result")
 
     def _latest_verification_id(self, work_order_id: str) -> str | None:
         with self.sessions() as session:

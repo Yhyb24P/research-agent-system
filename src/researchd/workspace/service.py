@@ -136,6 +136,31 @@ class WorkspaceDelegationService:
                 metadata={"transport_kind": grant.transport_kind.value, "access_mode": grant.access_mode.value},
             )
 
+    def ensure_provisioned(self, grant: WorkspaceGrant, source_root: Path) -> ProvisionedWorkspace:
+        """Create and provision the single grant owned by a live Delegation.
+
+        Retries may resume a durable PENDING grant or reuse an ACTIVE grant.
+        Intermediate and terminal states require explicit recovery, never a
+        silent replacement of workspace authority.
+        """
+        with self.sessions() as session:
+            existing = session.scalar(select(WorkspaceGrantRecord).where(
+                WorkspaceGrantRecord.delegation_id == grant.delegation_id
+            ))
+        if existing is None:
+            self.create(grant)
+            return self.provision(grant.workspace_grant_id, source_root)
+        if existing.workspace_grant_id != grant.workspace_grant_id:
+            raise WorkspaceDelegationError("Delegation already has a different workspace grant")
+        if existing.state == WorkspaceGrantState.PENDING.value:
+            return self.provision(existing.workspace_grant_id, source_root)
+        if existing.state == WorkspaceGrantState.ACTIVE.value:
+            provisioned, _, _ = self._active_transport(existing.workspace_grant_id)
+            return provisioned
+        raise WorkspaceDelegationError(
+            f"workspace grant is not provisionable from {existing.state}"
+        )
+
     def provision(self, grant_id: str, source_root: Path) -> ProvisionedWorkspace:
         grant = self._contract(grant_id)
         transport = self.transports[grant.transport_kind]

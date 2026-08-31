@@ -20,7 +20,7 @@ from researchd.context.builder import CloudContextSelection
 from researchd.context.agent_context import AgentContextBuilder, AgentContextBundle, AgentContextSelection
 from researchd.collaboration.adapters import CloudLeadAgentAdapter, LocalExecutorAgentAdapter
 from researchd.executor.contracts import ExecutorResult, GrantedWorkOrder, SandboxSpec
-from researchd.storage.models import AttemptRecord, WorkOrderRecord
+from researchd.storage.models import AttemptRecord, ResearchRunRecord, WorkOrderRecord
 from researchd.storage.models import (
     AgentInvocationRecord,
     AgentRecord,
@@ -28,7 +28,14 @@ from researchd.storage.models import (
     WorkspaceGrantRecord,
     WorkspaceTransportRecord,
 )
-from researchd.workspace.contracts import WorkspaceAccessMode, WorkspaceGrantBinding, WorkspaceTransportKind
+from researchd.workspace.contracts import (
+    WorkspaceAccessMode,
+    WorkspaceGrant,
+    WorkspaceGrantBinding,
+    WorkspaceSource,
+    WorkspaceTransportKind,
+)
+from researchd.workspace.service import WorkspaceDelegationService
 from sqlalchemy import select
 
 
@@ -38,7 +45,9 @@ class CollaborationGateway:
                  agent_id: AgentId | None = None, runtime_id: AgentRuntimeId | None = None,
                  selector: AgentSelector | None = None, catalog: AgentAdapterCatalog | None = None,
                  context_builder: AgentContextBuilder | None = None,
-                 allowed_adapter_kinds_by_purpose: dict[DelegationPurpose, frozenset[AgentAdapterKind]] | None = None) -> None:
+                 allowed_adapter_kinds_by_purpose: dict[DelegationPurpose, frozenset[AgentAdapterKind]] | None = None,
+                 workspace: WorkspaceDelegationService | None = None,
+                 workspace_sources: dict[str, WorkspaceSource] | None = None) -> None:
         self.cloud = cloud
         self.executor = executor
         self.delegations, self.invocations = delegations, invocations
@@ -47,6 +56,8 @@ class CollaborationGateway:
         self.catalog = catalog
         self.context_builder = context_builder
         self.allowed_adapter_kinds_by_purpose = allowed_adapter_kinds_by_purpose or {}
+        self.workspace = workspace
+        self.workspace_sources = workspace_sources or {}
         self._context_bundles: dict[str, AgentContextBundle] = {}
 
     def _canonical_request(self, tracking: tuple[DelegationId, InvocationId], typed_input: InvocationInput) -> AgentInvocationRequest:
@@ -219,6 +230,8 @@ class CollaborationGateway:
                     )
                 ):
                     raise ValueError("handoff Delegation identity conflict")
+                if self.workspace is not None:
+                    self._ensure_execution_workspace(existing.delegation_id)
                 return existing.delegation_id
         if self.selector is not None and (self.agent_id is None or self.runtime_id is None):
             selected = self.selector.select(
@@ -242,7 +255,43 @@ class CollaborationGateway:
             required_roles=("executor",), idempotency_key=f"{delegation_id}-orchestration",
         ))
         self.delegations.assign(str(delegation_id), agent_id=str(agent_id), runtime_id=str(runtime_id))
+        if self.workspace is not None:
+            self._ensure_execution_workspace(str(delegation_id))
         return str(delegation_id)
+
+    def _ensure_execution_workspace(self, delegation_id: str) -> None:
+        """Issue workspace authority only from trusted deployment configuration."""
+        if self.workspace is None or self.delegations is None:
+            raise ValueError("execution workspace issuer is not configured")
+        with self.delegations.sessions() as session:
+            delegation = session.get(DelegationRecord, delegation_id)
+            if delegation is None or delegation.assigned_agent_id is None:
+                raise ValueError("execution workspace requires an assigned delegation")
+            workspace_id = session.scalar(select(ResearchRunRecord.workspace_id).where(
+                ResearchRunRecord.run_id == delegation.run_id
+            ))
+        if workspace_id is None:
+            raise ValueError("execution workspace run disappeared")
+        source = self.workspace_sources.get(workspace_id)
+        if source is None:
+            raise ValueError("execution workspace source is not configured")
+        source_root = source.root.resolve(strict=True)
+        if source.transport_kind is WorkspaceTransportKind.GIT_WORKTREE and not (source_root / ".git").exists():
+            raise ValueError("configured execution workspace source is not a Git repository")
+        self.workspace.ensure_provisioned(WorkspaceGrant(
+            workspace_grant_id=f"wsg_{delegation_id}",
+            delegation_id=delegation_id,
+            source_workspace_id=workspace_id,
+            access_mode=source.access_mode,
+            allowed_paths=source.allowed_paths,
+            excluded_paths=source.excluded_paths,
+            classification_ceiling=source.classification_ceiling,
+            limits=source.limits,
+            lease_seconds=source.lease_seconds,
+            renewal_policy=source.renewal_policy,
+            transport_kind=source.transport_kind,
+            reconciliation_mode=source.reconciliation_mode,
+        ), source_root)
 
     def _finish(self, invocation_id: InvocationId | None, *, success: bool, output_type: str | None = None, output: dict[str, object] | None = None, reason: str | None = None, external_invocation_id: str | None = None) -> None:
         if invocation_id is not None:

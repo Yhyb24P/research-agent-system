@@ -2,6 +2,7 @@
 
 from collections.abc import Awaitable, Callable
 from enum import StrEnum
+from typing import Protocol
 
 from researchd.domain.base import DomainModel
 from researchd.daemon.startup import StartupBarrier, StartupReport
@@ -19,6 +20,14 @@ class DaemonNotReady(RuntimeError):
     pass
 
 
+class DaemonLifecycleService(Protocol):
+    """A daemon-owned auxiliary service with no command authority."""
+
+    def start(self) -> None: ...
+    def stop(self) -> None: ...
+    def health(self) -> dict[str, object]: ...
+
+
 class ResearchDaemon:
     """Own startup ordering and reject every mutation until recovery passes."""
 
@@ -26,11 +35,16 @@ class ResearchDaemon:
         self,
         barrier: StartupBarrier,
         dispatcher: Callable[[DomainModel], object | Awaitable[object]],
+        *,
+        orchestration_driver: DaemonLifecycleService | None = None,
+        auxiliary_services: tuple[DaemonLifecycleService, ...] = (),
     ) -> None:
         self.barrier = barrier
         self.dispatcher = dispatcher
         self.state = DaemonState.CREATED
         self.startup_report: StartupReport | None = None
+        self.orchestration_driver = orchestration_driver
+        self.auxiliary_services = auxiliary_services
 
     def start(self) -> StartupReport:
         if self.state is not DaemonState.CREATED:
@@ -42,6 +56,11 @@ class ResearchDaemon:
             if self.startup_report.ready
             else DaemonState.FAILED
         )
+        if self.state is DaemonState.READY and self.orchestration_driver is not None:
+            self.orchestration_driver.start()
+        if self.state is DaemonState.READY:
+            for service in self.auxiliary_services:
+                service.start()
         return self.startup_report
 
     def execute(self, command: DomainModel) -> object:
@@ -54,10 +73,14 @@ class ResearchDaemon:
     def stop(self) -> None:
         if self.state is DaemonState.STARTING:
             raise RuntimeError("researchd cannot stop while startup is running")
+        for service in reversed(self.auxiliary_services):
+            service.stop()
+        if self.orchestration_driver is not None:
+            self.orchestration_driver.stop()
         self.state = DaemonState.STOPPED
 
     def health(self) -> dict[str, object]:
-        return {
+        health: dict[str, object] = {
             "state": self.state.value,
             "ready": self.state is DaemonState.READY,
             "startup": (
@@ -66,3 +89,11 @@ class ResearchDaemon:
                 else None
             ),
         }
+        if self.orchestration_driver is not None:
+            health["orchestration_driver"] = self.orchestration_driver.health()
+        if self.auxiliary_services:
+            health["auxiliary_services"] = {
+                type(service).__name__: service.health()
+                for service in self.auxiliary_services
+            }
+        return health

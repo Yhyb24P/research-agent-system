@@ -44,6 +44,9 @@ class _FakeClient:
                 "pending_approval_ids": [],
             }
         ]
+        self.workspaces: list[dict[str, Any]] = [
+            {"workspace_id": "ws_main", "name": "Main", "version": 1},
+        ]
 
     def health(self) -> dict[str, Any]:
         return {"state": "READY", "ready": True}
@@ -54,6 +57,8 @@ class _FakeClient:
             return self.agents
         if path == "/api/runs":
             return self.runs
+        if path == "/api/workspaces":
+            return self.workspaces
         return []
 
     def post_command(
@@ -124,8 +129,13 @@ def test_parse_task_create_and_cancel() -> None:
     parsed = parse_line('task create ws_main "ship the report"')
     assert parsed.name == "task create"
     assert parsed.args == ("ws_main", "ship the report")
+    # PH03: with a focused workspace the objective alone parses; without a
+    # focus the explicit workspace id rides along as the first argument.
+    assert parse_line('task create "ship the report"') == ParsedCommand(
+        "task create", ("ship the report",), {}
+    )
     with pytest.raises(ShellParseError):
-        parse_line("task create ws_main")
+        parse_line("task create")
     assert parse_line("task cancel run_one") == ParsedCommand(
         "task cancel", ("run_one",), {}
     )
@@ -133,6 +143,41 @@ def test_parse_task_create_and_cancel() -> None:
         parse_line("task cancel")
     with pytest.raises(ShellParseError):
         parse_line("task rename run_one")
+
+
+def test_parse_workspace_subcommands() -> None:
+    # PH03: workspace list/create/use are client-local focus commands.
+    assert parse_line("workspace list") == ParsedCommand("workspace list", (), {})
+    parsed = parse_line("workspace create ws_new Fresh Space")
+    assert parsed.name == "workspace create"
+    assert parsed.args == ("ws_new", "Fresh", "Space")
+    assert parse_line("workspace use ws_main") == ParsedCommand(
+        "workspace use", ("ws_main",), {}
+    )
+    with pytest.raises(ShellParseError):
+        parse_line("workspace")
+    with pytest.raises(ShellParseError):
+        parse_line("workspace create ws_new")
+    with pytest.raises(ShellParseError):
+        parse_line("workspace frobnicate")
+
+
+def test_shell_workspace_list_and_create() -> None:
+    client = _FakeClient()
+    output = _drive(["workspace list", "workspace create ws_new Fresh", "quit"], client)
+    assert "ws_main  Main" in output
+    path, payload = client.posts[0]
+    assert path == "/api/workspaces"
+    assert payload == {"workspace_id": "ws_new", "name": "Fresh"}
+
+
+def test_shell_workspace_focus_drives_task_create() -> None:
+    client = _FakeClient()
+    output = _drive(["workspace use ws_main", 'task create "ship it"', "quit"], client)
+    assert "current workspace: ws_main" in output
+    path, payload = client.posts[0]
+    assert path == "/api/runs"
+    assert payload == {"workspace_id": "ws_main", "objective": "ship it"}
 
 
 def test_parse_msg_with_options() -> None:
@@ -163,17 +208,22 @@ def test_parse_events_watch() -> None:
         parse_line("events follow")
 
 
-def test_parse_approve_and_reject() -> None:
-    assert parse_line("approve wo_one grant_one") == ParsedCommand(
-        "approve", ("wo_one", "grant_one"), {}
-    )
-    assert parse_line("reject wo_one appr_one") == ParsedCommand(
-        "reject", ("wo_one", "appr_one"), {}
+def test_parse_approval_approve() -> None:
+    # PH02: the shell names the pending approval only; the route derives the
+    # HUMAN actor and the daemon mints the grant. No grant-based commands.
+    assert parse_line("approval approve appr_one") == ParsedCommand(
+        "approval approve", ("appr_one",), {}
     )
     with pytest.raises(ShellParseError):
-        parse_line("approve wo_one")
+        parse_line("approval approve")
     with pytest.raises(ShellParseError):
-        parse_line("reject wo_one a b")
+        parse_line("approval approve a b")
+    with pytest.raises(ShellParseError):
+        parse_line("approval reject appr_one")
+    with pytest.raises(ShellParseError):
+        parse_line("approve wo_one grant_one")
+    with pytest.raises(ShellParseError):
+        parse_line("reject wo_one appr_one")
 
 
 def test_unknown_command_and_unbalanced_quotes_are_rejected() -> None:
@@ -249,17 +299,14 @@ def test_shell_msg_generates_a_message_identity() -> None:
     assert "classification" not in payload
 
 
-def test_shell_approve_and_reject_payloads() -> None:
+def test_shell_approval_approve_payload() -> None:
     client = _FakeClient()
-    _drive(["approve wo_one grant_one", "reject wo_two appr_two", "quit"], client)
-    assert client.posts[0] == (
-        "/api/work-orders/wo_one/approve",
-        {"grant_id": "grant_one"},
-    )
-    assert client.posts[1] == (
-        "/api/work-orders/wo_two/reject",
-        {"approval_id": "appr_two"},
-    )
+    _drive(["approval approve appr_one", "quit"], client)
+    path, payload = client.posts[0]
+    assert path == "/api/approvals/appr_one/approve"
+    # The shell submits no grant/actor material; the transport adds the
+    # command identity and the route pins the HUMAN actor.
+    assert payload == {}
 
 
 def test_shell_survives_parse_and_transport_errors() -> None:

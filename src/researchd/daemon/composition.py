@@ -38,21 +38,23 @@ from researchd.daemon.reconciliation import (
 from researchd.daemon.runtime import ResearchDaemon
 from researchd.daemon.startup import build_startup_barrier
 from researchd.domain.base import DomainModel
-from researchd.domain.enums import AgentAdapterKind, DelegationPurpose
+from researchd.domain.enums import AgentAdapterKind, Capability, DelegationPurpose
 from researchd.executor.jobs import JobManager, LocalDurableJobBackend
 from researchd.executor.capability_broker import CapabilityBroker
 from researchd.executor.contracts import CommandLimits
 from researchd.executor.sandbox import BubblewrapBackend
 from researchd.executor.worktree import WorktreeManager
 from researchd.orchestrator.engine import ResearchOrchestrator
+from researchd.orchestrator.driver import OrchestrationDriver
 from researchd.policy.approval import ApprovalService
 from researchd.policy.engine import DeterministicPolicyEngine, RecordingPolicyEngine
 from researchd.runtime_sessions.service import RuntimeSessionService
 from researchd.runtime_sessions.launch_profiles import RuntimeLaunchProfileService
 from researchd.runtime_sessions.managed_start import ManagedAgentStartService
 from researchd.storage.db import create_sqlite_engine, session_factory
-from researchd.supervisor.runtime import RuntimeSupervisor
+from researchd.supervisor.runtime import RuntimeLeaseHeartbeat, RuntimeSupervisor
 from researchd.verifier.driver import LocalVerificationDriver
+from researchd.workspace.contracts import WorkspaceSource, WorkspaceTransportKind
 from researchd.workspace.service import WorkspaceDelegationService
 from researchd.workspace.transports import ArchiveWorkspaceTransport, GitWorktreeTransport
 
@@ -79,6 +81,7 @@ class DaemonConfig(DomainModel):
     artifact_root: Path
     state_root: Path
     repositories: dict[str, Path] = Field(default_factory=dict)
+    workspace_sources: dict[str, WorkspaceSource] = Field(default_factory=dict)
     job_commands: dict[str, JobCommandConfig] = Field(default_factory=dict)
     executor_command_limits: CommandLimits = Field(default_factory=lambda: CommandLimits(
         wall_seconds=300,
@@ -89,6 +92,8 @@ class DaemonConfig(DomainModel):
     ))
     host: str = "127.0.0.1"
     port: int = Field(default=8788, ge=0, le=65_535)
+    workspace_capabilities: frozenset[Capability] = frozenset()
+    user_capabilities: frozenset[Capability] = frozenset()
 
     @field_validator("database", "artifact_root", "state_root")
     @classmethod
@@ -105,6 +110,16 @@ class DaemonConfig(DomainModel):
                 raise ValueError("repository ID is invalid")
             if not path.is_absolute():
                 raise ValueError("repository paths must be absolute")
+        return value
+
+    @field_validator("workspace_sources")
+    @classmethod
+    def validate_workspace_sources(
+        cls, value: dict[str, WorkspaceSource],
+    ) -> dict[str, WorkspaceSource]:
+        for workspace_id in value:
+            if _CONFIGURATION_ID.fullmatch(workspace_id) is None:
+                raise ValueError("workspace ID is invalid")
         return value
 
     @field_validator("job_commands")
@@ -143,6 +158,10 @@ class DaemonConfig(DomainModel):
             "repositories": {
                 key: str(value) for key, value in sorted(self.repositories.items())
             },
+            "workspace_sources": {
+                key: source.model_dump(mode="json")
+                for key, source in sorted(self.workspace_sources.items())
+            },
             "job_commands": {
                 key: {
                     "executable": value.argv[0],
@@ -153,6 +172,8 @@ class DaemonConfig(DomainModel):
             "executor_command_limits": self.executor_command_limits.model_dump(mode="json"),
             "host": self.host,
             "port": self.port,
+            "workspace_capabilities": sorted(item.value for item in self.workspace_capabilities),
+            "user_capabilities": sorted(item.value for item in self.user_capabilities),
         }
 
 
@@ -164,6 +185,7 @@ class DaemonApplication:
     managed_start: ManagedAgentStartService
     resolution: DaemonCommandResolutionService
     handoffs: HandoffResolutionService
+    orchestration_driver: OrchestrationDriver
 
 
 def compose_daemon(
@@ -195,13 +217,27 @@ def compose_daemon(
     for repository_id, repository in repositories.items():
         if not (repository / ".git").exists():
             raise ValueError(f"configured repository is not a Git repository: {repository_id}")
+    workspace_sources = {
+        key: source.model_copy(update={"root": source.root.resolve(strict=True)})
+        for key, source in config.workspace_sources.items()
+    }
+    for workspace_id, source in workspace_sources.items():
+        if (
+            source.transport_kind is WorkspaceTransportKind.GIT_WORKTREE
+            and not (source.root / ".git").exists()
+        ):
+            raise ValueError(
+                f"configured workspace source is not a Git repository: {workspace_id}"
+            )
     commands = {key: value.argv for key, value in config.job_commands.items()}
     jobs = JobManager(sessions, LocalDurableJobBackend(state / "jobs", commands))
     invocations = InvocationService(sessions)
     registry = AgentRegistryService(sessions)
     launch_profiles = RuntimeLaunchProfileService(sessions, registry)
     managed_start = ManagedAgentStartService(registry, launch_profiles)
-    supervisor = RuntimeSupervisor(RuntimeSessionService(sessions, registry))
+    supervisor = RuntimeSupervisor(
+        RuntimeSessionService(sessions, registry), registry=registry,
+    )
     barrier = build_startup_barrier(
         engine=engine,
         sessions=sessions,
@@ -272,13 +308,18 @@ def compose_daemon(
                 DelegationPurpose.EVIDENCE: frozenset({AgentAdapterKind.PROCESS}),
                 DelegationPurpose.SPECIALIST: frozenset({AgentAdapterKind.PROCESS}),
             },
+            workspace=workspace,
+            workspace_sources=workspace_sources,
         ),
         policy=RecordingPolicyEngine(DeterministicPolicyEngine(), sessions),
         verifier=verifier_driver,
         approvals=ApprovalService(sessions),
         jobs=jobs,
+        workspace_capabilities=config.workspace_capabilities,
+        user_capabilities=config.user_capabilities,
     )
     api = LocalControlAPI(sessions, orchestrator)
+    orchestration_driver = OrchestrationDriver(orchestrator, sessions)
     handoffs = HandoffResolutionService(sessions, orchestrator)
     dispatcher = DaemonCommandDispatcher(
         supervisor,
@@ -287,8 +328,14 @@ def compose_daemon(
         managed_start=managed_start,
         handoffs=handoffs,
         remote_attachments=RemoteAttachmentService(registry),
+        orchestration_driver=orchestration_driver,
     )
-    daemon = ResearchDaemon(barrier, DurableDaemonCommandService(sessions, dispatcher))
+    daemon = ResearchDaemon(
+        barrier,
+        DurableDaemonCommandService(sessions, dispatcher),
+        orchestration_driver=orchestration_driver,
+        auxiliary_services=(RuntimeLeaseHeartbeat(supervisor),),
+    )
     resolution = DaemonCommandResolutionService(sessions, build_builtin_observers(sessions))
     return DaemonApplication(
         config=config,
@@ -297,6 +344,7 @@ def compose_daemon(
         managed_start=managed_start,
         resolution=resolution,
         handoffs=handoffs,
+        orchestration_driver=orchestration_driver,
     )
 
 

@@ -87,6 +87,9 @@ replace `ResearchRun`, `Delegation`, `AgentInvocation`, `Artifact`, or
 - Linux and Python `>=3.12,<3.13`.
 - [`uv`](https://docs.astral.sh/uv/) for locked dependency installation.
 - Bubblewrap for the sandbox/security test suite.
+- `/workspace` host directory for sandboxed execution.
+- prlimit utility for resource limits (usually `/usr/bin/prlimit`).
+
 
 Install the core only:
 
@@ -174,11 +177,11 @@ off-host and primary-loss drill required for DQ04 acceptance.
 
 Integration tests are the executable reference workflow. The repository now
 ships the concrete `researchd` composition root and CLI around the durable
-RuntimeSession/Supervisor services. The daily `research` client now covers
-the lifecycle surface (`init`, `status`, interactive entry) and the first
-shell command batch (`status`, agent working set, `run list`,
-`task create`/`task cancel`, `msg`, `events watch`, `approve`, `reject`);
-the Browser Control Tower opens with `research browser`.
+RuntimeSession/Supervisor services. The daemon-owned orchestration driver
+recovers durable runnable runs at startup and advances them through the
+trusted controller. The daily `research` client covers initialization,
+daemon status/stop/restart, an interactive workspace-focused shell, detached
+projection consoles, and the Browser Control Tower.
 
 An embedding composition must register its trusted services and use
 `build_startup_barrier(...)`. The barrier verifies migration `0025` and live
@@ -214,13 +217,22 @@ JSON
 uv run researchd --config researchd.json validate
 uv run researchd --config researchd.json inspect
 uv run researchd --config researchd.json init
+# Only while the daemon is stopped; creates a timestamped pre-migration backup.
+uv run researchd --config researchd.json migrate
+# Only while the daemon is stopped; definition is trusted local-admin input.
+uv run researchd --config researchd.json install-agent agent_definition.json
 uv run researchd --config researchd.json serve
 curl http://127.0.0.1:8788/api/health
 TOKEN=$(tr -d '\n' < /absolute/path/state/control.token)
 curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8788/api/runs
 ```
 
-`serve` never migrates an existing database. It reaches READY only after the
+`serve` never migrates an existing database. `migrate` is the explicit
+maintenance operation: it refuses a missing database or a live daemon, copies
+the database to a timestamped pre-migration backup, then upgrades the packaged
+migration chain. `install-agent` is likewise a stopped-daemon local-admin
+operation; it validates and installs a trusted `AgentDefinition`, rather than
+accepting runtime launch details from a daily client. `serve` reaches READY only after the
 frozen eight-stage recovery barrier passes; a non-current schema, missing
 repository, unknown configuration field, relative path, or non-loopback bind
 fails closed. An empty `job_commands` map intentionally disables job submission.
@@ -261,6 +273,9 @@ authenticated HTTP surface and never opens the database:
 ```bash
 uv run research --config researchd.json init
 uv run research --config researchd.json status
+uv run research --config researchd.json daemon status
+uv run research --config researchd.json daemon stop
+uv run research --config researchd.json daemon restart
 uv run research --config researchd.json browser
 uv run research --config researchd.json
 ```
@@ -270,11 +285,14 @@ document with reachability and readiness. Without a subcommand, `research`
 probes the daemon and, when none is reachable, spawns `researchd serve` as a
 controller process that remains independent when the interactive shell exits.
 The shell is entered only after the daemon reports READY — a non-ready daemon is
-surfaced with its failed startup phase, never bypassed. The first shell
-batch offers `status`, `agent list` / `agent use` / `agent remove`,
-`run list`, `task create`, `task cancel`, `msg`, `handoff list` /
-`handoff accept` / `handoff reject`, `events watch`, `approve`, `reject` and
-`remote attach <runtime-id>` / `remote renew <runtime-id>` / `remote detach <runtime-id>`, and `quit`; every command crosses the authenticated
+surfaced with its failed startup phase, never bypassed. The shell offers
+`status`; `workspace list` / `workspace create` / `workspace use`; `agent
+list` / `agent use` / `agent remove` / `agent start`; `runtime list` /
+`runtime stop`; `run list`; `task create` / `task cancel`; `msg`; `handoff
+list` / `handoff accept` / `handoff reject`; `events watch`; `approval approve
+<approval-id>`; remote attach/renew/detach; and `quit`. With a focused
+workspace, `task create <objective>` uses that workspace; otherwise the first
+argument must be its workspace ID. Every command crosses the authenticated
 transport, and `agent remove` only clears the session-local working set.
 
 `research browser` opens a loopback-only Browser Control Tower. The HTML, CSS,
@@ -401,7 +419,7 @@ internal command. An accepted dispatch returns `202` with the versioned
 | `POST` | `/api/agents/{agent_id}/start` | `runtime_id` (optional) |
 | `POST` | `/api/runtime-sessions/{runtime_session_id}/stop` | `runtime_id`, `expected_version` |
 | `POST` | `/api/runs/{run_id}/cancel` | — |
-| `POST` | `/api/work-orders/{work_order_id}/approve` | `grant_id` |
+| `POST` | `/api/approvals/{approval_id}/approve` | — |
 | `POST` | `/api/work-orders/{work_order_id}/human-decision` | `action` (`abort` or `revise`; `revise` requires `objective`) |
 | `POST` | `/api/work-orders/{work_order_id}/reject` | `approval_id` |
 | `POST` | `/api/workspaces` | `workspace_id`, `name` |
@@ -421,9 +439,13 @@ to the same session. The former arbitrary
 `/api/runtime-sessions/start` and `/api/runtime-sessions/attach` routes are
 disabled; stopping a session still uses the per-session stop route above.
 
-The workspace, research-task, reject, and collaboration-message routes run
+The workspace, research-task, approval, reject, and collaboration-message routes run
 through the orchestrator control authority, so they require the embedding
 application to expose a `ResearchOrchestrator`; without one they fail closed.
+An approval request is a HUMAN intent only: its route binds the local HUMAN
+actor server-side, derives or reuses the scoped grant in the trusted control
+plane, consumes one-shot authority, and atomically resumes the associated
+WorkOrder and ResearchRun. A client can never submit a grant ID to approve.
 `POST /api/work-orders/{work_order_id}/reject` converges a `WAITING_APPROVAL`
 order and its pending approval to `FAILED`/`REJECTED` (the run fails with
 `APPROVAL_REJECTED`), symmetric with a policy denial. The three backup routes
@@ -453,13 +475,13 @@ prevents payload attribution. This is the PX00 MVP boundary; later native peer
 credentials may replace the token without changing internal command authority.
 
 Migration `0022` adds a one-to-one, server-owned `RuntimeLaunchProfile` for an
-existing `AgentRuntime`. Public start/attach requests contain no executable,
+installed `AgentRuntime`. Public start/attach requests contain no executable,
 argv, cwd, endpoint, or health override. The daemon resolves the enabled
 profile, verifies its canonical digest, constructs the internal command, and
 persists both the resolved launch-spec snapshot and profile hash on the
-RuntimeSession. Until PX01 supplies the installation command, profiles are
-registered only through the trusted in-process configuration service; a
-missing, disabled, wrong-mode, or tampered profile fails closed.
+RuntimeSession. Agent definitions and profiles enter only through the
+stopped-daemon trusted installation command; a missing, disabled, wrong-mode,
+or tampered profile fails closed.
 
 Arbitrary UI events have no mutation endpoint.
 
@@ -492,14 +514,23 @@ Only the current contracts are supported; the project does not maintain legacy
 protocol or database compatibility guarantees. Unsafe or unqualified
 boundaries fail closed.
 
-Repository qualification uses immutable `v1.0.0-rc.*` Git tags. The Python
-distribution remains `0.1.0` during this pre-publication phase, so Git RC tags
-identify qualified source commits and are intentionally independent from the
-package semantic version. Use the latest Git tag and its exact commit when
-reproducing a candidate.
+`v1.0.0-rc.80` is an immutable historical qualification candidate and does
+not qualify later productization code. New product candidates use a single
+release identity: Git tag `vX.Y.Z-rc.N` maps exactly to Python distribution
+version `X.Y.ZrcN`; the final `vX.Y.Z` tag maps to `X.Y.Z`. The current tagged
+candidate is `v1.0.0-rc.81` / `1.0.0rc81` at
+`f7785244acc0687324376806666ead2be26bf478`. A tag is created only after the
+exact candidate commit passes all gates; it is never moved or reused.
+Run `python scripts/version_policy_check.py --candidate-tag v1.0.0-rc.81` to
+validate the mapping, and use `--require-head-tag` to validate the tagged
+candidate.
 
 The repository does not claim universal distributed exactly-once execution or a
 public control/A2A service.
 Operational release approval still requires evidence tied to the exact commit,
 including a green CI run, backup/restore validation, transport governance, and
 the intended soak/acceptance checks.
+
+## License
+
+Apache License 2.0 (ALv2). See the `LICENSE` file at the repository root.

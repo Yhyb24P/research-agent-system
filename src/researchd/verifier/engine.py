@@ -34,19 +34,31 @@ class ClaimRecorder:
         self.sessions = sessions
 
     def record_executor_claims(self, attempt_id: str, claims: tuple[str, ...], supporting_refs: tuple[str, ...] = ()) -> list[str]:
-        identifiers: list[str] = []
-        now = datetime.now(UTC)
         with self.sessions.begin() as session:
-            if session.get(AttemptRecord, attempt_id) is None:
-                raise LookupError(attempt_id)
-            for statement in claims:
-                identifier = f"claim_{uuid4().hex}"
-                session.add(ClaimRecord(
-                    claim_id=identifier, attempt_id=attempt_id, statement=statement,
-                    supporting_refs=list(supporting_refs), producer_type="executor",
-                    producer_id="local-executor", created_at=now,
-                ))
-                identifiers.append(identifier)
+            return self.record_executor_claims_in_session(
+                session, attempt_id, claims, supporting_refs,
+            )
+
+    @staticmethod
+    def record_executor_claims_in_session(
+        session: Session,
+        attempt_id: str,
+        claims: tuple[str, ...],
+        supporting_refs: tuple[str, ...] = (),
+    ) -> list[str]:
+        """Add non-authoritative executor statements to an existing transaction."""
+        if session.get(AttemptRecord, attempt_id) is None:
+            raise LookupError(attempt_id)
+        now = datetime.now(UTC)
+        identifiers: list[str] = []
+        for statement in claims:
+            identifier = f"claim_{uuid4().hex}"
+            session.add(ClaimRecord(
+                claim_id=identifier, attempt_id=attempt_id, statement=statement,
+                supporting_refs=list(supporting_refs), producer_type="executor",
+                producer_id="local-executor", created_at=now,
+            ))
+            identifiers.append(identifier)
         return identifiers
 
 

@@ -5,6 +5,7 @@ from typing import Protocol
 
 from researchd.collaboration.contracts import CollaborationMessage
 from researchd.daemon.contracts import (
+    ApprovalApproveCommand,
     BackupCreateCommand,
     BackupVerifyCommand,
     CollaborationMessageSendCommand,
@@ -44,6 +45,7 @@ class DaemonCommandDispatcher:
         managed_start: "ManagedAgentStartAuthority | None" = None,
         handoffs: "HandoffResolutionAuthority | None" = None,
         remote_attachments: "RemoteAttachmentAuthority | None" = None,
+        orchestration_driver: "OrchestrationWakeAuthority | None" = None,
     ) -> None:
         self.supervisor = supervisor
         self.control = control
@@ -51,6 +53,7 @@ class DaemonCommandDispatcher:
         self.managed_start = managed_start
         self.handoffs = handoffs
         self.remote_attachments = remote_attachments
+        self.orchestration_driver = orchestration_driver
 
     def __call__(self, command: DomainModel) -> DomainModel | Awaitable[DomainModel]:
         if isinstance(command, RuntimeSessionStartCommand):
@@ -80,6 +83,8 @@ class DaemonCommandDispatcher:
             return self._cancel(command)
         if isinstance(command, WorkOrderApproveCommand):
             return self._approve(command)
+        if isinstance(command, ApprovalApproveCommand):
+            return self._approve_request(command)
         if isinstance(command, HumanDecisionCommand):
             control = self._control()
             resource = control.resolve_human(
@@ -113,6 +118,11 @@ class DaemonCommandDispatcher:
                 command.objective,
                 run_id=command.run_id,
             )
+            run_id = resource.get("run_id")
+            if not isinstance(run_id, str):
+                raise RuntimeError("ResearchTaskCreate did not return a run ID")
+            if self.orchestration_driver is not None:
+                self.orchestration_driver.wake(run_id)
             return self._accepted(command.command_id, "ResearchTaskCreate", resource)
         if isinstance(command, WorkOrderRejectCommand):
             control = self._control()
@@ -174,6 +184,16 @@ class DaemonCommandDispatcher:
         resource = await self._control().approve(command.work_order_id, command.grant_id)
         return self._accepted(command.command_id, "WorkOrderApprove", resource)
 
+    async def _approve_request(self, command: ApprovalApproveCommand) -> DaemonCommandResult:
+        resource = await self._control().approve_request(
+            command.approval_id,
+            granted_by=command.actor_id,
+        )
+        run_id = resource.get("run_id")
+        if isinstance(run_id, str) and self.orchestration_driver is not None:
+            self.orchestration_driver.wake(run_id)
+        return self._accepted(command.command_id, "ApprovalApprove", resource)
+
     def _control(self) -> "ControlMutationAuthority":
         if self.control is None:
             raise RuntimeError("orchestrator mutation authority is not configured")
@@ -217,6 +237,7 @@ class DaemonCommandDispatcher:
 class ControlMutationAuthority(Protocol):
     async def cancel_run(self, run_id: str) -> dict[str, object]: ...
     async def approve(self, work_order_id: str, grant_id: str) -> dict[str, object]: ...
+    async def approve_request(self, approval_id: str, *, granted_by: str) -> dict[str, object]: ...
     def resolve_human(
         self,
         work_order_id: str,
@@ -293,10 +314,17 @@ class RemoteAttachmentAuthority(Protocol):
     def renew(self, runtime_id: str) -> dict[str, object]: ...
 
 
+class OrchestrationWakeAuthority(Protocol):
+    """Wake-only hook; advancement authority remains in the orchestrator."""
+
+    def wake(self, run_id: str) -> None: ...
+
+
 __all__ = [
     "BackupMutationAuthority",
     "ControlMutationAuthority",
     "DaemonCommandDispatcher",
     "ManagedAgentStartAuthority",
+    "OrchestrationWakeAuthority",
     "RemoteAttachmentAuthority",
 ]

@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import update
+from sqlalchemy import select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -75,6 +75,57 @@ class ApprovalService:
             session.flush()
             return grant
 
+    def approve_or_reuse(
+        self,
+        approval_id: str,
+        *,
+        granted_by: str,
+    ) -> ApprovalGrantRecord:
+        """Create one grant for a pending request or recover its prior grant.
+
+        This is deliberately controller-side.  A retry after a crash between
+        grant creation and WorkOrder resumption cannot mint a second grant.
+        """
+        with self.sessions.begin() as session:
+            return self.approve_or_reuse_in_session(session, approval_id, granted_by=granted_by)
+
+    def approve_or_reuse_in_session(
+        self, session: Session, approval_id: str, *, granted_by: str,
+    ) -> ApprovalGrantRecord:
+        request = session.get(ApprovalRequestRecord, approval_id)
+        if request is None:
+            raise ApprovalError("approval request not found")
+        if request.status == ApprovalStatus.PENDING.value:
+            return self._approve_in_session(session, request, granted_by)
+        if request.status == ApprovalStatus.APPROVED.value:
+            grant = session.scalar(select(ApprovalGrantRecord).where(
+                ApprovalGrantRecord.approval_id == approval_id,
+            ))
+            if grant is None:
+                raise ApprovalNotValid("approved request has no durable grant")
+            return grant
+        raise ApprovalNotValid("approval request is not pending and unexpired")
+
+    @staticmethod
+    def _approve_in_session(
+        session: Session,
+        request: ApprovalRequestRecord,
+        granted_by: str,
+    ) -> ApprovalGrantRecord:
+        now = datetime.now(UTC)
+        if request.expires_at <= now:
+            raise ApprovalNotValid("approval request is not pending and unexpired")
+        request.status = ApprovalStatus.APPROVED.value
+        grant = ApprovalGrantRecord(
+            grant_id=f"grant_{uuid4().hex}", approval_id=request.approval_id,
+            parameter_sha256=request.parameter_sha256, granted_by=granted_by,
+            expires_at=request.expires_at, one_shot=request.one_shot,
+            used_at=None, created_at=now,
+        )
+        session.add(grant)
+        session.flush()
+        return grant
+
     def reject(self, approval_id: str) -> ApprovalRequestRecord:
         """Converge a PENDING request to REJECTED; a guarded UPDATE guards races."""
         with self.sessions.begin() as session:
@@ -99,23 +150,38 @@ class ApprovalService:
         _, digest = parameter_hash(operation_type, parameters)
         now = datetime.now(UTC)
         with self.sessions.begin() as session:
-            grant = session.get(ApprovalGrantRecord, grant_id)
-            if grant is None:
-                raise ApprovalNotValid("approval grant not found")
-            request = session.get(ApprovalRequestRecord, grant.approval_id)
-            if request is None or request.status != ApprovalStatus.APPROVED.value:
-                raise ApprovalNotValid("approval request is not approved")
-            if digest != grant.parameter_sha256 or digest != request.parameter_sha256:
-                raise ApprovalNotValid("operation parameters do not match approval hash")
-            if grant.expires_at <= now:
-                raise ApprovalNotValid("approval grant has expired")
-            if not grant.one_shot:
-                return
-            result = session.execute(
-                update(ApprovalGrantRecord)
-                .where(ApprovalGrantRecord.grant_id == grant_id, ApprovalGrantRecord.used_at.is_(None), ApprovalGrantRecord.expires_at > now)
-                .values(used_at=now)
+            self.authorize_in_session(
+                session, grant_id, operation_type=operation_type, parameters=parameters,
             )
-            cursor = result  # SQLAlchemy returns a cursor result for UPDATE.
-            if not isinstance(cursor, CursorResult) or cursor.rowcount != 1:
-                raise ApprovalNotValid("one-shot approval grant has already been used")
+
+    def authorize_in_session(
+        self,
+        session: Session,
+        grant_id: str,
+        *,
+        operation_type: str,
+        parameters: Mapping[str, Any],
+    ) -> None:
+        """Validate and consume the exact grant inside a caller transaction."""
+        _, digest = parameter_hash(operation_type, parameters)
+        now = datetime.now(UTC)
+        grant = session.get(ApprovalGrantRecord, grant_id)
+        if grant is None:
+            raise ApprovalNotValid("approval grant not found")
+        request = session.get(ApprovalRequestRecord, grant.approval_id)
+        if request is None or request.status != ApprovalStatus.APPROVED.value:
+            raise ApprovalNotValid("approval request is not approved")
+        if digest != grant.parameter_sha256 or digest != request.parameter_sha256:
+            raise ApprovalNotValid("operation parameters do not match approval hash")
+        if grant.expires_at <= now:
+            raise ApprovalNotValid("approval grant has expired")
+        if not grant.one_shot:
+            return
+        result = session.execute(
+            update(ApprovalGrantRecord)
+            .where(ApprovalGrantRecord.grant_id == grant_id, ApprovalGrantRecord.used_at.is_(None), ApprovalGrantRecord.expires_at > now)
+            .values(used_at=now)
+        )
+        cursor = result  # SQLAlchemy returns a cursor result for UPDATE.
+        if not isinstance(cursor, CursorResult) or cursor.rowcount != 1:
+            raise ApprovalNotValid("one-shot approval grant has already been used")

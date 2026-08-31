@@ -1,12 +1,10 @@
 """Line-oriented interactive shell for the daily ``research`` client.
 
-The first command batch (PX02-04) covers status, the session-local
-agent working set, run listing, task creation/cancellation,
-collaboration messages, event watching and work-order
-approve/reject. Every operation crosses the authenticated transport;
-the shell keeps no state of its own beyond the session-local working
-set, and ``agent remove`` only drops an agent from that local set —
-registered agents are never mutated or deleted by the client.
+The shell covers workspace focus, the session-local Agent working set,
+trusted Agent/runtime controls, task creation/cancellation, collaboration,
+handoff, event watching, and approval-ID-only HUMAN approval. Every operation
+crosses the authenticated transport; the shell keeps no authoritative state,
+and ``agent remove`` only drops an Agent from its local working set.
 """
 
 import json
@@ -62,6 +60,7 @@ class ParsedCommand:
 @dataclass
 class _ShellState:
     current_agent: str | None = None
+    current_workspace: str | None = None
     working_set: list[str] = field(default_factory=list)
 
 
@@ -82,6 +81,10 @@ def parse_line(line: str) -> ParsedCommand:
         return ParsedCommand("status", (), {})
     if head == "agent":
         return _parse_agent(tokens[1:])
+    if head == "workspace":
+        return _parse_workspace(tokens[1:])
+    if head == "runtime":
+        return _parse_simple_subcommand("runtime", tokens[1:], {"list": (0, 1), "stop": 1})
     if head == "run":
         return _parse_simple_subcommand(head, tokens[1:], {"list": 0})
     if head == "task":
@@ -94,15 +97,27 @@ def parse_line(line: str) -> ParsedCommand:
         return _parse_handoff(tokens[1:])
     if head == "remote":
         return _parse_simple_subcommand("remote", tokens[1:], {"attach": 1, "renew": 1, "detach": 1})
-    if head in {"approve", "reject"}:
-        _require_arity(head, tokens[1:], 2)
-        return ParsedCommand(head, tuple(tokens[1:]), {})
+    if head == "approval":
+        return _parse_simple_subcommand("approval", tokens[1:], {"approve": 1})
     raise ShellParseError(f"unknown command: {head}")
 
 
 def _parse_agent(tokens: list[str]) -> ParsedCommand:
-    subcommands = {"list": 0, "use": 1, "remove": 1}
+    subcommands: Mapping[str, int | tuple[int, int]] = {
+        "list": 0, "use": 1, "remove": 1, "start": (1, 2),
+    }
     return _parse_simple_subcommand("agent", tokens, subcommands)
+
+
+def _parse_workspace(tokens: list[str]) -> ParsedCommand:
+    if not tokens:
+        raise ShellParseError("workspace requires a subcommand")
+    if tokens[0] == "create":
+        if len(tokens) < 3:
+            raise ShellParseError("workspace create requires an id and name")
+        return ParsedCommand("workspace create", tuple(tokens[1:]), {})
+    subcommands: Mapping[str, int | tuple[int, int]] = {"list": 0, "use": 1}
+    return _parse_simple_subcommand("workspace", tokens, subcommands)
 
 
 def _parse_task(tokens: list[str]) -> ParsedCommand:
@@ -111,8 +126,8 @@ def _parse_task(tokens: list[str]) -> ParsedCommand:
     subcommand = tokens[0]
     rest = tokens[1:]
     if subcommand == "create":
-        if len(rest) < 2:
-            raise ShellParseError("task create requires a workspace id and an objective")
+        if not rest:
+            raise ShellParseError("task create requires an objective")
         return ParsedCommand("task create", tuple(rest), {})
     _require_arity("task cancel", rest, 1)
     return ParsedCommand("task cancel", tuple(rest), {})
@@ -295,6 +310,39 @@ def _execute(
         if state.current_agent == agent_id:
             state.current_agent = None
         print_fn(f"removed {agent_id} from the working set")
+    elif command.name == "agent start":
+        agent = resolve_agent_reference(client.get("/api/agents"), command.args[0])
+        start_payload: dict[str, Any] = {}
+        if len(command.args) == 2:
+            start_payload["runtime_id"] = command.args[1]
+        envelope = client.post_command(f"/api/agents/{agent['agent_id']}/start", start_payload)
+        print_fn(f"{envelope['status']} {envelope['command_id']}")
+    elif command.name == "workspace list":
+        for item in client.get("/api/workspaces"):
+            print_fn(f"{item['workspace_id']}  {item['name']}")
+    elif command.name == "workspace create":
+        envelope = client.post_command(
+            "/api/workspaces",
+            {"workspace_id": command.args[0], "name": " ".join(command.args[1:])},
+        )
+        print_fn(f"{envelope['status']} {envelope['command_id']}")
+    elif command.name == "workspace use":
+        state.current_workspace = command.args[0]
+        print_fn(f"current workspace: {state.current_workspace}")
+    elif command.name == "runtime list":
+        params = {"runtime": command.args[0]} if command.args else None
+        for item in client.get("/api/runtime-sessions", params=params):
+            print_fn(f"{item['runtime_session_id']}  {item['runtime_id']}  {item['supervisor_state']}")
+    elif command.name == "runtime stop":
+        sessions = client.get("/api/runtime-sessions")
+        match = next((item for item in sessions if item["runtime_session_id"] == command.args[0]), None)
+        if match is None:
+            raise ShellParseError("runtime session was not found")
+        envelope = client.post_command(
+            f"/api/runtime-sessions/{match['runtime_session_id']}/stop",
+            {"runtime_id": match["runtime_id"], "expected_version": match["version"]},
+        )
+        print_fn(f"{envelope['status']} {envelope['command_id']}")
     elif command.name in {"remote attach", "remote renew", "remote detach"}:
         action = command.name.removeprefix("remote ")
         envelope = client.post_command(
@@ -312,8 +360,12 @@ def _execute(
                 f"pending_approvals={len(item['pending_approval_ids'])}"
             )
     elif command.name == "task create":
-        workspace_id = command.args[0]
-        objective = " ".join(command.args[1:])
+        if state.current_workspace is None:
+            if len(command.args) < 2:
+                raise ShellParseError("task create requires a workspace id and an objective")
+            workspace_id, objective = command.args[0], " ".join(command.args[1:])
+        else:
+            workspace_id, objective = state.current_workspace, " ".join(command.args)
         envelope = client.post_command(
             "/api/runs",
             {"workspace_id": workspace_id, "objective": objective},
@@ -378,18 +430,10 @@ def _execute(
                         after = frame.offset
         except KeyboardInterrupt:
             print_fn("stopped watching")
-    elif command.name in {"approve", "reject"}:
-        work_order_id, reference = command.args
-        if command.name == "approve":
-            envelope = client.post_command(
-                f"/api/work-orders/{work_order_id}/approve",
-                {"grant_id": reference},
-            )
-        else:
-            envelope = client.post_command(
-                f"/api/work-orders/{work_order_id}/reject",
-                {"approval_id": reference},
-            )
+    elif command.name == "approval approve":
+        envelope = client.post_command(
+            f"/api/approvals/{command.args[0]}/approve",
+        )
         print_fn(f"{envelope['status']} {envelope['command_id']}")
 
 

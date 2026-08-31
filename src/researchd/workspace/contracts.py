@@ -2,6 +2,7 @@
 
 from datetime import datetime, timedelta
 from enum import StrEnum
+from pathlib import Path
 
 from pydantic import Field, PositiveInt, field_validator, model_validator
 
@@ -93,6 +94,28 @@ class WorkspaceGrant(DomainModel):
     renewal_policy: RenewalPolicy = RenewalPolicy.DENY
     transport_kind: WorkspaceTransportKind
     reconciliation_mode: ReconciliationMode = ReconciliationMode.ARTIFACT_ONLY
+
+
+class WorkspaceSource(DomainModel):
+    """Trusted deployment binding for a product workspace's source tree."""
+
+    root: Path
+    access_mode: WorkspaceAccessMode = WorkspaceAccessMode.READ_WRITE
+    allowed_paths: tuple[str, ...] = (".",)
+    excluded_paths: tuple[str, ...] = ()
+    classification_ceiling: DataClassification = DataClassification.LOCAL_ONLY
+    limits: WorkspaceLimits = WorkspaceLimits()
+    lease_seconds: PositiveInt = Field(default=3600, le=86_400)
+    renewal_policy: RenewalPolicy = RenewalPolicy.DENY
+    transport_kind: WorkspaceTransportKind = WorkspaceTransportKind.GIT_WORKTREE
+    reconciliation_mode: ReconciliationMode = ReconciliationMode.ARTIFACT_ONLY
+
+    @field_validator("root")
+    @classmethod
+    def root_is_absolute(cls, value: Path) -> Path:
+        if not value.is_absolute():
+            raise ValueError("workspace source root must be absolute")
+        return value
 
 
 class ProvisionedWorkspace(DomainModel):

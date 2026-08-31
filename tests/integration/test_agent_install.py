@@ -1,5 +1,6 @@
 """PX01-02: transactional AgentDefinition installation."""
 
+import json
 from pathlib import Path
 
 import pytest
@@ -243,3 +244,81 @@ def test_remote_http_install_resolves_through_existing_service(tmp_path: Path) -
     resolved = launch_profiles.resolve_remote_http("runtime_http")
     assert resolved.launch_spec.endpoint == "https://agent.example.invalid"
     assert resolved.launch_spec.health_path == "/health"
+
+
+def _cli_config(tmp_path: Path, database: Path) -> Path:
+    config = tmp_path / "researchd.json"
+    config.write_text(
+        json.dumps({
+            "database": str(database),
+            "artifact_root": str(tmp_path / "artifacts"),
+            "state_root": str(tmp_path / "state"),
+            "repositories": {},
+            "job_commands": {},
+            "host": "127.0.0.1",
+            "port": 8788,
+        }),
+        encoding="utf-8",
+    )
+    return config
+
+
+def _definition_file(tmp_path: Path) -> Path:
+    path = tmp_path / "agent_definition.json"
+    path.write_text(
+        _definition(
+            runtimes=(_process_runtime(),),
+            launch_profiles=(_launch_profile(),),
+        ).model_dump_json(),
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_researchd_install_agent_refuses_while_daemon_is_running(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PH03: the local-admin installer never runs against a live daemon."""
+    import researchd.daemon.cli as daemon_cli
+
+    monkeypatch.setattr(daemon_cli, "_daemon_is_running", lambda config: True)
+    config = _cli_config(tmp_path, tmp_path / "install.db")
+    with pytest.raises(SystemExit, match="refusing AgentDefinition install while researchd is running"):
+        daemon_cli.main([
+            "--config", str(config),
+            "install-agent", str(_definition_file(tmp_path)),
+        ])
+
+
+def test_researchd_install_agent_is_local_admin_only_and_leaks_no_secrets(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """PH03: install-agent writes the trusted registry directly; the receipt is secret-free."""
+    import researchd.daemon.cli as daemon_cli
+
+    database = tmp_path / "install_cli.db"
+    migrate(database)
+    monkeypatch.setattr(daemon_cli, "_daemon_is_running", lambda config: False)
+    config = _cli_config(tmp_path, database)
+
+    exit_code = daemon_cli.main([
+        "--config", str(config),
+        "install-agent", str(_definition_file(tmp_path)),
+    ])
+    assert exit_code == 0
+
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["agent_id"] == "agent_install"
+    assert receipt["definition_version"] == 1
+    assert receipt["runtimes"] == ["runtime_install"]
+    # The receipt is a local-admin artifact: no endpoint, credential, or
+    # launch material beyond the validated digest.
+    assert "http" not in json.dumps(receipt)
+    assert "token" not in receipt
+
+    sessions = session_factory(create_sqlite_engine(database))
+    registry = AgentRegistryService(sessions)
+    assert registry.get_agent("agent_install").display_name == "Install Agent"

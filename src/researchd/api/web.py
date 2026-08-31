@@ -15,12 +15,14 @@ from researchd.api.browser_assets import BROWSER_ASSETS
 from researchd.api.control import LocalControlAPI
 from researchd.daemon.runtime import ResearchDaemon
 from researchd.daemon.contracts import (
+    ApprovalApproveCommand,
     BackupCreateCommand,
     BackupVerifyCommand,
     CollaborationMessageSendCommand,
     DaemonCommandResolveCommand,
     ExternalBackupCreateRequest,
     ExternalBackupVerifyRequest,
+    ExternalApprovalApproveRequest,
     ExternalCollaborationMessageSendRequest,
     ExternalDaemonCommandResolveRequest,
     ExternalHumanDecisionRequest,
@@ -32,7 +34,6 @@ from researchd.daemon.contracts import (
     ExternalResearchTaskCreateRequest,
     ExternalRestorePlanRequest,
     ExternalRunCancelRequest,
-    ExternalWorkOrderApproveRequest,
     ExternalWorkOrderRejectRequest,
     ExternalWorkspaceCreateRequest,
     HumanDecisionCommand,
@@ -44,7 +45,6 @@ from researchd.daemon.contracts import (
     ResearchTaskCreateCommand,
     RestorePlanCommand,
     RunCancelCommand,
-    WorkOrderApproveCommand,
     WorkOrderRejectCommand,
     WorkspaceCreateCommand,
 )
@@ -68,6 +68,8 @@ class ControlResourceRouter:
         try:
             if parts == ["api", "agents"]:
                 return 200, self.api.agents()
+            if parts == ["api", "workspaces"]:
+                return 200, self.api.workspaces()
             if len(parts) == 3 and parts[:2] == ["api", "agents"]:
                 return 200, self.api.agent(parts[2])
             if len(parts) == 4 and parts[:2] == ["api", "agents"] and parts[3] == "console":
@@ -174,16 +176,15 @@ class ControlCommandRouter:
                 run_id=parts[2],
             )
             return await self._execute(cancel_command)
-        if len(parts) == 4 and parts[:2] == ["api", "work-orders"] and parts[3] == "approve":
-            approve_request = ExternalWorkOrderApproveRequest.model_validate(payload)
-            approve_command = WorkOrderApproveCommand(
-                command_id=approve_request.command_id,
+        if len(parts) == 4 and parts[:2] == ["api", "approvals"] and parts[3] == "approve":
+            approval_request = ExternalApprovalApproveRequest.model_validate(payload)
+            approval_command = ApprovalApproveCommand(
+                command_id=approval_request.command_id,
                 actor_type="HUMAN",
                 actor_id=self.human_actor_id,
-                work_order_id=parts[2],
-                grant_id=approve_request.grant_id,
+                approval_id=parts[2],
             )
-            return await self._execute(approve_command)
+            return await self._execute(approval_command)
         if len(parts) == 4 and parts[:2] == ["api", "work-orders"] and parts[3] == "human-decision":
             decision_request = ExternalHumanDecisionRequest.model_validate(payload)
             decision_command = HumanDecisionCommand(

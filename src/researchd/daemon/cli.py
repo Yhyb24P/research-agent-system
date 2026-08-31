@@ -4,17 +4,28 @@ import argparse
 import json
 import os
 from pathlib import Path
+from importlib.resources import files
+import shutil
+from datetime import UTC, datetime
+from urllib.error import HTTPError, URLError
+from urllib.request import urlopen
 
 from alembic import command
 from alembic.config import Config
 
 from researchd.api.web import serve_local_control
+from researchd.collaboration.agent_definitions import AgentDefinition
+from researchd.collaboration.install import AgentInstallService
+from researchd.collaboration.registry import AgentRegistryService
 from researchd.daemon.composition import DaemonConfig, compose_daemon
 from researchd.daemon.security import (
     control_token_path,
     create_control_token,
     load_control_token,
 )
+from researchd.daemon.identity import claim as claim_daemon, release as release_daemon
+from researchd.runtime_sessions.launch_profiles import RuntimeLaunchProfileService
+from researchd.storage.db import create_sqlite_engine, session_factory
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -24,15 +35,34 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("validate", help="validate configuration without touching state")
     subparsers.add_parser("inspect", help="print a non-secret configuration projection")
     subparsers.add_parser("init", help="create a fresh database at the current schema")
+    subparsers.add_parser("migrate", help="backup and explicitly upgrade an existing database")
+    install = subparsers.add_parser("install-agent", help="install a trusted AgentDefinition locally")
+    install.add_argument("definition", type=Path)
     serve = subparsers.add_parser("serve", help="start the loopback control daemon")
     return parser
 
 
 def _alembic_config(database: Path) -> Config:
-    root = Path(__file__).resolve().parents[3]
-    config = Config(str(root / "alembic.ini"))
+    """Use packaged migration resources; never infer a source checkout root."""
+    config = Config()
+    config.set_main_option(
+        "script_location",
+        str(files("researchd.storage").joinpath("migrations")),
+    )
     config.set_main_option("sqlalchemy.url", f"sqlite:///{database.resolve()}")
     return config
+
+
+def _daemon_is_running(config: DaemonConfig) -> bool:
+    """Health is deliberately public; any HTTP response means the port is owned."""
+    host = f"[{config.host}]" if config.host == "::1" else config.host
+    try:
+        with urlopen(f"http://{host}:{config.port}/api/health", timeout=0.5):
+            return True
+    except HTTPError:
+        return True
+    except (URLError, TimeoutError, OSError):
+        return False
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -60,7 +90,39 @@ def main(argv: list[str] | None = None) -> int:
         create_control_token(config.state_root)
         return 0
 
+    if args.command == "migrate":
+        if not database.exists():
+            raise SystemExit(f"refusing to migrate missing database: {database}")
+        if _daemon_is_running(config):
+            raise SystemExit("refusing migration while researchd is running")
+        stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+        backup = database.with_name(f"{database.name}.{stamp}.pre-migrate.bak")
+        shutil.copy2(database, backup)
+        command.upgrade(_alembic_config(database), "head")
+        print(json.dumps({"database": str(database), "backup": str(backup), "revision": "head"}, sort_keys=True))
+        return 0
+
+    if args.command == "install-agent":
+        if _daemon_is_running(config):
+            raise SystemExit("refusing AgentDefinition install while researchd is running")
+        try:
+            definition = AgentDefinition.model_validate_json(
+                args.definition.read_text(encoding="utf-8"),
+            )
+        except OSError as error:
+            raise SystemExit(f"cannot read AgentDefinition: {args.definition}") from error
+        sessions = session_factory(create_sqlite_engine(database))
+        registry = AgentRegistryService(sessions)
+        receipt = AgentInstallService(
+            sessions,
+            registry,
+            RuntimeLaunchProfileService(sessions, registry),
+        ).install(definition)
+        print(json.dumps(receipt.model_dump(mode="json"), sort_keys=True))
+        return 0
+
     control_token = load_control_token(config.state_root)
+    daemon_identity = claim_daemon(config.state_root, config.sha256())
     application = compose_daemon(config)
     application.daemon.start()
     server = serve_local_control(
@@ -78,6 +140,7 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         server.server_close()
         application.daemon.stop()
+        release_daemon(config.state_root, daemon_identity)
     return 0
 
 

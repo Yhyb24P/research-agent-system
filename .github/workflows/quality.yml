@@ -51,6 +51,8 @@ jobs:
         run: uv run mypy src tests
       - name: Migration head
         run: uv run alembic upgrade head
+      - name: Version policy
+        run: uv run python scripts/version_policy_check.py
       - name: Diff hygiene
         run: git diff --check
       - name: Release hygiene

@@ -76,6 +76,15 @@ def package_versions() -> dict[str, str]:
     return result
 
 
+def project_version() -> str:
+    with (ROOT / "pyproject.toml").open("rb") as stream:
+        project = tomllib.load(stream).get("project", {})
+    version = project.get("version") if isinstance(project, dict) else None
+    if not isinstance(version, str):
+        raise RuntimeError("project.version is missing")
+    return version
+
+
 def lock_inventory() -> dict[str, Any]:
     with (ROOT / "uv.lock").open("rb") as stream:
         lock = tomllib.load(stream)
@@ -113,6 +122,7 @@ def build_manifest(require_clean: bool) -> dict[str, Any]:
         "source": {
             "commit": run("git", "rev-parse", "HEAD"),
             "tags": [tag for tag in run("git", "tag", "--points-at", "HEAD").splitlines() if tag],
+            "project_version": project_version(),
             "branch": run("git", "branch", "--show-current"),
             "working_tree": "clean" if not status else "dirty",
             "tracked_file_count": len(tracked),

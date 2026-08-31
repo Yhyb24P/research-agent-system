@@ -354,6 +354,47 @@ class AgentRegistryService:
                 str(lease.runtime_id), lease.lease_id, lease.owner_id, "RELEASED", reference
             ))
 
+    def release_runtime_for_owner(
+        self,
+        runtime_id: str,
+        *,
+        owner_id: str,
+        now: datetime | None = None,
+    ) -> bool:
+        """Release only a lease still owned by a trusted lifecycle owner.
+
+        This is for daemon-owned cleanup after a supervised local process has
+        stopped.  It deliberately cannot release a lease held by another
+        owner, including a remote attachment.
+        """
+        reference = now or datetime.now(UTC)
+        with self.sessions.begin() as session:
+            runtime = session.get(AgentRuntimeRecord, runtime_id)
+            if runtime is None or runtime.lease_owner_id != owner_id:
+                return False
+            lease_id = runtime.runtime_lease_id
+            released = int(getattr(session.execute(
+                update(AgentRuntimeRecord)
+                .where(
+                    AgentRuntimeRecord.runtime_id == runtime_id,
+                    AgentRuntimeRecord.lease_owner_id == owner_id,
+                )
+                .values(
+                    runtime_lease_id=None,
+                    lease_owner_id=None,
+                    lease_acquired_at=None,
+                    lease_expires_at=None,
+                    updated_at=reference,
+                    version=AgentRuntimeRecord.version + 1,
+                )
+            ), "rowcount", 0))
+            if released != 1:
+                return False
+            session.add(self._lease_event(
+                runtime_id, lease_id, owner_id, "RELEASED", reference,
+            ))
+        return True
+
     @staticmethod
     def _lease_event(
         runtime_id: str,
