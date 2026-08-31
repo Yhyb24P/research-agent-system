@@ -1,5 +1,8 @@
 """Durable-command authority for attached remote A2A runtimes."""
 
+from datetime import UTC, datetime
+
+from researchd.collaboration.contracts import AgentRuntimeLease
 from researchd.collaboration.registry import AgentRegistryService
 from researchd.domain.enums import AgentAdapterKind
 from researchd.domain.ids import AgentRuntimeId
@@ -44,9 +47,8 @@ class RemoteAttachmentService:
             lease_id = row.runtime_lease_id
             acquired_at = row.lease_acquired_at
             expires_at = row.lease_expires_at
-        if acquired_at is None or expires_at is None:
-            raise ValueError("remote runtime attachment is malformed")
-        from researchd.collaboration.contracts import AgentRuntimeLease
+        if acquired_at is None or expires_at is None or expires_at <= datetime.now(UTC):
+            raise ValueError("remote runtime attachment is not active")
         self.registry.release_runtime(AgentRuntimeLease(
             lease_id=lease_id, runtime_id=AgentRuntimeId(runtime_id), owner_id=self.owner_id,
             acquired_at=acquired_at, expires_at=expires_at,
@@ -54,4 +56,26 @@ class RemoteAttachmentService:
         return {"runtime_id": runtime_id, "detached": True}
 
     def renew(self, runtime_id: str) -> dict[str, object]:
-        return self.attach(runtime_id)
+        with self.registry.sessions() as session:
+            row = session.get(AgentRuntimeRecord, runtime_id)
+            if row is None or row.runtime_lease_id is None or row.lease_owner_id != self.owner_id:
+                raise ValueError("remote runtime has no active daemon-owned attachment")
+            acquired_at = row.lease_acquired_at
+            expires_at = row.lease_expires_at
+            if acquired_at is None or expires_at is None:
+                raise ValueError("remote runtime attachment is malformed")
+            lease = AgentRuntimeLease(
+                lease_id=row.runtime_lease_id,
+                runtime_id=AgentRuntimeId(runtime_id),
+                owner_id=self.owner_id,
+                acquired_at=acquired_at,
+                expires_at=expires_at,
+            )
+        if lease.expires_at <= datetime.now(UTC):
+            raise ValueError("remote runtime attachment is not active")
+        renewed = self.registry.renew_runtime(lease)
+        return {
+            "runtime_id": str(renewed.runtime_id),
+            "lease_id": renewed.lease_id,
+            "expires_at": renewed.expires_at.isoformat(),
+        }
