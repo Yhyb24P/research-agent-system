@@ -92,6 +92,8 @@ def parse_line(line: str) -> ParsedCommand:
         return _parse_msg(tokens[1:])
     if head == "handoff":
         return _parse_handoff(tokens[1:])
+    if head == "remote":
+        return _parse_simple_subcommand("remote", tokens[1:], {"attach": 1, "detach": 1})
     if head in {"approve", "reject"}:
         _require_arity(head, tokens[1:], 2)
         return ParsedCommand(head, tuple(tokens[1:]), {})
@@ -293,6 +295,12 @@ def _execute(
         if state.current_agent == agent_id:
             state.current_agent = None
         print_fn(f"removed {agent_id} from the working set")
+    elif command.name in {"remote attach", "remote detach"}:
+        action = command.name.removeprefix("remote ")
+        envelope = client.post_command(
+            f"/api/remote-agents/{action}", {"runtime_id": command.args[0]},
+        )
+        print_fn(f"{envelope['status']} {envelope['command_id']}")
     elif command.name == "run list":
         runs = client.get("/api/runs")
         if not runs:
