@@ -16,10 +16,14 @@ from researchd.collaboration.action_broker import AgentActionBroker
 from researchd.collaboration.gateway import CollaborationGateway
 from researchd.collaboration.handoff import HandoffResolutionService
 from researchd.collaboration.heterogeneous import (
+    GovernedA2ARemoteAgentAdapter,
     HttpAgentClient,
     HttpxAgentClient,
     ManagedProcessAgentAdapter,
 )
+from researchd.context.agent_context import AgentContextBuilder
+from researchd.context.builder import ContextBuilder
+from researchd.context.redaction import DeterministicRedactor
 from researchd.collaboration.invocation import InvocationService
 from researchd.collaboration.registry import AgentRegistryService
 from researchd.collaboration.runtime import AgentAdapterCatalog
@@ -33,7 +37,7 @@ from researchd.daemon.reconciliation import (
 from researchd.daemon.runtime import ResearchDaemon
 from researchd.daemon.startup import build_startup_barrier
 from researchd.domain.base import DomainModel
-from researchd.domain.enums import AgentAdapterKind
+from researchd.domain.enums import AgentAdapterKind, DelegationPurpose
 from researchd.executor.jobs import JobManager, LocalDurableJobBackend
 from researchd.executor.capability_broker import CapabilityBroker
 from researchd.executor.contracts import CommandLimits
@@ -240,6 +244,10 @@ def compose_daemon(
             action_broker,
         ),
     )
+    # A2A is an external execution candidate only.  Its adapter resolves the
+    # endpoint and identity from Registry records on every call; it never
+    # inherits PROCESS launch or local workspace authority.
+    catalog.register(AgentAdapterKind.A2A, GovernedA2ARemoteAgentAdapter(sessions))
     orchestrator = ResearchOrchestrator(
         sessions,
         collaboration=CollaborationGateway(
@@ -247,11 +255,22 @@ def compose_daemon(
             invocations=invocations,
             selector=AgentSelector(
                 sessions,
-                require_supervised_session=True,
-                allowed_adapter_kinds=frozenset({AgentAdapterKind.PROCESS}),
-                required_launch_mode="PROCESS",
+                allowed_adapter_kinds=frozenset({AgentAdapterKind.PROCESS, AgentAdapterKind.A2A}),
+                supervised_adapter_kinds=frozenset({AgentAdapterKind.PROCESS}),
             ),
             catalog=catalog,
+            context_builder=AgentContextBuilder(ContextBuilder(
+                sessions,
+                store,
+                DeterministicRedactor(),
+            )),
+            allowed_adapter_kinds_by_purpose={
+                DelegationPurpose.PLAN: frozenset({AgentAdapterKind.PROCESS}),
+                DelegationPurpose.EXECUTE: frozenset({AgentAdapterKind.PROCESS, AgentAdapterKind.A2A}),
+                DelegationPurpose.REVIEW: frozenset({AgentAdapterKind.PROCESS}),
+                DelegationPurpose.EVIDENCE: frozenset({AgentAdapterKind.PROCESS}),
+                DelegationPurpose.SPECIALIST: frozenset({AgentAdapterKind.PROCESS}),
+            },
         ),
         policy=RecordingPolicyEngine(DeterministicPolicyEngine(), sessions),
         verifier=verifier_driver,

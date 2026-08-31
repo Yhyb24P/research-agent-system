@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
 from pydantic import Field
-from sqlalchemy import exists, func, select
+from sqlalchemy import exists, func, or_, select
 from sqlalchemy.orm import Session, sessionmaker
 from researchd.collaboration.contracts import AgentProfile
 from researchd.domain.enums import AgentAdapterKind, AgentTrustZone, DelegationState
@@ -30,13 +30,15 @@ class AgentSelector:
         require_supervised_session: bool = False,
         allowed_adapter_kinds: frozenset[AgentAdapterKind] = frozenset(),
         required_launch_mode: str | None = None,
+        supervised_adapter_kinds: frozenset[AgentAdapterKind] = frozenset(),
     ) -> None:
         self.sessions = sessions
         self.require_supervised_session = require_supervised_session
         self.allowed_adapter_kinds = allowed_adapter_kinds
         self.required_launch_mode = required_launch_mode
+        self.supervised_adapter_kinds = supervised_adapter_kinds
 
-    def select(self, *, required_roles: tuple[str, ...] = (), required_skills: tuple[str, ...] = (), required_trust_zones: tuple[AgentTrustZone, ...] = (), preferred_agent_id: AgentId | None = None, now: datetime | None = None) -> AgentSelection | None:
+    def select(self, *, required_roles: tuple[str, ...] = (), required_skills: tuple[str, ...] = (), required_trust_zones: tuple[AgentTrustZone, ...] = (), preferred_agent_id: AgentId | None = None, allowed_adapter_kinds: frozenset[AgentAdapterKind] | None = None, now: datetime | None = None) -> AgentSelection | None:
         reference = now or datetime.now(UTC)
         with self.sessions() as session:
             query = select(AgentRecord, AgentRuntimeRecord).join(
@@ -50,9 +52,10 @@ class AgentSelector:
             )
             if preferred_agent_id is not None:
                 query = query.where(AgentRecord.agent_id == str(preferred_agent_id))
-            if self.allowed_adapter_kinds:
+            kinds = self.allowed_adapter_kinds if allowed_adapter_kinds is None else allowed_adapter_kinds
+            if kinds:
                 query = query.where(AgentRuntimeRecord.adapter_kind.in_(
-                    tuple(kind.value for kind in self.allowed_adapter_kinds)
+                    tuple(kind.value for kind in kinds)
                 ))
             if self.require_supervised_session:
                 query = query.where(exists().where(
@@ -70,6 +73,19 @@ class AgentSelector:
                         RuntimeLaunchProfileRecord.launch_mode
                         == self.required_launch_mode,
                     ))
+            elif self.supervised_adapter_kinds:
+                supervised = tuple(kind.value for kind in self.supervised_adapter_kinds)
+                query = query.where(or_(
+                    ~AgentRuntimeRecord.adapter_kind.in_(supervised),
+                    exists().where(
+                        RuntimeSessionRecord.runtime_id == AgentRuntimeRecord.runtime_id,
+                        RuntimeSessionRecord.supervisor_state == "HEALTHY",
+                        RuntimeLaunchProfileRecord.runtime_id == AgentRuntimeRecord.runtime_id,
+                        RuntimeLaunchProfileRecord.enabled.is_(True),
+                        RuntimeSessionRecord.launch_profile_sha256
+                        == RuntimeLaunchProfileRecord.spec_sha256,
+                    ),
+                ))
             rows = session.execute(query.order_by(
                 AgentRecord.agent_id,
                 AgentRuntimeRecord.runtime_id,

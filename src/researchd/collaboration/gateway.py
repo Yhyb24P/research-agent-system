@@ -13,7 +13,7 @@ from researchd.agents.cloud_lead import CloudLeadResult
 from researchd.models.cloud import CloudCostMetadata
 from researchd.agents.schemas import PlanProposal
 from researchd.domain.review import ReviewDecision
-from researchd.domain.enums import Capability, DelegationPurpose, InvocationStatus, NetworkMode
+from researchd.domain.enums import AgentAdapterKind, Capability, DelegationPurpose, InvocationStatus, NetworkMode
 from researchd.domain.enums import AgentTrustZone
 from researchd.domain.ids import AgentId, AgentRuntimeId, DelegationId, InvocationId
 from researchd.context.builder import CloudContextSelection
@@ -37,7 +37,8 @@ class CollaborationGateway:
                  delegations: DelegationService | None = None, invocations: InvocationService | None = None,
                  agent_id: AgentId | None = None, runtime_id: AgentRuntimeId | None = None,
                  selector: AgentSelector | None = None, catalog: AgentAdapterCatalog | None = None,
-                 context_builder: AgentContextBuilder | None = None) -> None:
+                 context_builder: AgentContextBuilder | None = None,
+                 allowed_adapter_kinds_by_purpose: dict[DelegationPurpose, frozenset[AgentAdapterKind]] | None = None) -> None:
         self.cloud = cloud
         self.executor = executor
         self.delegations, self.invocations = delegations, invocations
@@ -45,6 +46,7 @@ class CollaborationGateway:
         self.selector = selector
         self.catalog = catalog
         self.context_builder = context_builder
+        self.allowed_adapter_kinds_by_purpose = allowed_adapter_kinds_by_purpose or {}
         self._context_bundles: dict[str, AgentContextBundle] = {}
 
     def _canonical_request(self, tracking: tuple[DelegationId, InvocationId], typed_input: InvocationInput) -> AgentInvocationRequest:
@@ -152,7 +154,7 @@ class CollaborationGateway:
                 raise ValueError("delegation is not assigned")
             agent_id, runtime_id = AgentId(assigned.assigned_agent_id), AgentRuntimeId(assigned.assigned_runtime_id)
         elif self.selector is not None and (self.agent_id is None or self.runtime_id is None):
-            selected = self.selector.select(required_roles=required_roles, required_skills=required_skills, required_trust_zones=required_trust_zones)
+            selected = self.selector.select(required_roles=required_roles, required_skills=required_skills, required_trust_zones=required_trust_zones, allowed_adapter_kinds=self.allowed_adapter_kinds_by_purpose.get(purpose))
             if selected is None:
                 raise ValueError("no eligible Agent runtime for delegation")
             agent_id, runtime_id = selected.agent_id, selected.runtime_id
@@ -221,6 +223,9 @@ class CollaborationGateway:
         if self.selector is not None and (self.agent_id is None or self.runtime_id is None):
             selected = self.selector.select(
                 required_roles=("executor",), preferred_agent_id=preferred_agent_id,
+                allowed_adapter_kinds=self.allowed_adapter_kinds_by_purpose.get(
+                    DelegationPurpose.EXECUTE,
+                ),
             )
             if selected is None:
                 raise ValueError("no eligible Agent runtime for delegation")
