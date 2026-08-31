@@ -87,6 +87,9 @@ replace `ResearchRun`, `Delegation`, `AgentInvocation`, `Artifact`, or
 - Linux and Python `>=3.12,<3.13`.
 - [`uv`](https://docs.astral.sh/uv/) for locked dependency installation.
 - Bubblewrap for the sandbox/security test suite.
+- `/workspace` host directory for sandboxed execution.
+- prlimit utility for resource limits (usually `/usr/bin/prlimit`).
+
 
 Install the core only:
 
@@ -522,3 +525,8 @@ public control/A2A service.
 Operational release approval still requires evidence tied to the exact commit,
 including a green CI run, backup/restore validation, transport governance, and
 the intended soak/acceptance checks.
+
+## License
+
+Apache License 2.0 (ALv2). See the `LICENSE` file at the repository root.
+

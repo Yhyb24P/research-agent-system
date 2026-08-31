@@ -77,6 +77,9 @@ LangGraph state 都只是适配器或运行时表示，不能取代 `ResearchRun
 - Linux，Python `>=3.12,<3.13`。
 - 使用 [`uv`](https://docs.astral.sh/uv/) 安装锁定依赖。
 - sandbox/security 测试需要 Bubblewrap。
+- 沙箱执行需要 `/workspace` 宿主目录。
+- prlimit 工具用于资源限额（通常在 `/usr/bin/prlimit`）。
+
 
 只安装核心依赖：
 
@@ -446,3 +449,8 @@ package semantic version 有意分离。复现候选版本时必须使用最新 
 
 项目不承诺普遍意义的分布式 exactly-once，也不提供公开 control/A2A service。正式运行批准仍需要绑定精确 commit 的证据，包括绿色 CI、
 backup/restore 验证、transport 治理和计划中的 soak/acceptance 检查。
+
+## 许可证
+
+Apache License 2.0 (ALv2)，详见根目录 `LICENSE` 文件。
+
