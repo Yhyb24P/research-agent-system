@@ -101,6 +101,16 @@ class ExternalManagedAgentStartRequest(ExternalCommandRequest):
     )
 
 
+class ExternalRemoteAgentAttachRequest(ExternalCommandRequest):
+    """Intent to attach an installed remote A2A runtime; no endpoint is accepted."""
+
+    runtime_id: str = Field(pattern=r"^runtime_[A-Za-z0-9][A-Za-z0-9_-]*$")
+
+
+class ExternalRemoteAgentDetachRequest(ExternalCommandRequest):
+    runtime_id: str = Field(pattern=r"^runtime_[A-Za-z0-9][A-Za-z0-9_-]*$")
+
+
 class ExternalBackupCreateRequest(ExternalCommandRequest):
     destination: str = Field(min_length=1, max_length=1024)
     candidate_commit: str = Field(pattern=r"^[0-9a-f]{40}$")
@@ -210,6 +220,14 @@ class ManagedAgentStartCommand(DaemonCommand):
     )
 
 
+class RemoteAgentAttachCommand(DaemonCommand):
+    runtime_id: str = Field(pattern=r"^runtime_[A-Za-z0-9][A-Za-z0-9_-]*$")
+
+
+class RemoteAgentDetachCommand(DaemonCommand):
+    runtime_id: str = Field(pattern=r"^runtime_[A-Za-z0-9][A-Za-z0-9_-]*$")
+
+
 class BackupCreateCommand(DaemonCommand):
     destination: str = Field(min_length=1, max_length=1024)
     candidate_commit: str = Field(pattern=r"^[0-9a-f]{40}$")
@@ -252,6 +270,8 @@ __all__ = [
     "ExternalHandoffDecisionRequest",
     "ExternalHumanDecisionRequest",
     "ExternalManagedAgentStartRequest",
+    "ExternalRemoteAgentAttachRequest",
+    "ExternalRemoteAgentDetachRequest",
     "ExternalResearchTaskCreateRequest",
     "ExternalRestorePlanRequest",
     "ExternalRunCancelRequest",
@@ -261,6 +281,8 @@ __all__ = [
     "HumanDecisionCommand",
     "HandoffDecisionCommand",
     "ManagedAgentStartCommand",
+    "RemoteAgentAttachCommand",
+    "RemoteAgentDetachCommand",
     "ResearchTaskCreateCommand",
     "RestorePlanCommand",
     "RunCancelCommand",
