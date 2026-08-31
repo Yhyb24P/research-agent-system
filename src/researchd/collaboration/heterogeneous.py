@@ -23,6 +23,7 @@ from researchd.collaboration.action_broker import AgentActionBroker, AgentMessag
 from researchd.collaboration.handoff import HandoffProposalAction
 from researchd.collaboration.contracts import AgentHealth, AgentInvocationRequest, AgentInvocationResult, AgentRuntime, EvidenceInvocationInput, ExecuteInvocationInput, PlanInvocationInput, ReviewInvocationInput
 from researchd.domain.enums import AgentAdapterKind, DelegationPurpose, InvocationStatus
+from researchd.domain.ids import AgentId, AgentRuntimeId
 from researchd.domain.base import DomainModel
 from researchd.executor.capability_broker import CapabilityBroker
 from researchd.executor.contracts import (
@@ -291,8 +292,8 @@ class GovernedA2ARemoteAgentAdapter:
             if row is None:
                 raise ValueError("A2A runtime is disabled, unleased, or mismatched")
             runtime = AgentRuntime(
-                runtime_id=row.runtime_id,
-                agent_id=row.agent_id,
+                runtime_id=AgentRuntimeId(row.runtime_id),
+                agent_id=AgentId(row.agent_id),
                 adapter_kind=AgentAdapterKind(row.adapter_kind),
                 runtime_name=row.runtime_name,
                 endpoint_ref=row.endpoint_ref,
