@@ -12,6 +12,8 @@ from researchd.daemon.contracts import (
     HumanDecisionCommand,
     HandoffDecisionCommand,
     ManagedAgentStartCommand,
+    RemoteAgentAttachCommand,
+    RemoteAgentDetachCommand,
     ResearchTaskCreateCommand,
     RestorePlanCommand,
     RunCancelCommand,
@@ -40,12 +42,14 @@ class DaemonCommandDispatcher:
         backups: "BackupMutationAuthority | None" = None,
         managed_start: "ManagedAgentStartAuthority | None" = None,
         handoffs: "HandoffResolutionAuthority | None" = None,
+        remote_attachments: "RemoteAttachmentAuthority | None" = None,
     ) -> None:
         self.supervisor = supervisor
         self.control = control
         self.backups = backups
         self.managed_start = managed_start
         self.handoffs = handoffs
+        self.remote_attachments = remote_attachments
 
     def __call__(self, command: DomainModel) -> DomainModel | Awaitable[DomainModel]:
         if isinstance(command, RuntimeSessionStartCommand):
@@ -65,6 +69,10 @@ class DaemonCommandDispatcher:
             if isinstance(internal, RuntimeSessionStartCommand):
                 return self._accepted(command.command_id, "ManagedAgentStart", self.supervisor.start(internal))
             return self._accepted(command.command_id, "ManagedAgentStart", self.supervisor.attach(internal))
+        if isinstance(command, RemoteAgentAttachCommand):
+            return self._accepted(command.command_id, "RemoteAgentAttach", self._remote_attachments().attach(command.runtime_id))
+        if isinstance(command, RemoteAgentDetachCommand):
+            return self._accepted(command.command_id, "RemoteAgentDetach", self._remote_attachments().detach(command.runtime_id))
         if isinstance(command, RunCancelCommand):
             return self._cancel(command)
         if isinstance(command, WorkOrderApproveCommand):
@@ -178,6 +186,11 @@ class DaemonCommandDispatcher:
             raise RuntimeError("managed agent start authority is not configured")
         return self.managed_start
 
+    def _remote_attachments(self) -> "RemoteAttachmentAuthority":
+        if self.remote_attachments is None:
+            raise RuntimeError("remote attachment authority is not configured")
+        return self.remote_attachments
+
     def _handoffs(self) -> "HandoffResolutionAuthority":
         if self.handoffs is None:
             raise RuntimeError("handoff resolution authority is not configured")
@@ -271,9 +284,15 @@ class ManagedAgentStartAuthority(Protocol):
     ) -> RuntimeSessionStartCommand | RuntimeSessionAttachCommand: ...
 
 
+class RemoteAttachmentAuthority(Protocol):
+    def attach(self, runtime_id: str) -> dict[str, object]: ...
+    def detach(self, runtime_id: str) -> dict[str, object]: ...
+
+
 __all__ = [
     "BackupMutationAuthority",
     "ControlMutationAuthority",
     "DaemonCommandDispatcher",
     "ManagedAgentStartAuthority",
+    "RemoteAttachmentAuthority",
 ]

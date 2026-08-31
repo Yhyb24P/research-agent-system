@@ -25,6 +25,8 @@ from researchd.daemon.contracts import (
     ExternalHumanDecisionRequest,
     ExternalHandoffDecisionRequest,
     ExternalManagedAgentStartRequest,
+    ExternalRemoteAgentAttachRequest,
+    ExternalRemoteAgentDetachRequest,
     ExternalResearchTaskCreateRequest,
     ExternalRestorePlanRequest,
     ExternalRunCancelRequest,
@@ -34,6 +36,8 @@ from researchd.daemon.contracts import (
     HumanDecisionCommand,
     HandoffDecisionCommand,
     ManagedAgentStartCommand,
+    RemoteAgentAttachCommand,
+    RemoteAgentDetachCommand,
     ResearchTaskCreateCommand,
     RestorePlanCommand,
     RunCancelCommand,
@@ -128,6 +132,12 @@ class ControlCommandRouter:
 
     async def post(self, path: str, payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
         parts = [unquote(item) for item in urlparse(path).path.split("/") if item]
+        if parts == ["api", "remote-agents", "attach"]:
+            request = ExternalRemoteAgentAttachRequest.model_validate(payload)
+            return await self._execute(RemoteAgentAttachCommand(command_id=request.command_id, actor_type="HUMAN", actor_id=self.human_actor_id, runtime_id=request.runtime_id))
+        if parts == ["api", "remote-agents", "detach"]:
+            request = ExternalRemoteAgentDetachRequest.model_validate(payload)
+            return await self._execute(RemoteAgentDetachCommand(command_id=request.command_id, actor_type="HUMAN", actor_id=self.human_actor_id, runtime_id=request.runtime_id))
         if len(parts) == 4 and parts[:2] == ["api", "agents"] and parts[3] == "start":
             start_request = ExternalManagedAgentStartRequest.model_validate(payload)
             start_command = ManagedAgentStartCommand(

@@ -26,6 +26,7 @@ from researchd.context.builder import ContextBuilder
 from researchd.context.redaction import DeterministicRedactor
 from researchd.collaboration.invocation import InvocationService
 from researchd.collaboration.registry import AgentRegistryService
+from researchd.collaboration.remote_attachment import RemoteAttachmentService
 from researchd.collaboration.runtime import AgentAdapterCatalog
 from researchd.collaboration.selector import AgentSelector
 from researchd.daemon.dispatcher import DaemonCommandDispatcher
@@ -285,6 +286,7 @@ def compose_daemon(
         backups=BackupCommandService(database, artifacts_path),
         managed_start=managed_start,
         handoffs=handoffs,
+        remote_attachments=RemoteAttachmentService(registry),
     )
     daemon = ResearchDaemon(barrier, DurableDaemonCommandService(sessions, dispatcher))
     resolution = DaemonCommandResolutionService(sessions, build_builtin_observers(sessions))
