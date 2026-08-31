@@ -122,6 +122,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(prog="ph07-e2e")
     parser.add_argument("--root", type=Path, required=True, help="clean state root for this E2E")
     parser.add_argument("--commit", default="", help="candidate commit under test")
+    parser.add_argument(
+        "--git-source-root", type=Path, default=None,
+        help="host directory to seed the managed Git source in "
+             "(default: <root>/git-source; pass /workspace/... to exercise the host dir)",
+    )
     parser.add_argument("--daemon-port", type=int, default=18788)
     parser.add_argument("--planner-port", type=int, default=19011)
     parser.add_argument("--coder-port", type=int, default=19013)
@@ -161,7 +166,13 @@ def main() -> int:
     # from trusted deployment configuration only. Seed a managed Git source
     # under the E2E root and map the E2E workspace to it; the HTTP surface
     # cannot inject paths, transports, or grant parameters.
-    git_source = root / "git-source"
+    git_source = (
+        args.git_source_root.resolve()
+        if args.git_source_root is not None
+        else root / "git-source"
+    )
+    if git_source.exists():
+        raise SystemExit(f"refusing to initialize an existing Git source: {git_source}")
     git_source.mkdir(parents=True)
     subprocess.run(["git", "init", "-q", str(git_source)], check=True)
     (git_source / "README.md").write_text("# PH07 E2E source\n", encoding="utf-8")
