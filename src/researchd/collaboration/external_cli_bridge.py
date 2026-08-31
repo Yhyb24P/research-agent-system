@@ -67,6 +67,7 @@ class ExternalCliBridge:
     async def close(self) -> None:
         if self._process is None:
             return
-        self._process.terminate()
-        await self._process.wait()
-        self._process = None
+        process, self._process = self._process, None
+        if process.returncode is None:
+            process.terminate()
+        await process.wait()
