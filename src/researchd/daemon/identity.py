@@ -13,7 +13,12 @@ def current_identity(pid: int | None = None) -> dict[str, object]:
     process_id = os.getpid() if pid is None else pid
     boot_id = Path("/proc/sys/kernel/random/boot_id").read_text(encoding="ascii").strip()
     fields = Path(f"/proc/{process_id}/stat").read_text(encoding="ascii").split()
-    return {"pid": process_id, "start_ticks": int(fields[19]), "boot_id": boot_id}
+    # /proc/<pid>/stat field 22 (index 21 after the pid/comm split) is the
+    # start time in clock ticks since boot: a stable generation marker.  The
+    # adjacent field 20 is the live thread count, which must never stand in
+    # for it: a thread-pool change would make a live daemon look stale and
+    # authorize a second owner.
+    return {"pid": process_id, "start_ticks": int(fields[21]), "boot_id": boot_id}
 
 
 def is_live(identity: dict[str, object]) -> bool:
