@@ -7,6 +7,7 @@ but a daemon that is not READY is surfaced, never bypassed.
 """
 
 import json
+import os
 import subprocess
 import sys
 import time
@@ -125,6 +126,7 @@ def spawn_daemon(config: DaemonConfig, config_path: Path) -> subprocess.Popen[by
             stdout=log_file,
             stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL,
+            start_new_session=(os.name == "posix"),
         )
     finally:
         log_file.close()
@@ -172,7 +174,10 @@ def open_browser(
     if open_url(url):
         print_fn("opened the local Browser Control Tower")
     else:
-        print_fn(f"open this local URL in a browser: {url}")
+        print_fn(
+            f"browser open failed; local Control Tower is available at {base_url_for(config)}/ui; "
+            "rerun `research browser` after fixing browser integration",
+        )
     return 0
 
 
