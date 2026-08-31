@@ -22,9 +22,15 @@ langgraph-agent = [
 qualification = [
   "jsonschema>=4.23,<5",
 ]
+tui = [
+  "textual>=6,<7",
+]
 
 [project.scripts]
+research = "researchd.client.cli:entrypoint"
+research-coder-agent = "researchd.pilot.coder_agent:entrypoint"
 researchctl = "researchd.cli.main:entrypoint"
+researchd = "researchd.daemon.cli:entrypoint"
 
 [dependency-groups]
 dev = [

@@ -17,6 +17,7 @@ from researchd.domain.enums import (
     AttemptState, Capability, DelegationPurpose, PolicyOutcome, ResearchRunState, ReviewDecisionKind,
     VerificationOverall, WorkOrderState,
 )
+from researchd.domain.ids import AgentId, DelegationId
 from researchd.domain.review import ReviewDecision
 from researchd.executor.contracts import ExecutorResult
 from researchd.executor.jobs import JobManager
@@ -62,7 +63,7 @@ class ResearchOrchestrator:
     def __init__(
         self, sessions: sessionmaker[Session], *, collaboration: CollaborationGateway,
         policy: RecordingPolicyEngine | PolicyEvaluator,
-        verifier: VerificationDriver, approvals: ApprovalService | None = None,
+        verifier: VerificationDriver | None = None, approvals: ApprovalService | None = None,
         jobs: JobManager | None = None,
         workspace_capabilities: frozenset[Capability] = frozenset(),
         user_capabilities: frozenset[Capability] = frozenset(),
@@ -190,9 +191,9 @@ class ResearchOrchestrator:
                 causation_id=result.interaction_id, metadata_json={"work_order_count": len(result.output.proposed_work_orders)},
             ))
 
-    def _add_work_order(self, session: Session, run_id: str, proposal: WorkOrderProposal, *, parent: str | None, reason: str | None) -> WorkOrderRecord:
+    def _add_work_order(self, session: Session, run_id: str, proposal: WorkOrderProposal, *, parent: str | None, reason: str | None, work_order_id: str | None = None) -> WorkOrderRecord:
         now = utc_now()
-        identifier = f"wo_{uuid4().hex}"
+        identifier = work_order_id or f"wo_{uuid4().hex}"
         contract = proposal.model_dump(mode="json")
         contract["acceptance"] = [item.model_dump(mode="json") for item in proposal.acceptance]
         record = WorkOrderRecord(
@@ -325,6 +326,20 @@ class ResearchOrchestrator:
         self._transition_run(order.run_id, ResearchRunState.ACTIVE, "APPROVAL_RESUMED")
         return True
 
+    def reject(self, work_order_id: str, approval_id: str, *, actor_type: str, actor_id: str) -> bool:
+        """Reject a pending approval; the order fails exactly like a policy denial."""
+        order = self._order(work_order_id)
+        if WorkOrderState(order.state) is not WorkOrderState.WAITING_APPROVAL or self.approvals is None:
+            raise OrchestrationError("work order is not awaiting approval")
+        if order.approval_id != approval_id:
+            raise OrchestrationError("approval does not belong to this work order")
+        self.approvals.reject(approval_id)
+        self.transitions.transition_work_order(work_order_id, order.version, WorkOrderState.FAILED,
+            event_type="APPROVAL_REJECTED", actor_type=actor_type, actor_id=actor_id,
+            correlation_id=work_order_id, metadata={"approval_id": approval_id})
+        self._transition_run(order.run_id, ResearchRunState.FAILED, "APPROVAL_REJECTED")
+        return True
+
     async def _dispatch(self, order: WorkOrderRecord) -> bool:
         run = self._run(order.run_id)
         if run.cancellation_requested:
@@ -355,8 +370,22 @@ class ResearchOrchestrator:
             metadata={"attempt_id": attempt_id})
         return True
 
-    def retry_attempt(self, work_order_id: str) -> str:
+    def retry_attempt(
+        self,
+        work_order_id: str,
+        *,
+        preferred_agent_id: str | None = None,
+        attempt_id: str | None = None,
+        delegation_id: str | None = None,
+    ) -> str:
         """Retry an unchanged WorkOrder with a new immutable Attempt."""
+        if attempt_id is not None:
+            with self.sessions() as session:
+                existing = session.get(AttemptRecord, attempt_id)
+            if existing is not None:
+                if existing.work_order_id != work_order_id or existing.delegation_id != delegation_id:
+                    raise OrchestrationError("handoff Attempt identity conflict")
+                return existing.attempt_id
         order = self._order(work_order_id)
         if WorkOrderState(order.state) is not WorkOrderState.EXECUTION_FAILED:
             raise OrchestrationError("only an execution-failed WorkOrder can be retried")
@@ -364,23 +393,55 @@ class ResearchOrchestrator:
         if run.iterations_used >= run.max_iterations:
             self._transition_run(order.run_id, ResearchRunState.FAILED, "MAX_ITERATIONS_EXCEEDED")
             raise OrchestrationError("maximum iterations exceeded")
-        self._increment_iteration(order.run_id)
-        self.transitions.transition_work_order(order.work_order_id, order.version, WorkOrderState.EXECUTING,
-            event_type="ATTEMPT_RETRY_REQUESTED", actor_type="controller", actor_id="orchestrator", correlation_id=order.work_order_id)
+        attempt_id = attempt_id or f"att_{uuid4().hex}"
+        prepared_delegation_id = self.collaboration.prepare_execution(
+            order,
+            preferred_agent_id=AgentId(preferred_agent_id) if preferred_agent_id else None,
+            delegation_id=DelegationId(delegation_id) if delegation_id else None,
+        )
         now = utc_now()
-        attempt_id = f"att_{uuid4().hex}"
-        delegation_id = self.collaboration.prepare_execution(order)
         with self.sessions.begin() as session:
-            session.add(AttemptRecord(attempt_id=attempt_id, work_order_id=order.work_order_id, delegation_id=delegation_id,
-                state=AttemptState.CREATED.value, terminal_at=None, version=1, created_at=now, updated_at=now))
+            existing = session.get(AttemptRecord, attempt_id)
+            if existing is not None:
+                if existing.work_order_id != work_order_id or existing.delegation_id != delegation_id:
+                    raise OrchestrationError("handoff Attempt identity conflict")
+                return existing.attempt_id
+            current_order = session.get(WorkOrderRecord, work_order_id)
+            current_run = session.get(ResearchRunRecord, order.run_id)
+            if current_order is None or current_run is None:
+                raise OrchestrationError("retry scope disappeared")
+            if (
+                current_order.version != order.version
+                or WorkOrderState(current_order.state) is not WorkOrderState.EXECUTION_FAILED
+            ):
+                raise OrchestrationError("execution-failed WorkOrder changed during retry")
+            if current_run.iterations_used >= current_run.max_iterations:
+                raise OrchestrationError("maximum iterations exceeded")
+            current_run.iterations_used += 1
+            current_run.version += 1
+            current_run.updated_at = now
+            current_order.state = WorkOrderState.EXECUTING.value
+            current_order.version += 1
+            current_order.updated_at = now
+            session.add(AttemptRecord(attempt_id=attempt_id, work_order_id=order.work_order_id, delegation_id=prepared_delegation_id,
+                state=AttemptState.RUNNING.value, terminal_at=None, version=3, created_at=now, updated_at=now))
+            session.add(AuditEventRecord(event_id=f"evt_{uuid4().hex}", event_type="ATTEMPT_RETRY_REQUESTED",
+                run_id=order.run_id, entity_type="work_order", entity_id=order.work_order_id,
+                actor_type="controller", actor_id="orchestrator", timestamp=now,
+                correlation_id=attempt_id, causation_id=None,
+                metadata_json={"attempt_id": attempt_id, "delegation_id": prepared_delegation_id}))
             session.add(AuditEventRecord(event_id=f"evt_{uuid4().hex}", event_type="ATTEMPT_CREATED",
                 run_id=order.run_id, entity_type="attempt", entity_id=attempt_id, actor_type="controller",
                 actor_id="orchestrator", timestamp=now, correlation_id=order.work_order_id,
                 causation_id=None, metadata_json={"retry": True, "work_order_id": order.work_order_id}))
-        self.transitions.transition_attempt(attempt_id, 1, AttemptState.PREPARING, event_type="ATTEMPT_PREPARING",
-            actor_type="controller", actor_id="orchestrator", correlation_id=attempt_id)
-        self.transitions.transition_attempt(attempt_id, 2, AttemptState.RUNNING, event_type="ATTEMPT_RUNNING",
-            actor_type="controller", actor_id="orchestrator", correlation_id=attempt_id)
+            session.add(AuditEventRecord(event_id=f"evt_{uuid4().hex}", event_type="ATTEMPT_PREPARING",
+                run_id=order.run_id, entity_type="attempt", entity_id=attempt_id, actor_type="controller",
+                actor_id="orchestrator", timestamp=now, correlation_id=attempt_id,
+                causation_id=None, metadata_json={}))
+            session.add(AuditEventRecord(event_id=f"evt_{uuid4().hex}", event_type="ATTEMPT_RUNNING",
+                run_id=order.run_id, entity_type="attempt", entity_id=attempt_id, actor_type="controller",
+                actor_id="orchestrator", timestamp=now, correlation_id=attempt_id,
+                causation_id=None, metadata_json={}))
         return attempt_id
 
     async def _execute_or_resume(self, order: WorkOrderRecord) -> bool:
@@ -413,6 +474,10 @@ class ResearchOrchestrator:
         result_json = self._stored_execution_result(attempt.attempt_id)
         if result_json is None:
             raise OrchestrationError("verification has no executor result")
+        if self.verifier is None:
+            # No honest verification driver is wired yet; fail closed instead of
+            # auto-passing an unverified executor result.
+            raise OrchestrationError("verification requires a configured verifier")
         verification = self.verifier.verify(order, attempt, result_json)
         current_attempt = self._attempt(attempt.attempt_id)
         target_attempt = AttemptState.SUCCEEDED if verification.overall is VerificationOverall.PASS else AttemptState.FAILED
@@ -536,6 +601,39 @@ class ResearchOrchestrator:
         with self.sessions.begin() as session:
             self._add_work_order(session, order.run_id, proposal, parent=order.work_order_id, reason=reason)
         return True
+
+    def create_handoff_revision(
+        self, work_order_id: str, *, objective: str, reason: str,
+        revision_work_order_id: str,
+    ) -> str:
+        """Create a new immutable revision descendant for an accepted handoff."""
+        with self.sessions() as session:
+            existing = session.get(WorkOrderRecord, revision_work_order_id)
+        if existing is not None:
+            if existing.parent_work_order_id != work_order_id or existing.objective != objective:
+                raise OrchestrationError("handoff revision identity conflict")
+            return existing.work_order_id
+        order = self._order(work_order_id)
+        state = WorkOrderState(order.state)
+        if state in {WorkOrderState.EXECUTION_FAILED, WorkOrderState.VERIFICATION_FAILED}:
+            self.transitions.transition_work_order(
+                order.work_order_id, order.version, WorkOrderState.REVISION_REQUIRED,
+                event_type="HANDOFF_REVISION_REQUIRED", actor_type="controller",
+                actor_id="orchestrator", correlation_id=work_order_id,
+            )
+            order = self._order(work_order_id)
+            state = WorkOrderState(order.state)
+        if state is not WorkOrderState.REVISION_REQUIRED:
+            raise OrchestrationError("handoff revision requires a revision-required WorkOrder")
+        proposal = WorkOrderProposal.model_validate(order.contract).model_copy(
+            update={"objective": objective},
+        )
+        with self.sessions.begin() as session:
+            self._add_work_order(
+                session, order.run_id, proposal, parent=work_order_id,
+                reason=reason, work_order_id=revision_work_order_id,
+            )
+        return revision_work_order_id
 
     async def cancel(self, run_id: str) -> RunSnapshot:
         run = self._run(run_id)

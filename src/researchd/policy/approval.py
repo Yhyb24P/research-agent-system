@@ -75,6 +75,26 @@ class ApprovalService:
             session.flush()
             return grant
 
+    def reject(self, approval_id: str) -> ApprovalRequestRecord:
+        """Converge a PENDING request to REJECTED; a guarded UPDATE guards races."""
+        with self.sessions.begin() as session:
+            request = session.get(ApprovalRequestRecord, approval_id)
+            if request is None:
+                raise ApprovalError("approval request not found")
+            result = session.execute(
+                update(ApprovalRequestRecord)
+                .where(
+                    ApprovalRequestRecord.approval_id == approval_id,
+                    ApprovalRequestRecord.status == ApprovalStatus.PENDING.value,
+                )
+                .values(status=ApprovalStatus.REJECTED.value)
+            )
+            cursor = result  # SQLAlchemy returns a cursor result for UPDATE.
+            if not isinstance(cursor, CursorResult) or cursor.rowcount != 1:
+                raise ApprovalNotValid("approval request is not pending")
+            request.status = ApprovalStatus.REJECTED.value
+            return request
+
     def authorize(self, grant_id: str, *, operation_type: str, parameters: Mapping[str, Any]) -> None:
         _, digest = parameter_hash(operation_type, parameters)
         now = datetime.now(UTC)

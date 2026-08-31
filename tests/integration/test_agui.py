@@ -15,8 +15,14 @@ from sqlalchemy.orm import Session, sessionmaker
 from researchd.api.agui import AGUIProjectionAdapter, CustomEvent
 from researchd.api.control import LocalControlAPI
 from researchd.api.web import ControlCommandRouter, ControlResourceRouter, serve_local_control
+from researchd.collaboration.registry import AgentRegistryService
+from researchd.daemon.dispatcher import DaemonCommandDispatcher
+from researchd.daemon.runtime import ResearchDaemon
+from researchd.daemon.startup import StartupBarrier, StartupPhase
 from researchd.policy.approval import ApprovalNotValid, ApprovalService
+from researchd.runtime_sessions.service import RuntimeSessionService
 from researchd.storage.db import create_sqlite_engine, session_factory
+from researchd.supervisor.runtime import RuntimeSupervisor
 from researchd.storage.models import (
     AuditEventRecord,
     CollaborationMessageRecord,
@@ -65,18 +71,19 @@ def _append_event(
     *,
     timestamp: datetime,
     entity_type: str = "work_order",
+    run_id: str | None = "run_stream",
 ) -> None:
     with sessions.begin() as session:
         session.add(AuditEventRecord(
             event_id=event_id,
             event_type=event_type,
-            run_id="run_stream",
+            run_id=run_id,
             entity_type=entity_type,
             entity_id="run_stream" if entity_type == "research_run" else "wo_stream",
             actor_type="controller",
             actor_id="orchestrator",
             timestamp=timestamp,
-            correlation_id="run_stream",
+            correlation_id=run_id or "researchd",
             causation_id=None,
             metadata_json={},
         ))
@@ -183,22 +190,68 @@ class _CommandSpy:
         return {"work_order_id": work_order_id}
 
 
-def test_ui_commands_are_typed_and_cannot_submit_arbitrary_mutation_events() -> None:
+def _ready_command_router(control: LocalControlAPI, database: Path) -> ControlCommandRouter:
+    sessions = session_factory(create_sqlite_engine(database))
+    supervisor = RuntimeSupervisor(RuntimeSessionService(sessions, AgentRegistryService(sessions)))
+    barrier = StartupBarrier({phase: lambda: None for phase in StartupPhase})
+    daemon = ResearchDaemon(barrier, DaemonCommandDispatcher(supervisor, control))
+    assert daemon.start().ready
+    return ControlCommandRouter(LocalControlAPI(sessions), daemon)
+
+
+def test_ui_commands_are_typed_and_cannot_submit_arbitrary_mutation_events(tmp_path: Path) -> None:
     spy = _CommandSpy()
-    router = ControlCommandRouter(cast(LocalControlAPI, spy))
-    assert asyncio.run(router.post("/api/runs/run_1/cancel", {}))[0] == 200
-    assert asyncio.run(router.post("/api/work-orders/wo_1/approve", {"grant_id": "grant_1"}))[0] == 200
-    assert asyncio.run(router.post(
+    router = _ready_command_router(cast(LocalControlAPI, spy), tmp_path / "commands.db")
+
+    cancel_status, cancel = asyncio.run(router.post("/api/runs/run_1/cancel", {
+        "command_id": "cmd_cancel_1",
+    }))
+    assert cancel_status == 202
+    assert cancel["command_version"] == 1
+    assert cancel["command_id"] == "cmd_cancel_1"
+    assert cancel["command_type"] == "RunCancel"
+    assert cancel["status"] == "ACCEPTED"
+    assert cancel["resource"] == {"run_id": "run_1"}
+
+    approve_status, approve = asyncio.run(router.post("/api/work-orders/wo_1/approve", {
+        "command_id": "cmd_approve_1",
+        "grant_id": "grant_1",
+    }))
+    assert approve_status == 202
+    assert approve["command_id"] == "cmd_approve_1"
+    assert approve["command_type"] == "WorkOrderApprove"
+    assert approve["status"] == "ACCEPTED"
+    assert approve["resource"] == {"work_order_id": "wo_1"}
+
+    decision_status, decision = asyncio.run(router.post(
         "/api/work-orders/wo_1/human-decision",
-        {"action": "revise", "objective": "narrow the task"},
-    ))[0] == 200
+        {
+            "command_id": "cmd_decision_1",
+            "action": "revise",
+            "objective": "narrow the task",
+        },
+    ))
+    assert decision_status == 202
+    assert decision["command_id"] == "cmd_decision_1"
+    assert decision["command_type"] == "HumanDecision"
+    assert decision["status"] == "ACCEPTED"
+    assert decision["resource"] == {"work_order_id": "wo_1"}
+    assert spy.calls == [
+        ("cancel", "run_1"),
+        ("approve", "wo_1", "grant_1"),
+        ("human", "wo_1", "revise", "narrow the task"),
+    ]
+
     calls_before = list(spy.calls)
     assert asyncio.run(router.post("/api/events/run_1", {"event_type": "RUN_COMPLETED"}))[0] == 404
     assert spy.calls == calls_before
     with pytest.raises(ValidationError):
         asyncio.run(router.post("/api/runs/run_1/cancel", {"event_type": "RUN_COMPLETED"}))
     with pytest.raises(ValidationError):
-        asyncio.run(router.post("/api/work-orders/wo_1/human-decision", {"action": "revise"}))
+        asyncio.run(router.post("/api/work-orders/wo_1/human-decision", {
+            "command_id": "cmd_decision_invalid",
+            "action": "revise",
+        }))
 
 
 def test_loopback_sse_honors_last_event_id(tmp_path: Path) -> None:
@@ -227,6 +280,90 @@ def test_loopback_sse_honors_last_event_id(tmp_path: Path) -> None:
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+
+
+def test_run_event_projection_carries_actor_identity(tmp_path: Path) -> None:
+    sessions = _seed_run(tmp_path / "actor-events.db")
+    now = datetime.now(UTC)
+    _append_event(sessions, "evt_actor", "PLAN_CREATED", timestamp=now)
+
+    events = LocalControlAPI(sessions).events("run_stream")
+    assert events[0]["actor_type"] == "controller"
+    assert events[0]["actor_id"] == "orchestrator"
+    status, resource = ControlResourceRouter(LocalControlAPI(sessions)).get(
+        "/api/events/run_stream",
+    )
+    assert status == 200 and isinstance(resource, dict)
+    assert resource["events"][0]["actor_type"] == "controller"
+    assert resource["events"][0]["actor_id"] == "orchestrator"
+
+
+def test_system_stream_sse_honors_last_event_id(tmp_path: Path) -> None:
+    sessions = _seed_run(tmp_path / "system-stream.db")
+    now = datetime.now(UTC)
+    _append_event(sessions, "evt_sys_first", "DAEMON_CHECK", timestamp=now, run_id=None)
+    _append_event(sessions, "evt_sys_second", "DAEMON_CHECK", timestamp=now, run_id=None)
+    api = LocalControlAPI(sessions)
+    first_offset = cast(int, api.system_events()[0]["stream_offset"])
+    server = serve_local_control(api, port=0)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        host, port = server.server_address[:2]
+        host_text = host.decode("ascii") if isinstance(host, bytes) else host
+        response = httpx.get(
+            f"http://{host_text}:{port}/api/system-stream",
+            headers={"Last-Event-ID": str(first_offset)},
+            timeout=5,
+        )
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/event-stream")
+        assert "evt_sys_first" not in response.text
+        assert "evt_sys_second" in response.text
+        assert f"id: {first_offset + 1}\nevent: system-event\n" in response.text
+        assert '"actor_type": "controller"' in response.text
+
+        resumed = httpx.get(
+            f"http://{host_text}:{port}/api/system-stream?after={first_offset}",
+            timeout=5,
+        )
+        assert resumed.status_code == 200
+        assert "evt_sys_first" not in resumed.text
+        assert "evt_sys_second" in resumed.text
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_message_read_endpoint_returns_full_record(tmp_path: Path) -> None:
+    sessions = _seed_run(tmp_path / "message-read.db")
+    now = datetime.now(UTC)
+    with sessions.begin() as session:
+        session.add(CollaborationMessageRecord(
+            message_id="msg_read",
+            run_id="run_stream",
+            work_order_id=None,
+            sender_actor_type="human",
+            sender_actor_id="operator",
+            recipient_agent_id=None,
+            purpose="DIRECTIVE",
+            body="bounded experiment",
+            classification="PROJECT_PRIVATE",
+            metadata_json={},
+            created_at=now,
+        ))
+    router = ControlResourceRouter(LocalControlAPI(sessions))
+    status, payload = router.get("/api/collaboration-messages/msg_read")
+    assert status == 200 and isinstance(payload, dict)
+    message = payload["message"]
+    assert message["message_id"] == "msg_read"
+    assert message["body"] == "bounded experiment"
+    assert message["classification"] == "PROJECT_PRIVATE"
+    assert message["sender_actor_type"] == "human"
+
+    missing_status, missing = router.get("/api/collaboration-messages/msg_missing")
+    assert missing_status == 404
 
 
 def test_controller_restart_preserves_monotonic_offsets_and_resume_cursor(tmp_path: Path) -> None:
@@ -351,13 +488,19 @@ def test_simultaneous_typed_approval_commands_preserve_one_shot_authority(tmp_pa
             )
             return {"work_order_id": work_order_id, "authorized": True}
 
-    router = ControlCommandRouter(cast(LocalControlAPI, ApprovalAPI()))
+    router = _ready_command_router(
+        cast(LocalControlAPI, ApprovalAPI()),
+        tmp_path / "approve.db",
+    )
 
     async def invoke() -> object:
         try:
             return await router.post(
                 "/api/work-orders/wo_stream/approve",
-                {"grant_id": grant.grant_id},
+                {
+                    "command_id": "cmd_approve_concurrent",
+                    "grant_id": grant.grant_id,
+                },
             )
         except ApprovalNotValid as error:
             return error
@@ -368,5 +511,12 @@ def test_simultaneous_typed_approval_commands_preserve_one_shot_authority(tmp_pa
     results = asyncio.run(invoke_concurrently())
     successes = [item for item in results if isinstance(item, tuple)]
     failures = [item for item in results if isinstance(item, ApprovalNotValid)]
-    assert len(successes) == 1 and successes[0][0] == 200
+    assert len(successes) == 1
+    status, envelope = successes[0]
+    assert status == 202
+    assert envelope["command_version"] == 1
+    assert envelope["command_id"] == "cmd_approve_concurrent"
+    assert envelope["command_type"] == "WorkOrderApprove"
+    assert envelope["status"] == "ACCEPTED"
+    assert envelope["resource"] == {"work_order_id": "wo_stream", "authorized": True}
     assert len(failures) == 1 and "already been used" in str(failures[0])

@@ -1,0 +1,55 @@
+{
+  "definition_version": 1,
+  "profile": {
+    "agent_id": "agent_managed_coder",
+    "display_name": "Managed Coder",
+    "roles": ["executor"],
+    "skills": ["code.inspect", "code.modify", "test.execute", "artifact.publish"],
+    "trust_zone": "LOCAL_PRIVATE",
+    "constraints": ["invocation_required", "controller_owned_delegation"],
+    "labels": {
+      "cli_alias": "coder",
+      "priority": "100"
+    },
+    "max_parallel_delegations": 1,
+    "enabled": true,
+    "profile_version": 1
+  },
+  "runtimes": [
+    {
+      "runtime_id": "runtime_managed_coder_process",
+      "agent_id": "agent_managed_coder",
+      "adapter_kind": "PROCESS",
+      "runtime_name": "Managed coder process service",
+      "endpoint_ref": "http://127.0.0.1:19003/invoke",
+      "framework": "research-agent-json-v1",
+      "model_provider": null,
+      "model_name": null,
+      "protocols": ["research-agent-json-v1"],
+      "metadata": {
+        "health_endpoint": "http://127.0.0.1:19003/health"
+      }
+    }
+  ],
+  "launch_profiles": [
+    {
+      "runtime_id": "runtime_managed_coder_process",
+      "launch_mode": "PROCESS",
+      "configuration": {
+        "launch_spec": {
+          "argv": [
+            "/opt/research-agent-system/bin/research-coder-agent",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "19003"
+          ],
+          "cwd": "/opt/research-agent-system"
+        }
+      },
+      "spec_sha256": "1077e86cab201763db5368a24c8f40d2e66b5795134033dd73c24edf87b4672d",
+      "enabled": true,
+      "version": 1
+    }
+  ]
+}

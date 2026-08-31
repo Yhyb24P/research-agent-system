@@ -121,7 +121,7 @@ def test_sqlite_and_artifact_backup_restore_validates_checksums(tmp_path: Path) 
     restored_artifacts = tmp_path / "restored-artifacts"
     assert _restore(backup_dir, restored_db, restored_artifacts) == manifest
     health = check_restored_snapshot(restored_db, restored_artifacts)
-    assert health.healthy and health.schema_revision == "0019" and health.artifacts_verified == 1
+    assert health.healthy and health.schema_revision == "0025" and health.artifacts_verified == 1
     assert health.missing_count == health.corrupt_count == health.orphan_count == 0
     with pytest.raises(BackupError, match="already exist"):
         _restore(backup_dir, restored_db, tmp_path / "other-artifacts")

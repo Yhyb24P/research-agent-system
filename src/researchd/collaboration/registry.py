@@ -157,12 +157,43 @@ class AgentRegistryService:
                 raise ValueError(f"agent runtime does not exist: {runtime_id}")
             return self._runtime_from_record(row)
 
+    def require_enabled_runtime(self, runtime_id: str) -> AgentRuntime:
+        """Resolve a launchable runtime without treating a lease as process health."""
+        with self.sessions() as session:
+            row = session.scalar(
+                select(AgentRuntimeRecord)
+                .join(AgentRecord, AgentRecord.agent_id == AgentRuntimeRecord.agent_id)
+                .where(
+                    AgentRuntimeRecord.runtime_id == runtime_id,
+                    AgentRuntimeRecord.enabled.is_(True),
+                    AgentRecord.enabled.is_(True),
+                )
+            )
+            if row is None:
+                raise ValueError(f"agent runtime is unavailable: {runtime_id}")
+            return self._runtime_from_record(row)
+
     def list_runtimes(self, agent_id: str | None = None) -> tuple[AgentRuntime, ...]:
         with self.sessions() as session:
             query = select(AgentRuntimeRecord).order_by(AgentRuntimeRecord.runtime_id)
             if agent_id is not None:
                 query = query.where(AgentRuntimeRecord.agent_id == agent_id)
             return tuple(self._runtime_from_record(row) for row in session.scalars(query).all())
+
+    def list_enabled_runtimes(self, agent_id: str) -> tuple[AgentRuntime, ...]:
+        """Enabled runtimes owned by an enabled agent, ordered by runtime_id."""
+        with self.sessions() as session:
+            rows = session.scalars(
+                select(AgentRuntimeRecord)
+                .join(AgentRecord, AgentRecord.agent_id == AgentRuntimeRecord.agent_id)
+                .where(
+                    AgentRuntimeRecord.agent_id == agent_id,
+                    AgentRuntimeRecord.enabled.is_(True),
+                    AgentRecord.enabled.is_(True),
+                )
+                .order_by(AgentRuntimeRecord.runtime_id)
+            ).all()
+            return tuple(self._runtime_from_record(row) for row in rows)
 
     @staticmethod
     def _runtime_from_record(row: AgentRuntimeRecord) -> AgentRuntime:

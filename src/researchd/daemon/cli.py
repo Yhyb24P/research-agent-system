@@ -1,0 +1,92 @@
+"""Executable lifecycle for the loopback researchd process."""
+
+import argparse
+import json
+import os
+from pathlib import Path
+
+from alembic import command
+from alembic.config import Config
+
+from researchd.api.web import serve_local_control
+from researchd.daemon.composition import DaemonConfig, compose_daemon
+from researchd.daemon.security import (
+    control_token_path,
+    create_control_token,
+    load_control_token,
+)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="researchd")
+    parser.add_argument("--config", type=Path, required=True)
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    subparsers.add_parser("validate", help="validate configuration without touching state")
+    subparsers.add_parser("inspect", help="print a non-secret configuration projection")
+    subparsers.add_parser("init", help="create a fresh database at the current schema")
+    serve = subparsers.add_parser("serve", help="start the loopback control daemon")
+    return parser
+
+
+def _alembic_config(database: Path) -> Config:
+    root = Path(__file__).resolve().parents[3]
+    config = Config(str(root / "alembic.ini"))
+    config.set_main_option("sqlalchemy.url", f"sqlite:///{database.resolve()}")
+    return config
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    try:
+        config = DaemonConfig.model_validate_json(args.config.read_text(encoding="utf-8"))
+    except OSError as error:
+        raise SystemExit(f"cannot read researchd config: {args.config}") from error
+    database = config.database
+    if args.command == "validate":
+        print(json.dumps({"config_sha256": config.sha256(), "valid": True}, sort_keys=True))
+        return 0
+    if args.command == "inspect":
+        print(json.dumps(config.inspection(), ensure_ascii=False, sort_keys=True))
+        return 0
+    if args.command == "init":
+        if database.exists():
+            raise SystemExit(f"refusing to initialize existing database: {database}")
+        credential_path = control_token_path(config.state_root)
+        if os.path.lexists(credential_path):
+            raise SystemExit(f"refusing to replace existing control credential: {credential_path}")
+        database.parent.mkdir(parents=True, exist_ok=True)
+        command.upgrade(_alembic_config(database), "head")
+        config.artifact_root.mkdir(parents=True, exist_ok=True)
+        create_control_token(config.state_root)
+        return 0
+
+    control_token = load_control_token(config.state_root)
+    application = compose_daemon(config)
+    application.daemon.start()
+    server = serve_local_control(
+        application.api,
+        daemon=application.daemon,
+        resolution=application.resolution,
+        host=config.host,
+        port=config.port,
+        control_token=control_token,
+    )
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+        application.daemon.stop()
+    return 0
+
+
+def entrypoint() -> int:
+    return main()
+
+
+__all__ = ["build_parser", "entrypoint", "main"]
+
+
+if __name__ == "__main__":
+    raise SystemExit(entrypoint())

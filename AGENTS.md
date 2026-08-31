@@ -28,6 +28,8 @@ protocols are subordinate to `AgentRuntime`.
 ```bash
 uv sync --frozen --extra a2a --extra langgraph-agent --extra qualification
 uv run alembic upgrade head
+uv run researchd --config researchd.json init
+uv run researchd --config researchd.json serve
 uv run pytest -q
 uv run mypy src tests
 uv run python scripts/qualification_validate.py \
@@ -37,7 +39,13 @@ uv run python scripts/qualification_validate.py \
 git diff --check
 ```
 
-Use `researchctl --database <path>` for the local read-only control surface.
+Use `researchd init` only for a fresh database and `researchd serve` for the
+readiness-gated loopback daemon. Normal startup never upgrades a schema. Use
+`researchctl --database <path>` for the local read-only inspection surface.
+The JSON daemon configuration rejects unknown fields and requires absolute
+paths, loopback binding, repository IDs, and fixed argv arrays for job types.
+Use `researchd --config <path> validate` or `inspect` before initialization;
+both are read-only and inspect never echoes fixed command arguments.
 
 ## Structure
 
@@ -50,7 +58,14 @@ Use `researchctl --database <path>` for the local read-only control surface.
 
 ## Current state
 
-The Agent collaboration core plus A2A v1, Workspace Delegation, AG-UI/SSE, and
-the optional LangGraph specialist pilot are implemented. Before a release
-claim, require a green CI run tied to the exact commit and an immutable RC tag;
-keep unverified operational qualification explicitly pending.
+PX00–PX09 are implemented and closed by their recorded exact-head CI evidence.
+The daily `research` client, managed planner/coder/reviewer flow, collaboration
+and handoff projections, detached consoles, governed A2A attachment, and the
+bounded external CLI bridge are present. PX09 Browser Control Tower, including
+the loopback browser launcher, collaboration/Agent-console projections and
+event-offset stream, closed at `40d83ec` after Qwen's independent matrix and
+exact-head CI `33351341328`. Keep future work on a new explicitly scoped plan;
+do not reopen a closed productization item with compatibility patches.
+
+Before any release claim, require a green CI run tied to the exact commit and an
+immutable RC tag; keep unverified operational qualification explicitly pending.

@@ -1,0 +1,467 @@
+import json
+import socket
+import subprocess
+import sys
+import time
+from pathlib import Path
+from typing import cast
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
+
+import pytest
+
+from researchd.collaboration.contracts import AgentProfile, AgentRuntime
+from researchd.collaboration.registry import AgentRegistryService
+from researchd.domain.enums import AgentAdapterKind, AgentTrustZone
+from researchd.domain.ids import AgentId, AgentRuntimeId
+from researchd.storage.db import create_sqlite_engine, session_factory
+from researchd.runtime_sessions.contracts import ProcessLaunchSpec
+from researchd.runtime_sessions.launch_profiles import RuntimeLaunchProfileService
+
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def _free_port() -> int:
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        return int(listener.getsockname()[1])
+
+
+def _start(base: list[str]) -> subprocess.Popen[str]:
+    return subprocess.Popen(
+        [*base, "serve"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+
+def _wait_for_health(process: subprocess.Popen[str], port: int) -> dict[str, object]:
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            break
+        try:
+            with urlopen(f"http://127.0.0.1:{port}/api/health", timeout=1) as response:
+                return cast(dict[str, object], json.load(response))
+        except HTTPError as error:
+            if error.code == 503:
+                return cast(dict[str, object], json.load(error))
+            raise
+        except (URLError, TimeoutError, ConnectionError):
+            time.sleep(0.05)
+    failure_output = process.stderr.read() if process.stderr else ""
+    raise AssertionError(f"researchd failed before READY: {failure_output}")
+
+
+def _token(state_root: Path) -> str:
+    return (state_root / "control.token").read_text(encoding="ascii").strip()
+
+
+def _get(port: int, path: str, state_root: Path) -> object:
+    request = Request(
+        f"http://127.0.0.1:{port}{path}",
+        headers={"Authorization": f"Bearer {_token(state_root)}"},
+    )
+    with urlopen(request, timeout=5) as response:
+        return json.load(response)
+
+
+def _post(
+    port: int,
+    path: str,
+    payload: dict[str, object],
+    state_root: Path,
+) -> dict[str, object]:
+    request = Request(
+        f"http://127.0.0.1:{port}{path}",
+        data=json.dumps(payload).encode(),
+        headers={
+            "Authorization": f"Bearer {_token(state_root)}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    with urlopen(request, timeout=5) as response:
+        assert response.status == 202
+        return cast(dict[str, object], json.load(response))
+
+
+def _terminate(process: subprocess.Popen[str]) -> None:
+    process.terminate()
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=5)
+
+
+def _register_process_runtime(database: Path) -> None:
+    sessions = session_factory(create_sqlite_engine(database))
+    registry = AgentRegistryService(sessions)
+    registry.register_profile(AgentProfile(
+        agent_id=AgentId("agent_restart_test"),
+        display_name="Restart test Agent",
+        roles=("executor",),
+        skills=("runtime.test",),
+        trust_zone=AgentTrustZone.LOCAL_PRIVATE,
+    ))
+    registry.register_runtime(AgentRuntime(
+        runtime_id=AgentRuntimeId("runtime_crash_test"),
+        agent_id=AgentId("agent_restart_test"),
+        adapter_kind=AgentAdapterKind.PROCESS,
+        runtime_name="Restart test process",
+    ))
+    RuntimeLaunchProfileService(sessions, registry).register_process(
+        "runtime_crash_test",
+        ProcessLaunchSpec(argv=("/usr/bin/sleep", "60"), cwd=str(database.parent)),
+    )
+def test_researchd_starts_as_independent_process(tmp_path: Path) -> None:
+    database = tmp_path / "researchd.db"
+    artifacts = tmp_path / "artifacts"
+    state = tmp_path / "state"
+    config = tmp_path / "researchd.json"
+    config.write_text(json.dumps({
+        "database": str(database),
+        "artifact_root": str(artifacts),
+        "state_root": str(state),
+        "repositories": {},
+        "job_commands": {},
+        "host": "127.0.0.1",
+        "port": _free_port(),
+    }))
+    base = [
+        sys.executable,
+        "-m",
+        "researchd.daemon.cli",
+        "--config",
+        str(config),
+    ]
+    initialized = subprocess.run(
+        [*base, "init"],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert initialized.returncode == 0, initialized.stderr
+
+    port = int(json.loads(config.read_text())["port"])
+    process = _start(base)
+    try:
+        health = _wait_for_health(process, port)
+        assert health["state"] == "READY"
+        assert health["ready"] is True
+    finally:
+        _terminate(process)
+
+
+def test_researchd_restart_reattaches_live_runtime_and_preserves_audit_order(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "researchd.db"
+    state = tmp_path / "state"
+    port = _free_port()
+    config = tmp_path / "researchd.json"
+    config.write_text(json.dumps({
+        "database": str(database),
+        "artifact_root": str(tmp_path / "artifacts"),
+        "state_root": str(state),
+        "repositories": {},
+        "job_commands": {},
+        "host": "127.0.0.1",
+        "port": port,
+    }))
+    base = [sys.executable, "-m", "researchd.daemon.cli", "--config", str(config)]
+    initialized = subprocess.run(
+        [*base, "init"], check=False, capture_output=True, text=True, timeout=30
+    )
+    assert initialized.returncode == 0, initialized.stderr
+
+    _register_process_runtime(database)
+
+    first = _start(base)
+    second: subprocess.Popen[str] | None = None
+    runtime_pid: int | None = None
+    try:
+        _wait_for_health(first, port)
+        # The managed flow omits runtime_id: the daemon selects the agent's
+        # single enabled runtime and derives the session identity itself.
+        started = _post(port, "/api/agents/agent_restart_test/start", {
+            "command_id": "command_restart_start",
+        }, state)
+        started_resource = cast(dict[str, object], started["resource"])
+        assert started["status"] == "ACCEPTED"
+        assert started_resource["supervisor_state"] == "HEALTHY"
+        assert started_resource["launch_spec"] == {
+            "argv": ["/usr/bin/sleep", "60"],
+            "cwd": str(tmp_path),
+        }
+        profile_sessions = session_factory(create_sqlite_engine(database))
+        profile_service = RuntimeLaunchProfileService(
+            profile_sessions,
+            AgentRegistryService(profile_sessions),
+        )
+        assert (
+            started_resource["launch_profile_sha256"]
+            == profile_service.get("runtime_crash_test").spec_sha256
+        )
+        identity = cast(dict[str, object], started_resource["external_identity"])
+        runtime_pid = int(cast(int, identity["pid"]))
+
+        before_payload = cast(dict[str, object], _get(port, "/api/system-events?after=0", state))
+        before = cast(list[dict[str, object]], before_payload["events"])
+        before_offsets = [item["stream_offset"] for item in before]
+        _terminate(first)
+
+        second = _start(base)
+        health = _wait_for_health(second, port)
+        startup = cast(dict[str, object], health["startup"])
+        phases = cast(list[dict[str, object]], startup["phases"])
+        runtime_phase = phases[4]
+        assert runtime_phase["phase"] == "RUNTIME_RECONCILIATION"
+        assert runtime_phase["affected_count"] == 1
+        session = cast(list[dict[str, object]], _get(port, "/api/runtime-sessions", state))[0]
+        assert session["supervisor_state"] == "HEALTHY"
+        assert session["reattach_state"] == "ATTACHED"
+
+        after_payload = cast(dict[str, object], _get(port, "/api/system-events?after=0", state))
+        after = cast(list[dict[str, object]], after_payload["events"])
+        after_offsets = [item["stream_offset"] for item in after]
+        assert after_offsets == list(range(1, len(after_offsets) + 1))
+        assert after_offsets[:len(before_offsets)] == before_offsets
+
+        stopped = _post(port, f"/api/runtime-sessions/{started_resource['runtime_session_id']}/stop", {
+            "command_id": "command_restart_stop",
+            "runtime_id": "runtime_crash_test",
+            "expected_version": session["version"],
+        }, state)
+        stopped_resource = cast(dict[str, object], stopped["resource"])
+        assert stopped["status"] == "ACCEPTED"
+        assert stopped_resource["supervisor_state"] == "STOPPED"
+        runtime_pid = None
+    finally:
+        if first.poll() is None:
+            _terminate(first)
+        if second is not None and second.poll() is None:
+            _terminate(second)
+        if runtime_pid is not None:
+            import os
+            import signal
+
+            try:
+                os.kill(runtime_pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+
+
+def test_start_intent_crash_never_relaunches_uncertain_process(tmp_path: Path) -> None:
+    database = tmp_path / "researchd.db"
+    state = tmp_path / "state"
+    port = _free_port()
+    config = tmp_path / "researchd.json"
+    config.write_text(json.dumps({
+        "database": str(database),
+        "artifact_root": str(tmp_path / "artifacts"),
+        "state_root": str(state),
+        "repositories": {}, "job_commands": {},
+        "host": "127.0.0.1", "port": port,
+    }))
+    base = [sys.executable, "-m", "researchd.daemon.cli", "--config", str(config)]
+    assert subprocess.run([*base, "init"], check=False).returncode == 0
+    _register_process_runtime(database)
+    crashed = subprocess.run([
+        sys.executable,
+        str(ROOT / "tests/fixtures/runtime_intent_crasher.py"),
+        "start", str(database), str(tmp_path),
+    ], check=False)
+    assert crashed.returncode == 73
+
+    daemon = _start(base)
+    try:
+        health = _wait_for_health(daemon, port)
+        startup = cast(dict[str, object], health["startup"])
+        phases = cast(list[dict[str, object]], startup["phases"])
+        assert health["state"] == "FAILED"
+        assert health["ready"] is False
+        assert phases[4]["status"] == "FAIL"
+        assert phases[4]["error_type"] == "RuntimeError"
+        session = cast(list[dict[str, object]], _get(port, "/api/runtime-sessions", state))[0]
+        assert session["supervisor_state"] == "RECONCILIATION_REQUIRED"
+        assert session["external_identity"] is None
+        assert session["exit_reason"] == "missing_external_identity"
+        with pytest.raises(HTTPError) as rejected:
+            _post(port, "/api/agents/agent_restart_test/start", {
+                "command_id": "command_must_be_rejected",
+                "runtime_id": "runtime_crash_test",
+            }, state)
+        assert rejected.value.code == 409
+    finally:
+        _terminate(daemon)
+
+
+def test_stop_intent_crash_is_finished_by_restart_reconciliation(tmp_path: Path) -> None:
+    database = tmp_path / "researchd.db"
+    state = tmp_path / "state"
+    port = _free_port()
+    config = tmp_path / "researchd.json"
+    config.write_text(json.dumps({
+        "database": str(database),
+        "artifact_root": str(tmp_path / "artifacts"),
+        "state_root": str(state),
+        "repositories": {}, "job_commands": {},
+        "host": "127.0.0.1", "port": port,
+    }))
+    base = [sys.executable, "-m", "researchd.daemon.cli", "--config", str(config)]
+    assert subprocess.run([*base, "init"], check=False).returncode == 0
+    _register_process_runtime(database)
+    first = _start(base)
+    second: subprocess.Popen[str] | None = None
+    runtime_pid: int | None = None
+    try:
+        _wait_for_health(first, port)
+        started = _post(port, "/api/agents/agent_restart_test/start", {
+            "command_id": "command_normal_start",
+            "runtime_id": "runtime_crash_test",
+        }, state)
+        started_resource = cast(dict[str, object], started["resource"])
+        assert started["status"] == "ACCEPTED"
+        identity = cast(dict[str, object], started_resource["external_identity"])
+        runtime_pid = int(cast(int, identity["pid"]))
+        _terminate(first)
+        crashed = subprocess.run([
+            sys.executable,
+            str(ROOT / "tests/fixtures/runtime_intent_crasher.py"),
+            "stop", str(database), str(tmp_path),
+            "--expected-version", str(started_resource["version"]),
+            "--session-id", str(started_resource["runtime_session_id"]),
+        ], check=False)
+        assert crashed.returncode == 73
+
+        second = _start(base)
+        health = _wait_for_health(second, port)
+        startup = cast(dict[str, object], health["startup"])
+        phases = cast(list[dict[str, object]], startup["phases"])
+        assert phases[4]["affected_count"] == 1
+        session = cast(list[dict[str, object]], _get(port, "/api/runtime-sessions", state))[0]
+        assert session["supervisor_state"] == "STOPPED"
+        assert session["exit_reason"] == "reconciled_stop"
+        runtime_pid = None
+    finally:
+        if first.poll() is None:
+            _terminate(first)
+        if second is not None and second.poll() is None:
+            _terminate(second)
+        if runtime_pid is not None:
+            import os
+            import signal
+            try:
+                os.kill(runtime_pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+
+
+def test_generic_command_crash_blocks_ready_without_replaying(tmp_path: Path) -> None:
+    database = tmp_path / "researchd.db"
+    state = tmp_path / "state"
+    port = _free_port()
+    config = tmp_path / "researchd.json"
+    config.write_text(json.dumps({
+        "database": str(database),
+        "artifact_root": str(tmp_path / "artifacts"),
+        "state_root": str(state),
+        "repositories": {}, "job_commands": {},
+        "host": "127.0.0.1", "port": port,
+    }))
+    base = [sys.executable, "-m", "researchd.daemon.cli", "--config", str(config)]
+    assert subprocess.run([*base, "init"], check=False).returncode == 0
+    crashed = subprocess.run([
+        sys.executable,
+        str(ROOT / "tests/fixtures/daemon_command_crasher.py"),
+        str(database),
+    ], check=False)
+    assert crashed.returncode == 74
+
+    daemon = _start(base)
+    try:
+        health = _wait_for_health(daemon, port)
+        assert health["state"] == "FAILED"
+        assert health["ready"] is False
+        startup = cast(dict[str, object], health["startup"])
+        phases = cast(list[dict[str, object]], startup["phases"])
+        assert phases[7]["phase"] == "AUDIT_STREAM_HEALTH"
+        assert phases[7]["status"] == "FAIL"
+        commands = cast(
+            list[dict[str, object]],
+            _get(port, "/api/daemon-commands?status=ACCEPTED", state),
+        )
+        assert len(commands) == 1
+        assert commands[0]["command_id"] == "command_generic_crash"
+        assert commands[0]["status"] == "ACCEPTED"
+        with pytest.raises(HTTPError) as rejected:
+            _post(port, "/api/runs/run_another/cancel", {
+                "command_id": "command_after_crash",
+            }, state)
+        assert rejected.value.code == 409
+    finally:
+        _terminate(daemon)
+
+
+def test_operator_resolution_unblocks_failed_daemon(tmp_path: Path) -> None:
+    database = tmp_path / "researchd.db"
+    state = tmp_path / "state"
+    port = _free_port()
+    config = tmp_path / "researchd.json"
+    config.write_text(json.dumps({
+        "database": str(database),
+        "artifact_root": str(tmp_path / "artifacts"),
+        "state_root": str(state),
+        "repositories": {}, "job_commands": {},
+        "host": "127.0.0.1", "port": port,
+    }))
+    base = [sys.executable, "-m", "researchd.daemon.cli", "--config", str(config)]
+    assert subprocess.run([*base, "init"], check=False).returncode == 0
+    crashed = subprocess.run([
+        sys.executable,
+        str(ROOT / "tests/fixtures/daemon_command_crasher.py"),
+        str(database),
+    ], check=False)
+    assert crashed.returncode == 74
+
+    failed = _start(base)
+    restarted: subprocess.Popen[str] | None = None
+    try:
+        health = _wait_for_health(failed, port)
+        assert health["state"] == "FAILED"
+        # The recovery channel stays reachable (and authenticated) while FAILED.
+        resolved = _post(port, "/api/daemon-commands/command_generic_crash/resolve", {
+            "command_id": "command_resolve_crash",
+            "resource_ref": {"run_id": "run_unknown_outcome"},
+        }, state)
+        assert resolved["status"] == "ACCEPTED"
+        resolved_resource = cast(dict[str, object], resolved["resource"])
+        assert resolved_resource["target_status"] == "REJECTED"
+        assert resolved_resource["target_reason_code"] == "target_missing"
+        pending = cast(
+            list[dict[str, object]],
+            _get(port, "/api/daemon-commands?status=ACCEPTED", state),
+        )
+        assert pending == []
+    finally:
+        _terminate(failed)
+
+    restarted = _start(base)
+    try:
+        health = _wait_for_health(restarted, port)
+        assert health["state"] == "READY"
+        assert health["ready"] is True
+        resolved_commands = cast(
+            list[dict[str, object]],
+            _get(port, "/api/daemon-commands?status=COMPLETED", state),
+        )
+        assert [item["command_id"] for item in resolved_commands] == [
+            "command_resolve_crash",
+        ]
+    finally:
+        _terminate(restarted)

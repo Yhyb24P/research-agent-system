@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import CheckConstraint, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy import CheckConstraint, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint, text as sa_text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from researchd.storage.types import UTCDateTime
@@ -157,6 +157,140 @@ class AgentRuntimeLeaseEventRecord(Base):
     observed_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
 
 
+class RuntimeLaunchProfileRecord(Base, VersionedTimestamps):
+    """Trusted one-to-one launch configuration for an existing AgentRuntime."""
+
+    __tablename__ = "runtime_launch_profiles"
+    __table_args__ = (
+        CheckConstraint(
+            "launch_mode IN ('PROCESS', 'REMOTE_HTTP')",
+            name="ck_runtime_launch_profiles_mode",
+        ),
+        Index("ix_runtime_launch_profiles_enabled", "enabled"),
+    )
+    runtime_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_runtimes.runtime_id"), primary_key=True,
+    )
+    launch_mode: Mapped[str] = mapped_column(String(32), nullable=False)
+    configuration_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    spec_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    enabled: Mapped[bool] = mapped_column(nullable=False, default=True)
+
+
+class RuntimeSessionRecord(Base, VersionedTimestamps):
+    """One concrete supervised instance of an existing AgentRuntime."""
+
+    __tablename__ = "runtime_sessions"
+    __table_args__ = (
+        CheckConstraint(
+            "launch_mode IN ('PROCESS', 'REMOTE_HTTP', 'CLOUD', 'A2A')",
+            name="ck_runtime_sessions_launch_mode",
+        ),
+        CheckConstraint(
+            "supervisor_state IN ('STARTING', 'HEALTHY', 'DEGRADED', "
+            "'STOPPING', 'STOPPED', 'LOST', 'RECONCILIATION_REQUIRED')",
+            name="ck_runtime_sessions_state",
+        ),
+        CheckConstraint(
+            "reattach_state IN ('PENDING', 'ATTACHED', 'NOT_APPLICABLE', "
+            "'DETACHED', 'FAILED')",
+            name="ck_runtime_sessions_reattach_state",
+        ),
+        Index("ix_runtime_sessions_runtime", "runtime_id", "created_at"),
+        Index("ix_runtime_sessions_state", "supervisor_state", "updated_at"),
+        Index(
+            "ux_runtime_sessions_one_active_runtime",
+            "runtime_id",
+            unique=True,
+            sqlite_where=sa_text(
+                "supervisor_state IN ('STARTING', 'HEALTHY', 'DEGRADED', "
+                "'STOPPING', 'RECONCILIATION_REQUIRED')"
+            ),
+        ),
+    )
+    runtime_session_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    runtime_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_runtimes.runtime_id"), nullable=False,
+    )
+    launch_mode: Mapped[str] = mapped_column(String(32), nullable=False)
+    supervisor_state: Mapped[str] = mapped_column(String(32), nullable=False)
+    launch_spec_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    launch_profile_sha256: Mapped[str | None] = mapped_column(String(64))
+    external_identity_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    started_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    last_health_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    stopped_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    exit_reason: Mapped[str | None] = mapped_column(String(256))
+    reattach_state: Mapped[str] = mapped_column(String(32), nullable=False)
+
+
+class RuntimeSessionCommandRecord(Base):
+    """Durable idempotency receipt for one typed supervisor mutation."""
+
+    __tablename__ = "runtime_session_commands"
+    __table_args__ = (
+        CheckConstraint(
+            "command_type IN ('START', 'ATTACH', 'STOP')",
+            name="ck_runtime_session_commands_type",
+        ),
+        CheckConstraint(
+            "actor_type IN ('HUMAN', 'SYSTEM')",
+            name="ck_runtime_session_commands_actor",
+        ),
+        CheckConstraint(
+            "status IN ('ACCEPTED', 'COMPLETED', 'FAILED')",
+            name="ck_runtime_session_commands_status",
+        ),
+        Index(
+            "ix_runtime_session_commands_session",
+            "runtime_session_id",
+            "created_at",
+        ),
+    )
+    command_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    runtime_session_id: Mapped[str] = mapped_column(
+        ForeignKey("runtime_sessions.runtime_session_id"), nullable=False,
+    )
+    command_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    request_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    actor_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    actor_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    expected_version: Mapped[int | None] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    result_state: Mapped[str | None] = mapped_column(String(32))
+    failure_reason: Mapped[str | None] = mapped_column(String(128))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+
+
+class DaemonCommandRecord(Base):
+    """Boundary receipt preventing uncertain typed commands from replaying."""
+
+    __tablename__ = "daemon_commands"
+    __table_args__ = (
+        CheckConstraint(
+            "actor_type IN ('HUMAN', 'SYSTEM')",
+            name="ck_daemon_commands_actor",
+        ),
+        CheckConstraint(
+            "status IN ('ACCEPTED', 'COMPLETED', 'REJECTED')",
+            name="ck_daemon_commands_status",
+        ),
+        Index("ix_daemon_commands_status", "status", "created_at"),
+    )
+    command_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    command_type: Mapped[str] = mapped_column(String(128), nullable=False)
+    command_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    request_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    actor_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    actor_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    result_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    reason_code: Mapped[str | None] = mapped_column(String(128))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+
+
 class DelegationRecord(Base, VersionedTimestamps):
     __tablename__ = "delegations"
     __table_args__ = (Index("ix_delegations_run_state", "run_id", "state"), Index("ix_delegations_idempotency", "idempotency_key", unique=True))
@@ -291,10 +425,19 @@ class AgentInvocationRecord(Base):
 
 class CollaborationMessageRecord(Base):
     __tablename__ = "collaboration_messages"
-    __table_args__ = (Index("ix_collaboration_messages_run_created", "run_id", "created_at"),)
+    __table_args__ = (
+        CheckConstraint(
+            "purpose IN ('DISCUSSION','STATUS','QUESTION','DIRECTIVE','NOTICE')",
+            name="ck_messages_purpose",
+        ),
+        Index("ix_collaboration_messages_run_created", "run_id", "created_at"),
+    )
     message_id: Mapped[str] = mapped_column(String(128), primary_key=True)
     run_id: Mapped[str] = mapped_column(ForeignKey("research_runs.run_id"), nullable=False)
     work_order_id: Mapped[str | None] = mapped_column(ForeignKey("work_orders.work_order_id"))
+    delegation_id: Mapped[str | None] = mapped_column(ForeignKey("delegations.delegation_id"))
+    invocation_id: Mapped[str | None] = mapped_column(ForeignKey("agent_invocations.invocation_id"))
+    reply_to_message_id: Mapped[str | None] = mapped_column(ForeignKey("collaboration_messages.message_id"))
     sender_actor_type: Mapped[str] = mapped_column(String(32), nullable=False)
     sender_actor_id: Mapped[str] = mapped_column(String(128), nullable=False)
     recipient_agent_id: Mapped[str | None] = mapped_column(ForeignKey("agents.agent_id"))
@@ -303,6 +446,43 @@ class CollaborationMessageRecord(Base):
     classification: Mapped[str] = mapped_column(String(32), nullable=False, default="PROJECT_PRIVATE")
     metadata_json: Mapped[dict[str, str]] = mapped_column("metadata", JSON, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+
+
+class HandoffProposalRecord(Base):
+    __tablename__ = "handoff_proposals"
+    __table_args__ = (
+        CheckConstraint(
+            "requested_mode IN ('CONTINUE','REVISE')",
+            name="ck_handoff_mode",
+        ),
+        CheckConstraint(
+            "status IN ('PROPOSED','ACCEPTED','REJECTED','SUPERSEDED')",
+            name="ck_handoff_status",
+        ),
+        Index("ix_handoff_run_created", "run_id", "created_at"),
+        Index("ix_handoff_status_created", "status", "created_at"),
+    )
+    proposal_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    action_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    run_id: Mapped[str] = mapped_column(ForeignKey("research_runs.run_id"), nullable=False)
+    work_order_id: Mapped[str] = mapped_column(ForeignKey("work_orders.work_order_id"), nullable=False)
+    source_delegation_id: Mapped[str] = mapped_column(ForeignKey("delegations.delegation_id"), nullable=False)
+    source_invocation_id: Mapped[str] = mapped_column(ForeignKey("agent_invocations.invocation_id"), nullable=False)
+    source_agent_id: Mapped[str] = mapped_column(ForeignKey("agents.agent_id"), nullable=False)
+    proposed_target_agent_id: Mapped[str | None] = mapped_column(ForeignKey("agents.agent_id"))
+    requested_mode: Mapped[str] = mapped_column(String(16), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    continuation_objective: Mapped[str | None] = mapped_column(Text)
+    artifact_ids_json: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    observation_ids_json: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    decided_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    decision_actor_type: Mapped[str | None] = mapped_column(String(32))
+    decision_actor_id: Mapped[str | None] = mapped_column(String(128))
+    decision_reason: Mapped[str | None] = mapped_column(Text)
+    resolution_entity_type: Mapped[str | None] = mapped_column(String(32))
+    resolution_entity_id: Mapped[str | None] = mapped_column(String(128))
 
 
 class ArtifactRecord(Base):
@@ -341,7 +521,7 @@ class AuditEventRecord(Base):
     # after the initial row has been accepted.
     audit_seq: Mapped[int | None] = mapped_column(Integer)
     event_type: Mapped[str] = mapped_column(String(64), nullable=False)
-    run_id: Mapped[str] = mapped_column(ForeignKey("research_runs.run_id"), nullable=False)
+    run_id: Mapped[str | None] = mapped_column(ForeignKey("research_runs.run_id"))
     entity_type: Mapped[str] = mapped_column(String(64), nullable=False)
     entity_id: Mapped[str] = mapped_column(String(128), nullable=False)
     actor_type: Mapped[str] = mapped_column(String(64), nullable=False)

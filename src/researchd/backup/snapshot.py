@@ -28,7 +28,7 @@ _MANIFEST_KEYS = {
     "created_at_utc",
 }
 
-# Every authoritative table created by migrations 0001-0019 (alembic_version
+# Every authoritative table created by migrations 0001-0025 (alembic_version
 # excluded). A migration that changes this set must update the restore gate.
 AUTHORITATIVE_TABLES: tuple[str, ...] = (
     "agent_interactions",
@@ -48,15 +48,20 @@ AUTHORITATIVE_TABLES: tuple[str, ...] = (
     "cloud_interaction_governance",
     "collaboration_messages",
     "delegations",
+    "daemon_commands",
     "execution_steps",
     "executor_dispatches",
     "gpu_leases",
+    "handoff_proposals",
     "jobs",
     "observations",
     "plans",
     "policy_decisions",
     "research_runs",
     "review_decisions",
+    "runtime_session_commands",
+    "runtime_launch_profiles",
+    "runtime_sessions",
     "verification_results",
     "work_orders",
     "workspace_grants",
@@ -327,6 +332,58 @@ def check_restored_snapshot(database: Path, artifact_root: Path) -> RestoreHealt
     )
 
 
+def verify_snapshot(snapshot: Path) -> RestoreHealthReport:
+    """Validate a snapshot tree completely without copying or mutating it."""
+    snapshot = _directory(snapshot, "snapshot")
+    _validate_snapshot_tree(snapshot)
+    manifest = _load_manifest(snapshot / "manifest.json")
+    database_source = _regular_file(snapshot / "research.db", "snapshot database", single_link=True)
+    artifacts_source = _directory(snapshot / "artifacts", "snapshot artifacts")
+    if _sha256(database_source) != manifest.database_sha256:
+        raise BackupError("snapshot database checksum mismatch")
+    if manifest.schema_revision != _schema_revision(database_source):
+        raise BackupError("snapshot schema revision mismatch")
+    if _snapshot_artifact_files(artifacts_source) != manifest.artifact_files:
+        raise BackupError("snapshot artifact checksum mismatch")
+    health = check_restored_snapshot(database_source, artifacts_source)
+    if not health.healthy:
+        raise BackupError("snapshot artifact inventory is unhealthy")
+    return health
+
+
+def plan_restore(
+    snapshot: Path,
+    database_destination: Path,
+    artifact_destination: Path,
+    *,
+    expected_candidate_commit: str,
+    expected_candidate_tag: str,
+) -> dict[str, Any]:
+    """Dry-run every restore_snapshot precondition without copying anything."""
+    _validate_candidate(expected_candidate_commit, expected_candidate_tag)
+    health = verify_snapshot(snapshot)
+    manifest = _load_manifest(_directory(snapshot, "snapshot") / "manifest.json")
+    if (
+        manifest.candidate_commit != expected_candidate_commit
+        or manifest.candidate_tag != expected_candidate_tag
+    ):
+        raise BackupError("snapshot candidate identity mismatch")
+    database_destination = _planned_new_path(database_destination, "restore database destination")
+    artifact_destination = _planned_new_path(artifact_destination, "restore artifact destination")
+    return {
+        "snapshot": str(snapshot),
+        "candidate_commit": manifest.candidate_commit,
+        "candidate_tag": manifest.candidate_tag,
+        "schema_revision": manifest.schema_revision,
+        "database_sha256": manifest.database_sha256,
+        "artifact_file_count": len(manifest.artifact_files),
+        "artifacts_verified": health.artifacts_verified,
+        "database_destination": str(database_destination),
+        "artifact_destination": str(artifact_destination),
+        "size_bytes": snapshot_size_bytes(snapshot),
+    }
+
+
 def snapshot_size_bytes(snapshot: Path) -> int:
     """Return the total regular-file size for a validated snapshot tree."""
     snapshot = _directory(snapshot, "snapshot")
@@ -463,6 +520,16 @@ def _new_path(path: Path, label: str) -> Path:
     if absolute.exists() or absolute.is_symlink():
         raise BackupError(f"{label} already exists")
     absolute.parent.mkdir(parents=True, exist_ok=True)
+    if any(parent.is_symlink() for parent in (absolute.parent, *absolute.parent.parents)):
+        raise BackupError(f"{label} parent must not contain symlinks")
+    return absolute
+
+
+def _planned_new_path(path: Path, label: str) -> Path:
+    """Read-only twin of _new_path: validates, never creates anything."""
+    absolute = Path(os.path.abspath(path))
+    if absolute.exists() or absolute.is_symlink():
+        raise BackupError(f"{label} already exists")
     if any(parent.is_symlink() for parent in (absolute.parent, *absolute.parent.parents)):
         raise BackupError(f"{label} parent must not contain symlinks")
     return absolute
