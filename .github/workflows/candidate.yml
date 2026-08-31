@@ -3,6 +3,8 @@ name: exact-candidate
 on:
   push:
     tags: ["v*-rc.*"]
+  pull_request:
+    branches: [next/product-hardening]
   workflow_dispatch:
     inputs:
       mode:
@@ -37,12 +39,25 @@ jobs:
           python-version: "3.12"
       - uses: astral-sh/setup-uv@v5
       - name: Resolve candidate identity
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          DISPATCH_MODE: ${{ inputs.mode }}
+          DISPATCH_REF: ${{ inputs.ref }}
+          DISPATCH_TAG: ${{ inputs.candidate_tag }}
         shell: bash
         run: |
           set -euo pipefail
-          mode="${{ inputs.mode }}"
-          ref="${{ inputs.ref }}"
-          tag="${{ inputs.candidate_tag }}"
+          mode="${DISPATCH_MODE}"
+          ref="${DISPATCH_REF}"
+          tag="${DISPATCH_TAG}"
+          # PR checks must test the source candidate tree, never GitHub's
+          # synthetic merge ref.  The separate merge-compatibility workflow
+          # owns that different claim.
+          if [ "${EVENT_NAME}" = "pull_request" ]; then
+            mode=preflight
+            ref="${PR_HEAD_SHA}"
+          fi
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
             mode=exact
             tag="${GITHUB_REF_NAME}"

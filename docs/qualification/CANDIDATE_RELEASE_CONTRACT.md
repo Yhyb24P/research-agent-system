@@ -22,7 +22,9 @@ vX.Y.Z-rc.N <-> X.Y.ZrcN
 vX.Y.Z      <-> X.Y.Z
 ```
 
-Branch preflight may be untagged. Exact-candidate mode requires the expected
+Branch preflight may be untagged.  On a pull request, the preflight checks the
+source branch's commit explicitly; it does not treat GitHub's synthetic merge
+ref as the candidate identity.  Exact-candidate mode requires the expected
 tag to resolve to, and be checked out at, the candidate commit.
 
 ## rc.81 disposition
