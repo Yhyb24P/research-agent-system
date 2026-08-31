@@ -20,6 +20,7 @@ from researchd.daemon.security import (
     create_control_token,
     load_control_token,
 )
+from researchd.daemon.identity import claim as claim_daemon, release as release_daemon
 from researchd.runtime_sessions.launch_profiles import RuntimeLaunchProfileService
 from researchd.storage.db import create_sqlite_engine, session_factory
 
@@ -101,6 +102,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     control_token = load_control_token(config.state_root)
+    daemon_identity = claim_daemon(config.state_root, config.sha256())
     application = compose_daemon(config)
     application.daemon.start()
     server = serve_local_control(
@@ -118,6 +120,7 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         server.server_close()
         application.daemon.stop()
+        release_daemon(config.state_root, daemon_identity)
     return 0
 
 
