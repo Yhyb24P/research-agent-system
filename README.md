@@ -517,11 +517,13 @@ boundaries fail closed.
 `v1.0.0-rc.80` is an immutable historical qualification candidate and does
 not qualify later productization code. New product candidates use a single
 release identity: Git tag `vX.Y.Z-rc.N` maps exactly to Python distribution
-version `X.Y.ZrcN`; the final `vX.Y.Z` tag maps to `X.Y.Z`. The current
-reserved candidate is `v1.0.0-rc.81` / `1.0.0rc81`. A tag is created only
-after the exact candidate commit passes all gates; it is never moved or reused.
+version `X.Y.ZrcN`; the final `vX.Y.Z` tag maps to `X.Y.Z`. The current tagged
+candidate is `v1.0.0-rc.81` / `1.0.0rc81` at
+`f7785244acc0687324376806666ead2be26bf478`. A tag is created only after the
+exact candidate commit passes all gates; it is never moved or reused.
 Run `python scripts/version_policy_check.py --candidate-tag v1.0.0-rc.81` to
-validate the mapping, and add `--require-head-tag` only after tagging.
+validate the mapping, and use `--require-head-tag` to validate the tagged
+candidate.
 
 The repository does not claim universal distributed exactly-once execution or a
 public control/A2A service.

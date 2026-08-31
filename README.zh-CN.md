@@ -445,10 +445,11 @@ mode 不匹配或被篡改的 profile 均失败关闭。
 
 `v1.0.0-rc.80` 是不可变的历史 qualification candidate，不能为后续产品化代码背书。
 新的产品候选使用单一发行身份：Git tag `vX.Y.Z-rc.N` 必须精确映射到 Python distribution
-`X.Y.ZrcN`，最终 `vX.Y.Z` tag 映射到 `X.Y.Z`。当前预留候选为
-`v1.0.0-rc.81` / `1.0.0rc81`。只有精确候选 commit 通过全部门禁后才创建 tag；tag 不可移动、
-不可复用。可运行 `python scripts/version_policy_check.py --candidate-tag v1.0.0-rc.81`
-验证映射；仅在打 tag 后使用 `--require-head-tag`。
+`X.Y.ZrcN`，最终 `vX.Y.Z` tag 映射到 `X.Y.Z`。当前已打标候选为
+`v1.0.0-rc.81` / `1.0.0rc81`，对应
+`f7785244acc0687324376806666ead2be26bf478`。只有精确候选 commit 通过全部门禁后才创建 tag；tag
+不可移动、不可复用。可运行 `python scripts/version_policy_check.py --candidate-tag v1.0.0-rc.81`
+验证映射；使用 `--require-head-tag` 验证已打标候选。
 
 项目不承诺普遍意义的分布式 exactly-once，也不提供公开 control/A2A service。正式运行批准仍需要绑定精确 commit 的证据，包括绿色 CI、
 backup/restore 验证、transport 治理和计划中的 soak/acceptance 检查。
