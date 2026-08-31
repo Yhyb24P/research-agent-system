@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from definitions import build_definitions  # noqa: E402
+from definitions import build_definitions  # type: ignore[import-not-found]  # noqa: E402
 
 EXPECTED_TERMINAL_STATE = "COMPLETED"
 TERMINAL_STATES = {"COMPLETED", "FAILED", "CANCELLED"}
@@ -52,7 +52,11 @@ class Evidence:
         self.data: dict[str, Any] = {"phases": {}}
 
     def phase(self, name: str) -> dict[str, Any]:
-        return self.data["phases"].setdefault(name, {})
+        phase: dict[str, Any] | None = self.data["phases"].get(name)
+        if phase is None:
+            phase = {}
+            self.data["phases"][name] = phase
+        return phase
 
     def finish(self, result: str, **extra: Any) -> None:
         self.data["result"] = result
