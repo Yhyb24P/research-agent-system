@@ -54,6 +54,10 @@ class _FamilyControlStub:
         self.calls.append(("approve", work_order_id, grant_id))
         return {"work_order_id": work_order_id}
 
+    async def approve_request(self, approval_id: str, *, granted_by: str) -> dict[str, object]:
+        self.calls.append(("approve_request", approval_id, granted_by))
+        return {"approval_id": approval_id}
+
     def resolve_human(
         self,
         work_order_id: str,

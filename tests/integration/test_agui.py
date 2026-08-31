@@ -10,6 +10,7 @@ import httpx
 from pydantic import ValidationError
 import pytest
 from sqlalchemy import select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from researchd.api.agui import AGUIProjectionAdapter, CustomEvent
@@ -24,6 +25,7 @@ from researchd.runtime_sessions.service import RuntimeSessionService
 from researchd.storage.db import create_sqlite_engine, session_factory
 from researchd.supervisor.runtime import RuntimeSupervisor
 from researchd.storage.models import (
+    ApprovalGrantRecord,
     AuditEventRecord,
     CollaborationMessageRecord,
     ResearchRunRecord,
@@ -185,6 +187,10 @@ class _CommandSpy:
         self.calls.append(("approve", work_order_id, grant_id))
         return {"work_order_id": work_order_id}
 
+    async def approve_request(self, approval_id: str, *, granted_by: str) -> dict[str, Any]:
+        self.calls.append(("approve_request", approval_id, granted_by))
+        return {"approval_id": approval_id, "run_id": "run_1"}
+
     def resolve_human(self, work_order_id: str, *, action: str, objective: str | None = None) -> dict[str, Any]:
         self.calls.append(("human", work_order_id, action, objective or ""))
         return {"work_order_id": work_order_id}
@@ -213,15 +219,16 @@ def test_ui_commands_are_typed_and_cannot_submit_arbitrary_mutation_events(tmp_p
     assert cancel["status"] == "ACCEPTED"
     assert cancel["resource"] == {"run_id": "run_1"}
 
-    approve_status, approve = asyncio.run(router.post("/api/work-orders/wo_1/approve", {
+    # PH02: the HUMAN intent names the pending approval; no grant id crosses
+    # the public boundary and the route pins the HUMAN actor.
+    approve_status, approve = asyncio.run(router.post("/api/approvals/appr_1/approve", {
         "command_id": "cmd_approve_1",
-        "grant_id": "grant_1",
     }))
     assert approve_status == 202
     assert approve["command_id"] == "cmd_approve_1"
-    assert approve["command_type"] == "WorkOrderApprove"
+    assert approve["command_type"] == "ApprovalApprove"
     assert approve["status"] == "ACCEPTED"
-    assert approve["resource"] == {"work_order_id": "wo_1"}
+    assert approve["resource"] == {"approval_id": "appr_1", "run_id": "run_1"}
 
     decision_status, decision = asyncio.run(router.post(
         "/api/work-orders/wo_1/human-decision",
@@ -238,7 +245,7 @@ def test_ui_commands_are_typed_and_cannot_submit_arbitrary_mutation_events(tmp_p
     assert decision["resource"] == {"work_order_id": "wo_1"}
     assert spy.calls == [
         ("cancel", "run_1"),
-        ("approve", "wo_1", "grant_1"),
+        ("approve_request", "appr_1", "local-control-client"),
         ("human", "wo_1", "revise", "narrow the task"),
     ]
 
@@ -476,47 +483,53 @@ def test_simultaneous_typed_approval_commands_preserve_one_shot_authority(tmp_pa
         expires_at=datetime.now(UTC) + timedelta(minutes=5),
         one_shot=True,
     )
-    grant = approvals.approve(request.approval_id, granted_by="human_reviewer")
 
     class ApprovalAPI:
-        async def approve(self, work_order_id: str, grant_id: str) -> dict[str, Any]:
-            await asyncio.to_thread(
-                approvals.authorize,
-                grant_id,
-                operation_type="work_order.capabilities",
-                parameters={"work_order_id": work_order_id, "capabilities": ["network.external"]},
+        async def approve_request(self, approval_id: str, *, granted_by: str) -> dict[str, Any]:
+            grant = await asyncio.to_thread(
+                approvals.approve_or_reuse,
+                approval_id,
+                granted_by=granted_by,
             )
-            return {"work_order_id": work_order_id, "authorized": True}
+            return {"approval_id": approval_id, "grant_id": grant.grant_id}
 
     router = _ready_command_router(
         cast(LocalControlAPI, ApprovalAPI()),
         tmp_path / "approve.db",
     )
 
-    async def invoke() -> object:
+    async def invoke(command_id: str) -> object:
         try:
             return await router.post(
-                "/api/work-orders/wo_stream/approve",
-                {
-                    "command_id": "cmd_approve_concurrent",
-                    "grant_id": grant.grant_id,
-                },
+                f"/api/approvals/{request.approval_id}/approve",
+                {"command_id": command_id},
             )
-        except ApprovalNotValid as error:
+        except (ApprovalNotValid, IntegrityError) as error:
             return error
 
     async def invoke_concurrently() -> list[object]:
-        return list(await asyncio.gather(invoke(), invoke()))
+        return list(await asyncio.gather(
+            invoke("cmd_approve_concurrent"),
+            invoke("cmd_approve_concurrent"),
+        ))
 
     results = asyncio.run(invoke_concurrently())
     successes = [item for item in results if isinstance(item, tuple)]
-    failures = [item for item in results if isinstance(item, ApprovalNotValid)]
-    assert len(successes) == 1
-    status, envelope = successes[0]
-    assert status == 202
-    assert envelope["command_version"] == 1
-    assert envelope["command_id"] == "cmd_approve_concurrent"
-    assert envelope["command_type"] == "WorkOrderApprove"
-    assert envelope["status"] == "ACCEPTED"
-    assert envelope["resource"] == {"work_order_id": "wo_stream", "authorized": True}
-    assert len(failures) == 1 and "already been used" in str(failures[0])
+    assert successes
+    assert {status for status, _ in successes} == {202}
+    grant_ids = {envelope["resource"]["grant_id"] for _, envelope in successes}
+    assert len(grant_ids) == 1
+    # A different command identity against the completed approval recovers the
+    # same single grant; it cannot mint a second one.
+    replay = asyncio.run(router.post(
+        f"/api/approvals/{request.approval_id}/approve",
+        {"command_id": "cmd_approve_later"},
+    ))
+    assert replay[0] == 202
+    assert replay[1]["resource"]["grant_id"] in grant_ids
+    with sessions() as session:
+        grants = session.scalars(select(ApprovalGrantRecord).where(
+            ApprovalGrantRecord.approval_id == request.approval_id,
+        )).all()
+    assert len(grants) == 1
+    assert grants[0].grant_id in grant_ids

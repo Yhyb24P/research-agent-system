@@ -179,9 +179,10 @@ _CONTROL_MUTATIONS: tuple[tuple[str, dict[str, object]], ...] = (
     ("/api/runs/run_gate/cancel", {
         "command_id": "cmd_cancel_gate",
     }),
-    ("/api/work-orders/wo_gate/approve", {
+    # PH02: the grant-based work-orders approve route is gone; the HUMAN
+    # intent names the pending approval and carries no grant id.
+    ("/api/approvals/appr_gate/approve", {
         "command_id": "cmd_approve_gate",
-        "grant_id": "grant_gate",
     }),
     ("/api/work-orders/wo_gate/human-decision", {
         "command_id": "cmd_decision_gate",

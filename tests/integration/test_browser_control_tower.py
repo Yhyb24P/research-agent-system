@@ -269,7 +269,7 @@ def test_open_browser_keeps_token_in_fragment_only_and_prints_no_secret(
         server.server_close()
 
 
-def test_open_browser_opener_failure_prints_usable_url(tmp_path: Path) -> None:
+def test_open_browser_opener_failure_redacts_the_credential(tmp_path: Path) -> None:
     server, port, _, _daemon, _sessions = _server(tmp_path)
     try:
         config = _browser_config(tmp_path, port)
@@ -277,16 +277,20 @@ def test_open_browser_opener_failure_prints_usable_url(tmp_path: Path) -> None:
         exit_code = open_browser(config, open_url=lambda url: False, print_fn=printed.append)
         assert exit_code == 0
         assert len(printed) == 1
-        prefix = "open this local URL in a browser: "
-        assert printed[0].startswith(prefix)
-        split = urlsplit(printed[0].removeprefix(prefix))
+        line = printed[0]
+        assert line.startswith("browser open failed; local Control Tower is available at ")
+        # PH04: the fallback hint must not leak the credential or the
+        # fragment URL; only the fragment-free base URL is printable.
+        assert TOKEN not in line
+        assert "#" not in line
+        url = line.split("available at ", 1)[1].split(";", 1)[0]
+        split = urlsplit(url)
         assert split.scheme == "http"
         assert split.netloc == f"127.0.0.1:{port}"
         assert split.path == "/ui"
-        assert parse_qs(split.fragment) == {"token": [TOKEN]}
+        assert split.fragment == ""
         with httpx.Client(timeout=10) as client:
-            assert client.get(f"http://127.0.0.1:{port}/ui").status_code == 200
-        assert all(TOKEN not in line for line in printed if line != printed[0])
+            assert client.get(url).status_code == 200
     finally:
         server.shutdown()
         server.server_close()
@@ -299,13 +303,18 @@ def test_open_browser_brackets_ipv6_loopback_host(tmp_path: Path) -> None:
         printed: list[str] = []
         exit_code = open_browser(config, open_url=lambda url: False, print_fn=printed.append)
         assert exit_code == 0
-        prefix = "open this local URL in a browser: "
-        split = urlsplit(printed[0].removeprefix(prefix))
+        line = printed[0]
+        assert line.startswith("browser open failed; local Control Tower is available at ")
+        # PH04: the IPv6 hint keeps the bracketed host and drops the fragment.
+        assert TOKEN not in line
+        assert "#" not in line
+        url = line.split("available at ", 1)[1].split(";", 1)[0]
+        split = urlsplit(url)
         assert split.netloc == f"[::1]:{port}"
         assert split.path == "/ui"
-        assert parse_qs(split.fragment) == {"token": [TOKEN]}
+        assert split.fragment == ""
         with httpx.Client(timeout=10) as client:
-            assert client.get(f"http://[::1]:{port}/ui").status_code == 200
+            assert client.get(url).status_code == 200
     finally:
         server.shutdown()
         server.server_close()
