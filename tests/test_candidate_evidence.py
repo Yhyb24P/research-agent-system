@@ -82,35 +82,35 @@ def _run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, mode: str,
     if candidate_tag is not None:
         argv[3:3] = ["--candidate-tag", candidate_tag]
     monkeypatch.setattr(sys, "argv", argv)
-    return _module().main()
+    return int(_module().main())
 
 
-def test_exact_commit_mismatch_fails_closed(monkeypatch, tmp_path) -> None:
+def test_exact_commit_mismatch_fails_closed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     with pytest.raises(SystemExit, match="matching candidate/checked-out commits"):
         _run(monkeypatch, tmp_path, "exact", candidate_commit=COMMIT_A,
              checked_out_commit=COMMIT_B)
     assert not (tmp_path / "evidence.json").exists()
 
 
-def test_exact_missing_tag_fails_closed(monkeypatch, tmp_path) -> None:
+def test_exact_missing_tag_fails_closed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     with pytest.raises(SystemExit, match="requires a tag"):
         _run(monkeypatch, tmp_path, "exact", candidate_tag=None)
     assert not (tmp_path / "evidence.json").exists()
 
 
-def test_exact_non_pass_e2e_fails_closed(monkeypatch, tmp_path) -> None:
+def test_exact_non_pass_e2e_fails_closed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     with pytest.raises(SystemExit, match="did not report PASS"):
         _run(monkeypatch, tmp_path, "exact", e2e_result="FAIL")
     assert not (tmp_path / "evidence.json").exists()
 
 
-def test_exact_manifest_commit_mismatch_fails_closed(monkeypatch, tmp_path) -> None:
+def test_exact_manifest_commit_mismatch_fails_closed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     with pytest.raises(SystemExit, match="manifest commit does not match checkout"):
         _run(monkeypatch, tmp_path, "exact", manifest_commit=COMMIT_B)
     assert not (tmp_path / "evidence.json").exists()
 
 
-def test_exact_manifest_tag_mismatch_fails_closed(monkeypatch, tmp_path) -> None:
+def test_exact_manifest_tag_mismatch_fails_closed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     with pytest.raises(SystemExit, match="does not record candidate tag"):
         _run(monkeypatch, tmp_path, "exact", manifest_tags=["v1.0.0-rc.80"])
     assert not (tmp_path / "evidence.json").exists()
