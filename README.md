@@ -514,16 +514,20 @@ Only the current contracts are supported; the project does not maintain legacy
 protocol or database compatibility guarantees. Unsafe or unqualified
 boundaries fail closed.
 
-`v1.0.0-rc.80` is an immutable historical qualification candidate and does
-not qualify later productization code. New product candidates use a single
-release identity: Git tag `vX.Y.Z-rc.N` maps exactly to Python distribution
-version `X.Y.ZrcN`; the final `vX.Y.Z` tag maps to `X.Y.Z`. The current tagged
-candidate is `v1.0.0-rc.81` / `1.0.0rc81` at
-`f7785244acc0687324376806666ead2be26bf478`. A tag is created only after the
-exact candidate commit passes all gates; it is never moved or reused.
-Run `python scripts/version_policy_check.py --candidate-tag v1.0.0-rc.81` to
-validate the mapping, and use `--require-head-tag` to validate the tagged
-candidate.
+`v1.0.0-rc.80` is immutable historical qualification evidence and does not
+qualify later productization code. An RC tag freezes candidate identity; it is
+created **before** candidate qualification so IQ/DQ/RQ evidence can bind to an
+exact source artifact. Gate pass, production approval, and a GitHub Release
+are separate later decisions.
+
+Git tag `vX.Y.Z-rc.N` maps exactly to Python distribution `X.Y.ZrcN`; the
+final `vX.Y.Z` tag maps to `X.Y.Z`. `v1.0.0-rc.81` /
+`1.0.0rc81` at `f7785244acc0687324376806666ead2be26bf478` is an immutable,
+unsigned historical product-candidate snapshot. Its qualification is not
+established and it has no GitHub Release. It must never move or be reused.
+The next frozen candidate uses `v1.0.0-rc.82` / `1.0.0rc82`; its tag freezes
+only that candidate identity, not qualification or release status. See [the
+candidate and release contract](docs/qualification/CANDIDATE_RELEASE_CONTRACT.md).
 
 The repository does not claim universal distributed exactly-once execution or a
 public control/A2A service.

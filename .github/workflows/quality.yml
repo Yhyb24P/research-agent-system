@@ -1,4 +1,4 @@
-name: control-plane-quality
+name: merge-compatibility
 
 on:
   push:
@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 jobs:
-  quality:
+  merge_compatibility:
     # Bubblewrap security tests require the user/network namespace behavior
     # available on this runner image; do not silently skip those tests.
     runs-on: ubuntu-22.04
@@ -39,7 +39,7 @@ jobs:
         run: |
           uv run python scripts/lock_sbom.py --output /tmp/dq00-python-sbom.json
           uv run python -c 'import json; p=json.load(open("/tmp/dq00-python-sbom.json")); assert p["bomFormat"] == "CycloneDX" and p["components"]'
-      - name: Validate qualification contracts
+      - name: Validate qualification contract examples
         run: |
           uv run python scripts/qualification_validate.py \
             --plan examples/qualification_plan.example.json \

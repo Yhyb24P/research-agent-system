@@ -288,14 +288,31 @@ def main() -> int:
         evidence.phase("runtime_sessions").update({"initial": sessions})
 
         # Operator readiness: every reference service answers health before
-        # the task is created (no turn may hit an unbound port).
+        # the task is created (no turn may hit an unbound port).  The
+        # supervisor marks a session HEALTHY at process launch, before the
+        # service has necessarily bound its port, so poll each port until
+        # it answers instead of probing once.
         for role, port in (("planner", args.planner_port),
                            ("coder", args.coder_port),
                            ("reviewer", args.reviewer_port)):
-            status, _ = http_json("GET", f"http://127.0.0.1:{port}/health")
-            if status != 200:
+            def service_ready(
+                role: str = role, port: int = port
+            ) -> dict[str, Any] | None:
+                status, health = http_json("GET", f"http://127.0.0.1:{port}/health")
+                if status == 200 and isinstance(health, dict) and health.get("healthy") is True:
+                    return health
+                return None
+
+            try:
+                health = poll(
+                    f"{role} service ready on port {port}",
+                    service_ready,
+                    deadline_seconds=30.0,
+                )
+            except TimeoutError:
                 evidence.finish("FAIL", failure=f"{role} service not healthy on port {port}")
                 return 1
+            evidence.phase("service_readiness").update({role: health})
 
         # --------------------------------------------------------------
         # Phase 4: product workflow through authenticated HTTP
