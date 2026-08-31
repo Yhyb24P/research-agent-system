@@ -58,12 +58,14 @@ both are read-only and inspect never echoes fixed command arguments.
 
 ## Current state
 
-PX00–PX08 are implemented and closed by their recorded exact-head CI evidence.
+PX00–PX09 are implemented and closed by their recorded exact-head CI evidence.
 The daily `research` client, managed planner/coder/reviewer flow, collaboration
 and handoff projections, detached consoles, governed A2A attachment, and the
-bounded external CLI bridge are present. PX09 Browser Control Tower is currently
-implemented at `7329f27` and awaiting its separate Qwen test report and
-exact-head CI; do not claim it complete until that evidence returns.
+bounded external CLI bridge are present. PX09 Browser Control Tower, including
+the loopback browser launcher, collaboration/Agent-console projections and
+event-offset stream, closed at `40d83ec` after Qwen's independent matrix and
+exact-head CI `33351341328`. Keep future work on a new explicitly scoped plan;
+do not reopen a closed productization item with compatibility patches.
 
 Before any release claim, require a green CI run tied to the exact commit and an
 immutable RC tag; keep unverified operational qualification explicitly pending.

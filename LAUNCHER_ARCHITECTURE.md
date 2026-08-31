@@ -3,6 +3,15 @@
 Status: **LP00 architecture freeze for post-V1 productization**  
 Branch: `next/agent-workspace-launcher`
 
+**Current status (2026-08-31):** the productization mainline described by this
+architecture completed through PX09 at `40d83ec`, with exact-head CI
+`33351341328` green. The dated LP01/LP02 and LP03 statements below are retained
+as architecture/audit history, not as the current implementation status.
+
+**当前状态（2026-08-31）：** 本架构所描述的产品化主线已在 `40d83ec` 完成至
+PX09，精确 head CI `33351341328` 全绿。下文按日期记录的 LP01/LP02/LP03 表述
+保留为架构与审计历史，不再表示当前实现状态。
+
 This decision belongs to the post-V1 productization line. It is not part of
 the immutable V1 qualification candidate and must not be used as evidence for
 rc.80.
