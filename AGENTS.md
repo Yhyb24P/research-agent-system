@@ -58,8 +58,12 @@ both are read-only and inspect never echoes fixed command arguments.
 
 ## Current state
 
-The Agent collaboration core plus A2A v1, Workspace Delegation, AG-UI/SSE,
-RuntimeSession supervision, and the readiness-gated `researchd` composition
-are implemented. The daily client and managed Agent pilot remain open. Before a release
-claim, require a green CI run tied to the exact commit and an immutable RC tag;
-keep unverified operational qualification explicitly pending.
+PX00–PX08 are implemented and closed by their recorded exact-head CI evidence.
+The daily `research` client, managed planner/coder/reviewer flow, collaboration
+and handoff projections, detached consoles, governed A2A attachment, and the
+bounded external CLI bridge are present. PX09 Browser Control Tower is currently
+implemented at `7329f27` and awaiting its separate Qwen test report and
+exact-head CI; do not claim it complete until that evidence returns.
+
+Before any release claim, require a green CI run tied to the exact commit and an
+immutable RC tag; keep unverified operational qualification explicitly pending.
