@@ -68,6 +68,8 @@ class ControlResourceRouter:
         try:
             if parts == ["api", "agents"]:
                 return 200, self.api.agents()
+            if parts == ["api", "workspaces"]:
+                return 200, self.api.workspaces()
             if len(parts) == 3 and parts[:2] == ["api", "agents"]:
                 return 200, self.api.agent(parts[2])
             if len(parts) == 4 and parts[:2] == ["api", "agents"] and parts[3] == "console":

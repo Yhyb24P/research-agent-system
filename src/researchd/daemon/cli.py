@@ -9,12 +9,17 @@ from alembic import command
 from alembic.config import Config
 
 from researchd.api.web import serve_local_control
+from researchd.collaboration.agent_definitions import AgentDefinition
+from researchd.collaboration.install import AgentInstallService
+from researchd.collaboration.registry import AgentRegistryService
 from researchd.daemon.composition import DaemonConfig, compose_daemon
 from researchd.daemon.security import (
     control_token_path,
     create_control_token,
     load_control_token,
 )
+from researchd.runtime_sessions.launch_profiles import RuntimeLaunchProfileService
+from researchd.storage.db import create_sqlite_engine, session_factory
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -24,6 +29,8 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("validate", help="validate configuration without touching state")
     subparsers.add_parser("inspect", help="print a non-secret configuration projection")
     subparsers.add_parser("init", help="create a fresh database at the current schema")
+    install = subparsers.add_parser("install-agent", help="install a trusted AgentDefinition locally")
+    install.add_argument("definition", type=Path)
     serve = subparsers.add_parser("serve", help="start the loopback control daemon")
     return parser
 
@@ -58,6 +65,23 @@ def main(argv: list[str] | None = None) -> int:
         command.upgrade(_alembic_config(database), "head")
         config.artifact_root.mkdir(parents=True, exist_ok=True)
         create_control_token(config.state_root)
+        return 0
+
+    if args.command == "install-agent":
+        try:
+            definition = AgentDefinition.model_validate_json(
+                args.definition.read_text(encoding="utf-8"),
+            )
+        except OSError as error:
+            raise SystemExit(f"cannot read AgentDefinition: {args.definition}") from error
+        sessions = session_factory(create_sqlite_engine(database))
+        registry = AgentRegistryService(sessions)
+        receipt = AgentInstallService(
+            sessions,
+            registry,
+            RuntimeLaunchProfileService(sessions, registry),
+        ).install(definition)
+        print(json.dumps(receipt.model_dump(mode="json"), sort_keys=True))
         return 0
 
     control_token = load_control_token(config.state_root)

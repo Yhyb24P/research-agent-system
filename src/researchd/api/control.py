@@ -10,7 +10,7 @@ from researchd.collaboration.contracts import CollaborationMessage
 from researchd.collaboration.messages import CollaborationMessageService
 from researchd.domain.enums import AttemptState, WorkOrderState
 from researchd.orchestrator.engine import ResearchOrchestrator
-from researchd.storage.models import AgentRecord, AgentRuntimeRecord, ArtifactRecord, ApprovalRequestRecord, AuditEventRecord, ClaimRecord, CollaborationMessageRecord, DaemonCommandRecord, DelegationRecord, AgentInvocationRecord, AttemptRecord, HandoffProposalRecord, ObservationRecord, PlanRecord, ResearchRunRecord, ReviewDecisionRecord, RuntimeSessionRecord, VerificationResultRecord, WorkOrderRecord, WorkspaceGrantRecord, WorkspaceReconciliationRecord, WorkspaceTransportRecord
+from researchd.storage.models import AgentRecord, AgentRuntimeRecord, ArtifactRecord, ApprovalRequestRecord, AuditEventRecord, ClaimRecord, CollaborationMessageRecord, DaemonCommandRecord, DelegationRecord, AgentInvocationRecord, AttemptRecord, HandoffProposalRecord, ObservationRecord, PlanRecord, ResearchRunRecord, ReviewDecisionRecord, RuntimeSessionRecord, VerificationResultRecord, WorkOrderRecord, WorkspaceGrantRecord, WorkspaceReconciliationRecord, WorkspaceTransportRecord, WorkspaceRecord
 from researchd.workspace.creation import WorkspaceCreationService
 
 
@@ -48,6 +48,16 @@ class LocalControlAPI:
         with self.sessions() as session:
             identifiers = session.scalars(select(ResearchRunRecord.run_id).order_by(ResearchRunRecord.created_at, ResearchRunRecord.run_id)).all()
         return [self.run_status(run_id) for run_id in identifiers]
+
+    def workspaces(self) -> list[dict[str, Any]]:
+        with self.sessions() as session:
+            rows = session.scalars(
+                select(WorkspaceRecord).order_by(WorkspaceRecord.created_at, WorkspaceRecord.workspace_id)
+            ).all()
+            return [
+                {"workspace_id": item.workspace_id, "name": item.name, "version": item.version}
+                for item in rows
+            ]
 
     def work_order_status(self, work_order_id: str) -> dict[str, Any]:
         with self.sessions() as session:
