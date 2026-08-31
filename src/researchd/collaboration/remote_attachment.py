@@ -4,6 +4,8 @@ from researchd.collaboration.registry import AgentRegistryService
 from researchd.domain.enums import AgentAdapterKind
 from researchd.domain.ids import AgentRuntimeId
 from researchd.storage.models import AgentRuntimeRecord
+from researchd.adapters.a2a.schemas import A2A_PROTOCOL_VERSION
+from urllib.parse import urlparse
 
 
 class RemoteAttachmentService:
@@ -18,6 +20,19 @@ class RemoteAttachmentService:
         runtime = self.registry.require_enabled_runtime(runtime_id)
         if runtime.adapter_kind is not AgentAdapterKind.A2A:
             raise ValueError("remote attachment requires an A2A AgentRuntime")
+        parsed = urlparse(runtime.endpoint_ref or "")
+        loopback = parsed.hostname in {"127.0.0.1", "::1", "localhost"}
+        if (
+            not parsed.hostname or parsed.username is not None or parsed.password is not None
+            or parsed.query or parsed.fragment
+            or (parsed.scheme != "https" and not (parsed.scheme == "http" and loopback))
+        ):
+            raise ValueError("remote attachment requires a governed HTTPS/loopback endpoint")
+        if A2A_PROTOCOL_VERSION not in runtime.protocols:
+            raise ValueError("remote attachment requires declared A2A/1.0 protocol")
+        tenant = runtime.metadata.get("a2a_tenant")
+        if tenant is not None and (not tenant or len(tenant) > 128 or any(ord(char) < 32 for char in tenant)):
+            raise ValueError("remote attachment tenant is invalid")
         lease = self.registry.acquire_runtime(runtime_id, owner_id=self.owner_id)
         return {"runtime_id": str(lease.runtime_id), "lease_id": lease.lease_id, "expires_at": lease.expires_at.isoformat()}
 
