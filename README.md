@@ -514,11 +514,14 @@ Only the current contracts are supported; the project does not maintain legacy
 protocol or database compatibility guarantees. Unsafe or unqualified
 boundaries fail closed.
 
-Repository qualification uses immutable `v1.0.0-rc.*` Git tags. The Python
-distribution remains `0.1.0` during this pre-publication phase, so Git RC tags
-identify qualified source commits and are intentionally independent from the
-package semantic version. Use the latest Git tag and its exact commit when
-reproducing a candidate.
+`v1.0.0-rc.80` is an immutable historical qualification candidate and does
+not qualify later productization code. New product candidates use a single
+release identity: Git tag `vX.Y.Z-rc.N` maps exactly to Python distribution
+version `X.Y.ZrcN`; the final `vX.Y.Z` tag maps to `X.Y.Z`. The current
+reserved candidate is `v1.0.0-rc.81` / `1.0.0rc81`. A tag is created only
+after the exact candidate commit passes all gates; it is never moved or reused.
+Run `python scripts/version_policy_check.py --candidate-tag v1.0.0-rc.81` to
+validate the mapping, and add `--require-head-tag` only after tagging.
 
 The repository does not claim universal distributed exactly-once execution or a
 public control/A2A service.
@@ -529,4 +532,3 @@ the intended soak/acceptance checks.
 ## License
 
 Apache License 2.0 (ALv2). See the `LICENSE` file at the repository root.
-

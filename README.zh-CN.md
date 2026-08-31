@@ -443,9 +443,12 @@ mode 不匹配或被篡改的 profile 均失败关闭。
 项目只实现并验证当前 contract，不保留旧协议适配层，也不提供旧数据库迁移兼容。
 未经验证或不安全的边界会失败关闭。
 
-仓库使用不可变 `v1.0.0-rc.*` Git tag 标识 qualification candidate。Python distribution
-在预发布阶段仍保持 `0.1.0`，因此 Git RC tag 用于标识通过资格检查的源码 commit，并与
-package semantic version 有意分离。复现候选版本时必须使用最新 tag 及其精确 commit。
+`v1.0.0-rc.80` 是不可变的历史 qualification candidate，不能为后续产品化代码背书。
+新的产品候选使用单一发行身份：Git tag `vX.Y.Z-rc.N` 必须精确映射到 Python distribution
+`X.Y.ZrcN`，最终 `vX.Y.Z` tag 映射到 `X.Y.Z`。当前预留候选为
+`v1.0.0-rc.81` / `1.0.0rc81`。只有精确候选 commit 通过全部门禁后才创建 tag；tag 不可移动、
+不可复用。可运行 `python scripts/version_policy_check.py --candidate-tag v1.0.0-rc.81`
+验证映射；仅在打 tag 后使用 `--require-head-tag`。
 
 项目不承诺普遍意义的分布式 exactly-once，也不提供公开 control/A2A service。正式运行批准仍需要绑定精确 commit 的证据，包括绿色 CI、
 backup/restore 验证、transport 治理和计划中的 soak/acceptance 检查。
@@ -453,4 +456,3 @@ backup/restore 验证、transport 治理和计划中的 soak/acceptance 检查�
 ## 许可证
 
 Apache License 2.0 (ALv2)，详见根目录 `LICENSE` 文件。
-

@@ -916,7 +916,7 @@ wheels = [
 
 [[package]]
 name = "research-agent-system"
-version = "0.1.0"
+version = "1.0.0rc81"
 source = { editable = "." }
 dependencies = [
     { name = "alembic" },
