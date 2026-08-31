@@ -27,6 +27,7 @@ from researchd.daemon.contracts import (
     ExternalManagedAgentStartRequest,
     ExternalRemoteAgentAttachRequest,
     ExternalRemoteAgentDetachRequest,
+    ExternalRemoteAgentRenewRequest,
     ExternalResearchTaskCreateRequest,
     ExternalRestorePlanRequest,
     ExternalRunCancelRequest,
@@ -38,6 +39,7 @@ from researchd.daemon.contracts import (
     ManagedAgentStartCommand,
     RemoteAgentAttachCommand,
     RemoteAgentDetachCommand,
+    RemoteAgentRenewCommand,
     ResearchTaskCreateCommand,
     RestorePlanCommand,
     RunCancelCommand,
@@ -138,6 +140,9 @@ class ControlCommandRouter:
         if parts == ["api", "remote-agents", "detach"]:
             request = ExternalRemoteAgentDetachRequest.model_validate(payload)
             return await self._execute(RemoteAgentDetachCommand(command_id=request.command_id, actor_type="HUMAN", actor_id=self.human_actor_id, runtime_id=request.runtime_id))
+        if parts == ["api", "remote-agents", "renew"]:
+            request = ExternalRemoteAgentRenewRequest.model_validate(payload)
+            return await self._execute(RemoteAgentRenewCommand(command_id=request.command_id, actor_type="HUMAN", actor_id=self.human_actor_id, runtime_id=request.runtime_id))
         if len(parts) == 4 and parts[:2] == ["api", "agents"] and parts[3] == "start":
             start_request = ExternalManagedAgentStartRequest.model_validate(payload)
             start_command = ManagedAgentStartCommand(

@@ -249,7 +249,7 @@ uv run research --config researchd.json
 每条命令都走认证 transport，`agent remove` 仅清除会话本地工作集。
 
 远端 attach 不等同于本地 runtime session。`remote attach <runtime-id>` /
-`remote detach <runtime-id>` 只能引用已安装的 A2A runtime；daemon 从 Registry
+`remote renew <runtime-id>` / `remote detach <runtime-id>` 只能引用已安装的 A2A runtime；daemon 从 Registry
 解析 endpoint、protocol 与 tenant，并持有可续期 lease，client 不能提交这些值。
 
 受管 PROCESS Agent invocation 经已安装 Agent 目录动态解析，daemon composition

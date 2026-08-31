@@ -273,7 +273,7 @@ surfaced with its failed startup phase, never bypassed. The first shell
 batch offers `status`, `agent list` / `agent use` / `agent remove`,
 `run list`, `task create`, `task cancel`, `msg`, `handoff list` /
 `handoff accept` / `handoff reject`, `events watch`, `approve`, `reject` and
-`remote attach <runtime-id>` / `remote detach <runtime-id>`, and `quit`; every command crosses the authenticated
+`remote attach <runtime-id>` / `remote renew <runtime-id>` / `remote detach <runtime-id>`, and `quit`; every command crosses the authenticated
 transport, and `agent remove` only clears the session-local working set.
 
 Remote attachment is distinct from a local runtime session. It can only attach

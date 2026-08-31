@@ -111,6 +111,10 @@ class ExternalRemoteAgentDetachRequest(ExternalCommandRequest):
     runtime_id: str = Field(pattern=r"^runtime_[A-Za-z0-9][A-Za-z0-9_-]*$")
 
 
+class ExternalRemoteAgentRenewRequest(ExternalCommandRequest):
+    runtime_id: str = Field(pattern=r"^runtime_[A-Za-z0-9][A-Za-z0-9_-]*$")
+
+
 class ExternalBackupCreateRequest(ExternalCommandRequest):
     destination: str = Field(min_length=1, max_length=1024)
     candidate_commit: str = Field(pattern=r"^[0-9a-f]{40}$")
@@ -228,6 +232,10 @@ class RemoteAgentDetachCommand(DaemonCommand):
     runtime_id: str = Field(pattern=r"^runtime_[A-Za-z0-9][A-Za-z0-9_-]*$")
 
 
+class RemoteAgentRenewCommand(DaemonCommand):
+    runtime_id: str = Field(pattern=r"^runtime_[A-Za-z0-9][A-Za-z0-9_-]*$")
+
+
 class BackupCreateCommand(DaemonCommand):
     destination: str = Field(min_length=1, max_length=1024)
     candidate_commit: str = Field(pattern=r"^[0-9a-f]{40}$")
@@ -272,6 +280,7 @@ __all__ = [
     "ExternalManagedAgentStartRequest",
     "ExternalRemoteAgentAttachRequest",
     "ExternalRemoteAgentDetachRequest",
+    "ExternalRemoteAgentRenewRequest",
     "ExternalResearchTaskCreateRequest",
     "ExternalRestorePlanRequest",
     "ExternalRunCancelRequest",
@@ -283,6 +292,7 @@ __all__ = [
     "ManagedAgentStartCommand",
     "RemoteAgentAttachCommand",
     "RemoteAgentDetachCommand",
+    "RemoteAgentRenewCommand",
     "ResearchTaskCreateCommand",
     "RestorePlanCommand",
     "RunCancelCommand",

@@ -14,6 +14,7 @@ from researchd.daemon.contracts import (
     ManagedAgentStartCommand,
     RemoteAgentAttachCommand,
     RemoteAgentDetachCommand,
+    RemoteAgentRenewCommand,
     ResearchTaskCreateCommand,
     RestorePlanCommand,
     RunCancelCommand,
@@ -73,6 +74,8 @@ class DaemonCommandDispatcher:
             return self._accepted(command.command_id, "RemoteAgentAttach", self._remote_attachments().attach(command.runtime_id))
         if isinstance(command, RemoteAgentDetachCommand):
             return self._accepted(command.command_id, "RemoteAgentDetach", self._remote_attachments().detach(command.runtime_id))
+        if isinstance(command, RemoteAgentRenewCommand):
+            return self._accepted(command.command_id, "RemoteAgentRenew", self._remote_attachments().renew(command.runtime_id))
         if isinstance(command, RunCancelCommand):
             return self._cancel(command)
         if isinstance(command, WorkOrderApproveCommand):
@@ -287,6 +290,7 @@ class ManagedAgentStartAuthority(Protocol):
 class RemoteAttachmentAuthority(Protocol):
     def attach(self, runtime_id: str) -> dict[str, object]: ...
     def detach(self, runtime_id: str) -> dict[str, object]: ...
+    def renew(self, runtime_id: str) -> dict[str, object]: ...
 
 
 __all__ = [

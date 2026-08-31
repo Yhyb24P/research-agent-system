@@ -37,3 +37,6 @@ class RemoteAttachmentService:
             acquired_at=acquired_at, expires_at=expires_at,
         ))
         return {"runtime_id": runtime_id, "detached": True}
+
+    def renew(self, runtime_id: str) -> dict[str, object]:
+        return self.attach(runtime_id)
