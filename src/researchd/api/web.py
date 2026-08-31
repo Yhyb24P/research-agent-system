@@ -135,14 +135,14 @@ class ControlCommandRouter:
     async def post(self, path: str, payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
         parts = [unquote(item) for item in urlparse(path).path.split("/") if item]
         if parts == ["api", "remote-agents", "attach"]:
-            request = ExternalRemoteAgentAttachRequest.model_validate(payload)
-            return await self._execute(RemoteAgentAttachCommand(command_id=request.command_id, actor_type="HUMAN", actor_id=self.human_actor_id, runtime_id=request.runtime_id))
+            attach_request = ExternalRemoteAgentAttachRequest.model_validate(payload)
+            return await self._execute(RemoteAgentAttachCommand(command_id=attach_request.command_id, actor_type="HUMAN", actor_id=self.human_actor_id, runtime_id=attach_request.runtime_id))
         if parts == ["api", "remote-agents", "detach"]:
-            request = ExternalRemoteAgentDetachRequest.model_validate(payload)
-            return await self._execute(RemoteAgentDetachCommand(command_id=request.command_id, actor_type="HUMAN", actor_id=self.human_actor_id, runtime_id=request.runtime_id))
+            detach_request = ExternalRemoteAgentDetachRequest.model_validate(payload)
+            return await self._execute(RemoteAgentDetachCommand(command_id=detach_request.command_id, actor_type="HUMAN", actor_id=self.human_actor_id, runtime_id=detach_request.runtime_id))
         if parts == ["api", "remote-agents", "renew"]:
-            request = ExternalRemoteAgentRenewRequest.model_validate(payload)
-            return await self._execute(RemoteAgentRenewCommand(command_id=request.command_id, actor_type="HUMAN", actor_id=self.human_actor_id, runtime_id=request.runtime_id))
+            renew_request = ExternalRemoteAgentRenewRequest.model_validate(payload)
+            return await self._execute(RemoteAgentRenewCommand(command_id=renew_request.command_id, actor_type="HUMAN", actor_id=self.human_actor_id, runtime_id=renew_request.runtime_id))
         if len(parts) == 4 and parts[:2] == ["api", "agents"] and parts[3] == "start":
             start_request = ExternalManagedAgentStartRequest.model_validate(payload)
             start_command = ManagedAgentStartCommand(
