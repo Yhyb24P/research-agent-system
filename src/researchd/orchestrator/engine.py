@@ -26,7 +26,7 @@ from researchd.models.cloud import CloudBudgetExceeded, CloudProviderUnavailable
 from researchd.policy.approval import ApprovalService
 from researchd.policy.engine import BudgetLimits, PolicyEvaluator, PolicyRequest, RecordingPolicyEngine
 from researchd.storage.models import (
-    AgentInteractionRecord, AttemptRecord, AuditEventRecord, ExecutorDispatchRecord, PlanRecord,
+    AgentInteractionRecord, AttemptRecord, AuditEventRecord, ClaimRecord, ExecutorDispatchRecord, PlanRecord,
     ResearchRunRecord, ReviewDecisionRecord, VerificationResultRecord, WorkOrderRecord,
 )
 from researchd.storage.repositories import utc_now
@@ -782,22 +782,32 @@ class ResearchOrchestrator:
         with self.sessions.begin() as session:
             record = session.get(ExecutorDispatchRecord, attempt_id)
             now = utc_now()
-            stored = False
             if record is None:
                 session.add(ExecutorDispatchRecord(
                     attempt_id=attempt_id, status="COMPLETED", result_json=result.model_dump(mode="json"),
                     created_at=now, updated_at=now,
                 ))
-                stored = True
+                durable_result = result
             elif record.result_json is None:
                 record.status = "COMPLETED"
                 record.result_json = result.model_dump(mode="json")
                 record.updated_at = now
-                stored = True
-            if stored and result.reported_claims:
-                self.claims.record_executor_claims_in_session(
-                    session, attempt_id, result.reported_claims,
-                )
+                durable_result = result
+            else:
+                # A managed executor may complete its durable dispatch before
+                # returning control to the orchestrator.  Its persisted result
+                # is the authority; a retry cannot replace its claims.
+                durable_result = ExecutorResult.model_validate(record.result_json)
+            if durable_result.reported_claims:
+                existing = tuple(session.scalars(select(ClaimRecord.statement).where(
+                    ClaimRecord.attempt_id == attempt_id,
+                ).order_by(ClaimRecord.claim_id)).all())
+                if not existing:
+                    self.claims.record_executor_claims_in_session(
+                        session, attempt_id, durable_result.reported_claims,
+                    )
+                elif existing != durable_result.reported_claims:
+                    raise OrchestrationError("durable executor claims do not match dispatch result")
 
     def _latest_verification_id(self, work_order_id: str) -> str | None:
         with self.sessions() as session:
