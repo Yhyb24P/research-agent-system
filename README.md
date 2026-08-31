@@ -283,6 +283,8 @@ client places the already-local credential in the URL fragment (which is never
 sent in HTTP), and the page immediately removes it while retaining it only in
 memory. Every read and typed command still crosses the same authenticated
 control API; browser layout and refresh state are never authoritative.
+It presents the run-scoped Collaboration Window, per-Agent Console, and a
+system-event stream that reconnects from its in-memory offset.
 
 Remote attachment is distinct from a local runtime session. It can only attach
 an installed A2A runtime by ID; the daemon resolves its registered endpoint,

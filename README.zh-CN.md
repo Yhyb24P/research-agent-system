@@ -253,6 +253,8 @@ uv run research --config researchd.json
 JavaScript 本身不包含控制器状态或凭据；日常 client 把本机已有凭据放入 URL fragment
 （HTTP 永远不会发送 fragment），页面会立即清除该 fragment，只在内存保留凭据。所有
 读取和类型化命令仍通过同一认证控制 API；浏览器布局与刷新状态不会成为权威状态。
+页面提供按 run 的 Collaboration Window、按 Agent 的 Console，以及从内存 offset
+续传的 system-event stream。
 
 远端 attach 不等同于本地 runtime session。`remote attach <runtime-id>` /
 `remote renew <runtime-id>` / `remote detach <runtime-id>` 只能引用已安装的 A2A runtime；daemon 从 Registry
