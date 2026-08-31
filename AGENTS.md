@@ -69,3 +69,9 @@ do not reopen a closed productization item with compatibility patches.
 
 Before any release claim, require a green CI run tied to the exact commit and an
 immutable RC tag; keep unverified operational qualification explicitly pending.
+
+Product-hardening PH01–PH05 is closed at `83361ba` by exact-head CI
+`33359344081`: daemon-owned runnable-run recovery, approval-ID-only HUMAN
+approval, daily bootstrap/workspace controls, strong daemon identity, and
+packaged explicit migrations. Do not reintroduce grant-bearing public approval
+routes, arbitrary runtime launch input, or legacy command compatibility.

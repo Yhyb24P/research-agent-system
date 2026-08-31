@@ -2,8 +2,8 @@
 
 ``research init`` and ``research status`` are lifecycle commands; with
 no subcommand the client reaches a READY daemon (spawning
-``researchd serve`` when needed) and enters the interactive shell.
-The first shell commands land in PX02-04.
+``researchd serve`` when needed) and enters the interactive shell. Daemon
+status/stop/restart and projection clients remain separate from authority.
 """
 
 import argparse

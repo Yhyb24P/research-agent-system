@@ -1,12 +1,10 @@
 """Line-oriented interactive shell for the daily ``research`` client.
 
-The first command batch (PX02-04) covers status, the session-local
-agent working set, run listing, task creation/cancellation,
-collaboration messages, event watching and work-order
-approve/reject. Every operation crosses the authenticated transport;
-the shell keeps no state of its own beyond the session-local working
-set, and ``agent remove`` only drops an agent from that local set —
-registered agents are never mutated or deleted by the client.
+The shell covers workspace focus, the session-local Agent working set,
+trusted Agent/runtime controls, task creation/cancellation, collaboration,
+handoff, event watching, and approval-ID-only HUMAN approval. Every operation
+crosses the authenticated transport; the shell keeps no authoritative state,
+and ``agent remove`` only drops an Agent from its local working set.
 """
 
 import json

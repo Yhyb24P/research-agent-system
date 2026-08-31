@@ -158,11 +158,10 @@ commit/tag。旧快照格式和旧数据库 schema 会被直接拒绝，不做�
 软件矩阵不能替代 DQ04 验收所需的真实异地存储与 primary-loss 演练。
 
 集成测试是当前可执行 reference workflow。仓库现已提供围绕持久化 RuntimeSession /
-Supervisor 的具体 `researchd` composition root 和 CLI；日常 `research` client 现已
-覆盖 lifecycle 面（`init`、`status`、交互入口）与首批 shell 命令（`status`、
-agent 工作集、`run list`、`task create`/`task cancel`、`msg`、`handoff list`/
-`handoff accept`/`handoff reject`、`events watch`、`approve`、`reject`）；可通过
-`research browser` 打开 Browser Control Tower。
+Supervisor 的具体 `researchd` composition root 和 CLI。daemon 自己持有的编排
+driver 会在启动时重新扫描可运行的持久化 run，并经可信控制器推进。日常 `research`
+client 覆盖初始化、daemon 的 status/stop/restart、以 workspace 为焦点的交互 shell、
+可分离的投影 console 与 Browser Control Tower。
 
 嵌入式 composition 必须注册可信服务并使用 `build_startup_barrier(...)`。该屏障先验证
 migration `0025` 和实时 DB/CAS 状态，再按冻结顺序调用已有 workspace、worktree、
@@ -196,13 +195,20 @@ JSON
 uv run researchd --config researchd.json validate
 uv run researchd --config researchd.json inspect
 uv run researchd --config researchd.json init
+# 仅在 daemon 停止时执行；会创建带时间戳的迁移前备份。
+uv run researchd --config researchd.json migrate
+# 仅在 daemon 停止时执行；definition 是可信的本地管理员输入。
+uv run researchd --config researchd.json install-agent agent_definition.json
 uv run researchd --config researchd.json serve
 curl http://127.0.0.1:8788/api/health
 TOKEN=$(tr -d '\n' < /absolute/path/state/control.token)
 curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8788/api/runs
 ```
 
-`serve` 不会迁移已有数据库。只有冻结的八阶段恢复屏障全部通过才会进入 READY；
+`serve` 不会迁移已有数据库。`migrate` 是显式维护操作：缺少数据库或 daemon 正在
+运行时都会拒绝，先复制出带时间戳的迁移前备份，再升级仓库打包的 migration chain。
+`install-agent` 同样只能在 daemon 停止时由本地管理员运行；它校验并安装可信的
+`AgentDefinition`，日常 client 无法提交 runtime 启动细节。只有冻结的八阶段恢复屏障全部通过才会进入 READY；
 非当前 schema、缺失 repository、未知配置字段、相对路径或非 loopback 监听都会失败关闭。
 `job_commands` 为空时会有意禁用 job submission。
 `validate` 只解析合同，不接触状态；`inspect` 还会输出配置 SHA256 和非 secret 投影，
@@ -236,6 +242,9 @@ uv run researchctl --database researchd.db daemon-command resolve <command-id> -
 ```bash
 uv run research --config researchd.json init
 uv run research --config researchd.json status
+uv run research --config researchd.json daemon status
+uv run research --config researchd.json daemon stop
+uv run research --config researchd.json daemon restart
 uv run research --config researchd.json browser
 uv run research --config researchd.json
 ```
@@ -244,10 +253,13 @@ uv run research --config researchd.json
 就绪状态的 JSON 文档。不带子命令时，`research` 探测 daemon；若无 daemon 可达，
 则启动独立于 client 窗口生命周期的 `researchd serve`；退出 shell 不会停止它。
 只有 daemon 报告 READY 之后才进入 shell——non-ready daemon 会连同其失败的
-启动阶段一起呈现，绝不被绕过。首批 shell 命令提供 `status`、
-`agent list`/`agent use`/`agent remove`、`run list`、`task create`、
-`task cancel`、`msg`、`events watch`、`approve`、`reject` 与 `quit`；
-每条命令都走认证 transport，`agent remove` 仅清除会话本地工作集。
+启动阶段一起呈现，绝不被绕过。shell 提供 `status`；`workspace list`/
+`workspace create`/`workspace use`；`agent list`/`agent use`/`agent remove`/
+`agent start`；`runtime list`/`runtime stop`；`run list`；`task create`/
+`task cancel`；`msg`；`handoff list`/`handoff accept`/`handoff reject`；
+`events watch`；`approval approve <approval-id>`；remote 的 attach/renew/detach；以及
+`quit`。已 focus workspace 时，`task create <objective>` 使用当前 workspace；否则第一个
+参数必须是 workspace ID。每条命令都走认证 transport，`agent remove` 仅清除会话本地工作集。
 
 `research browser` 会打开只监听 loopback 的 Browser Control Tower。HTML、CSS 和
 JavaScript 本身不包含控制器状态或凭据；日常 client 把本机已有凭据放入 URL fragment
@@ -354,7 +366,7 @@ HUMAN 身份，再构造内部命令。接受后的派发返回 `202` 以及带�
 | `POST` | `/api/agents/{agent_id}/start` | `runtime_id`（可选） |
 | `POST` | `/api/runtime-sessions/{runtime_session_id}/stop` | `runtime_id`、`expected_version` |
 | `POST` | `/api/runs/{run_id}/cancel` | — |
-| `POST` | `/api/work-orders/{work_order_id}/approve` | `grant_id` |
+| `POST` | `/api/approvals/{approval_id}/approve` | — |
 | `POST` | `/api/work-orders/{work_order_id}/human-decision` | `action`（`abort` 或 `revise`；`revise` 必须带 `objective`） |
 | `POST` | `/api/work-orders/{work_order_id}/reject` | `approval_id` |
 | `POST` | `/api/workspaces` | `workspace_id`、`name` |
@@ -372,8 +384,11 @@ runtime 启动受监督进程会话，HTTP runtime attach 到已注册端点）�
 `/api/runtime-sessions/start` 与 `/api/runtime-sessions/attach` 路由已被禁用；
 停止会话仍使用上述按会话的 stop 路由。
 
-workspace、research-task、reject 与 collaboration-message 路由经由 orchestrator
+workspace、research-task、approval、reject 与 collaboration-message 路由经由 orchestrator
 控制权威执行，因此要求嵌入应用暴露 `ResearchOrchestrator`；缺失时失败关闭。
+approval request 只是 HUMAN 意图：路由在服务端绑定本地 HUMAN actor，由可信控制面
+派生或复用限定范围的 grant、消费 one-shot authority，并原子恢复关联的 WorkOrder 与
+ResearchRun。client 永远不能提交 grant ID 来批准。
 `POST /api/work-orders/{work_order_id}/reject` 会把 `WAITING_APPROVAL` 工单与其
 pending 审批收敛为 `FAILED`/`REJECTED`（run 以 `APPROVAL_REJECTED` 失败），与策略
 拒绝对称。三条备份路由绑定 daemon 自身的数据库与 artifact 根目录：create 生成原子
@@ -394,12 +409,12 @@ FAILED 时仍然可达，但仍要求 Bearer token 认证。
 本地 token 负责认证 owner client，服务端 actor 绑定则阻止 payload 伪造 attribution；
 二者共同构成 PX00 MVP。未来可用 native peer credential 替换 token，而不改变内部命令权威。
 
-Migration `0022` 为已有 `AgentRuntime` 增加一对一、server-owned 的
+Migration `0022` 为已安装的 `AgentRuntime` 增加一对一、server-owned 的
 `RuntimeLaunchProfile`。公共 start/attach 请求不再包含 executable、argv、cwd、endpoint
 或 health override。Daemon 会解析 enabled profile、验证 canonical digest、构造内部命令，
-并把解析后的 launch-spec snapshot 与 profile hash 一起持久化到 RuntimeSession。PX01
-安装命令完成前，profile 只能由可信 in-process 配置服务注册；缺失、禁用、mode 不匹配或
-被篡改的 profile 均失败关闭。
+并把解析后的 launch-spec snapshot 与 profile hash 一起持久化到 RuntimeSession。
+Agent definition 与 profile 只通过 stopped-daemon 的可信安装路径进入；缺失、禁用、
+mode 不匹配或被篡改的 profile 均失败关闭。
 
 系统不存在允许任意 UI event 修改状态的入口。
 
