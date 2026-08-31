@@ -157,6 +157,21 @@ def main() -> int:
     state_root = root / "state"
     config_path = root / "config.json"
     config_path.parent.mkdir(parents=True)
+    # P0-3 (5fd58af): EXECUTE workspace grants are provisioned by the daemon
+    # from trusted deployment configuration only. Seed a managed Git source
+    # under the E2E root and map the E2E workspace to it; the HTTP surface
+    # cannot inject paths, transports, or grant parameters.
+    git_source = root / "git-source"
+    git_source.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(git_source)], check=True)
+    (git_source / "README.md").write_text("# PH07 E2E source\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(git_source), "add", "README.md"], check=True)
+    subprocess.run(
+        ["git", "-C", str(git_source), "-c", "user.email=e2e@ph07.local",
+         "-c", "user.name=ph07-e2e", "commit", "-q", "-m", "seed"],
+        check=True,
+    )
+    evidence.phase("preflight")["git_source"] = str(git_source)
     config = {
         "database": str(state_root / "researchd.db"),
         "artifact_root": str(root / "artifacts"),
@@ -167,6 +182,7 @@ def main() -> int:
         # capability. Empty configuration remains fail-closed in production.
         "workspace_capabilities": ["sandbox.shell"],
         "user_capabilities": ["sandbox.shell"],
+        "workspace_sources": {"ws_ph07": {"root": str(git_source)}},
     }
     config_path.write_text(json.dumps(config, indent=2, sort_keys=True), encoding="utf-8")
     base_url = f"http://127.0.0.1:{args.daemon_port}"
