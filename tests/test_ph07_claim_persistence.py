@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from researchd.collaboration.delegation import DelegationService
 from researchd.collaboration.gateway import CollaborationGateway
 from researchd.executor.contracts import ExecutorResult
-from researchd.orchestrator.engine import ResearchOrchestrator
+from researchd.orchestrator.engine import OrchestrationError, ResearchOrchestrator
 from researchd.policy.engine import DeterministicPolicyEngine, RecordingPolicyEngine
 from researchd.storage.db import create_sqlite_engine, session_factory
 from researchd.storage.models import (
@@ -196,6 +196,43 @@ def test_production_sequence_persists_claims(env: ClaimEnv) -> None:
         ))
     env.orchestrator._store_execution_result(ATTEMPT_ID, _result())
     assert env.claim_statements() == ["fixed the NaN"]
+
+
+def test_retry_with_different_claims_keeps_durable_claims(env: ClaimEnv) -> None:
+    # The durable dispatch result is the authority: a retry carrying
+    # different claims must neither append nor replace the persisted set.
+    now = datetime.now(UTC)
+    with env.sessions.begin() as session:
+        session.add(ExecutorDispatchRecord(
+            attempt_id=ATTEMPT_ID, status="COMPLETED",
+            result_json=_result(claims=("durable claim",)).model_dump(mode="json"),
+            created_at=now, updated_at=now,
+        ))
+    env.orchestrator._store_execution_result(ATTEMPT_ID, _result(claims=("durable claim",)))
+    assert env.claim_statements() == ["durable claim"]
+    env.orchestrator._store_execution_result(ATTEMPT_ID, _result(claims=("retry claim",)))
+    assert env.claim_statements() == ["durable claim"]
+
+
+def test_mismatched_claims_fail_closed(env: ClaimEnv) -> None:
+    # Claim rows disagreeing with the durable dispatch result must fail
+    # closed: no silent rewrite of the claim ledger.
+    now = datetime.now(UTC)
+    with env.sessions.begin() as session:
+        session.add(ExecutorDispatchRecord(
+            attempt_id=ATTEMPT_ID, status="COMPLETED",
+            result_json=_result(claims=("durable claim",)).model_dump(mode="json"),
+            created_at=now, updated_at=now,
+        ))
+        session.flush()
+        session.add(ClaimRecord(
+            claim_id="claim_foreign", attempt_id=ATTEMPT_ID, statement="foreign claim",
+            supporting_refs=[], producer_type="executor", producer_id="local-executor",
+            created_at=now,
+        ))
+    with pytest.raises(OrchestrationError, match="do not match"):
+        env.orchestrator._store_execution_result(ATTEMPT_ID, _result(claims=("durable claim",)))
+    assert env.claim_statements() == ["foreign claim"]
 
 
 def test_missing_attempt_rolls_back_result(env: ClaimEnv) -> None:
