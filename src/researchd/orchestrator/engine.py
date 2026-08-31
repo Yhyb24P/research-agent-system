@@ -32,6 +32,7 @@ from researchd.storage.models import (
 from researchd.storage.repositories import utc_now
 from researchd.storage.transitions import TransactionalTransitionService
 from researchd.domain.verification import VerificationResult
+from researchd.verifier.engine import ClaimRecorder
 
 
 class VerificationDriver(Protocol):
@@ -82,6 +83,7 @@ class ResearchOrchestrator:
         self.maximum_budget = maximum_budget
         self.limits = limits
         self.transitions = TransactionalTransitionService(sessions)
+        self.claims = ClaimRecorder(sessions)
 
     def _agent_actor(self, work_order_id: str) -> tuple[str, str]:
         agent_id = self.collaboration.assigned_agent_for(work_order_id)
@@ -780,15 +782,22 @@ class ResearchOrchestrator:
         with self.sessions.begin() as session:
             record = session.get(ExecutorDispatchRecord, attempt_id)
             now = utc_now()
+            stored = False
             if record is None:
                 session.add(ExecutorDispatchRecord(
                     attempt_id=attempt_id, status="COMPLETED", result_json=result.model_dump(mode="json"),
                     created_at=now, updated_at=now,
                 ))
+                stored = True
             elif record.result_json is None:
                 record.status = "COMPLETED"
                 record.result_json = result.model_dump(mode="json")
                 record.updated_at = now
+                stored = True
+            if stored and result.reported_claims:
+                self.claims.record_executor_claims_in_session(
+                    session, attempt_id, result.reported_claims,
+                )
 
     def _latest_verification_id(self, work_order_id: str) -> str | None:
         with self.sessions() as session:
