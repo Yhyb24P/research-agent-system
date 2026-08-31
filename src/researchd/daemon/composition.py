@@ -54,6 +54,7 @@ from researchd.runtime_sessions.managed_start import ManagedAgentStartService
 from researchd.storage.db import create_sqlite_engine, session_factory
 from researchd.supervisor.runtime import RuntimeLeaseHeartbeat, RuntimeSupervisor
 from researchd.verifier.driver import LocalVerificationDriver
+from researchd.workspace.contracts import WorkspaceSource, WorkspaceTransportKind
 from researchd.workspace.service import WorkspaceDelegationService
 from researchd.workspace.transports import ArchiveWorkspaceTransport, GitWorktreeTransport
 
@@ -80,6 +81,7 @@ class DaemonConfig(DomainModel):
     artifact_root: Path
     state_root: Path
     repositories: dict[str, Path] = Field(default_factory=dict)
+    workspace_sources: dict[str, WorkspaceSource] = Field(default_factory=dict)
     job_commands: dict[str, JobCommandConfig] = Field(default_factory=dict)
     executor_command_limits: CommandLimits = Field(default_factory=lambda: CommandLimits(
         wall_seconds=300,
@@ -108,6 +110,16 @@ class DaemonConfig(DomainModel):
                 raise ValueError("repository ID is invalid")
             if not path.is_absolute():
                 raise ValueError("repository paths must be absolute")
+        return value
+
+    @field_validator("workspace_sources")
+    @classmethod
+    def validate_workspace_sources(
+        cls, value: dict[str, WorkspaceSource],
+    ) -> dict[str, WorkspaceSource]:
+        for workspace_id in value:
+            if _CONFIGURATION_ID.fullmatch(workspace_id) is None:
+                raise ValueError("workspace ID is invalid")
         return value
 
     @field_validator("job_commands")
@@ -145,6 +157,10 @@ class DaemonConfig(DomainModel):
             "state_root": str(self.state_root),
             "repositories": {
                 key: str(value) for key, value in sorted(self.repositories.items())
+            },
+            "workspace_sources": {
+                key: source.model_dump(mode="json")
+                for key, source in sorted(self.workspace_sources.items())
             },
             "job_commands": {
                 key: {
@@ -201,6 +217,18 @@ def compose_daemon(
     for repository_id, repository in repositories.items():
         if not (repository / ".git").exists():
             raise ValueError(f"configured repository is not a Git repository: {repository_id}")
+    workspace_sources = {
+        key: source.model_copy(update={"root": source.root.resolve(strict=True)})
+        for key, source in config.workspace_sources.items()
+    }
+    for workspace_id, source in workspace_sources.items():
+        if (
+            source.transport_kind is WorkspaceTransportKind.GIT_WORKTREE
+            and not (source.root / ".git").exists()
+        ):
+            raise ValueError(
+                f"configured workspace source is not a Git repository: {workspace_id}"
+            )
     commands = {key: value.argv for key, value in config.job_commands.items()}
     jobs = JobManager(sessions, LocalDurableJobBackend(state / "jobs", commands))
     invocations = InvocationService(sessions)
@@ -280,6 +308,8 @@ def compose_daemon(
                 DelegationPurpose.EVIDENCE: frozenset({AgentAdapterKind.PROCESS}),
                 DelegationPurpose.SPECIALIST: frozenset({AgentAdapterKind.PROCESS}),
             },
+            workspace=workspace,
+            workspace_sources=workspace_sources,
         ),
         policy=RecordingPolicyEngine(DeterministicPolicyEngine(), sessions),
         verifier=verifier_driver,
