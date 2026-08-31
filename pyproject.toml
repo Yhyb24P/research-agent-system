@@ -1,6 +1,6 @@
 [project]
 name = "research-agent-system"
-version = "1.0.0rc81"
+version = "1.0.0rc82"
 description = "Agent collaboration plane and trusted control plane for research workflows"
 license = "Apache-2.0"
 readme = "README.md"

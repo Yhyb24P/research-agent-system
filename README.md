@@ -523,9 +523,11 @@ are separate later decisions.
 Git tag `vX.Y.Z-rc.N` maps exactly to Python distribution `X.Y.ZrcN`; the
 final `vX.Y.Z` tag maps to `X.Y.Z`. `v1.0.0-rc.81` /
 `1.0.0rc81` at `f7785244acc0687324376806666ead2be26bf478` is an immutable,
-unsigned product-candidate snapshot. Its qualification is not established and
-it has no GitHub Release. It must never move or be reused; later changes need
-a new RC. See [the candidate and release contract](docs/qualification/CANDIDATE_RELEASE_CONTRACT.md).
+unsigned historical product-candidate snapshot. Its qualification is not
+established and it has no GitHub Release. It must never move or be reused.
+The next frozen candidate uses `v1.0.0-rc.82` / `1.0.0rc82`; its tag freezes
+only that candidate identity, not qualification or release status. See [the
+candidate and release contract](docs/qualification/CANDIDATE_RELEASE_CONTRACT.md).
 
 The repository does not claim universal distributed exactly-once execution or a
 public control/A2A service.

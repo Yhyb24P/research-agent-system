@@ -27,6 +27,16 @@ source branch's commit explicitly; it does not treat GitHub's synthetic merge
 ref as the candidate identity.  Exact-candidate mode requires the expected
 tag to resolve to, and be checked out at, the candidate commit.
 
+## Release artifact policy
+
+This repository uses policy A: an annotated RC tag is the authoritative
+release-artifact identity.  A later PR merge may have a different
+merge-history SHA, but it cannot inherit the tag's candidate evidence merely
+because its tree appears equivalent.  If that later tree is to be released, it
+must be frozen under a later RC identity and requalified.  This keeps the
+candidate, its exact workflow run, and its qualification evidence bound to one
+unchanging commit.
+
 ## rc.81 disposition
 
 `v1.0.0-rc.81` is an annotated, immutable, unsigned product-candidate
