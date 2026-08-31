@@ -37,12 +37,14 @@ class ResearchDaemon:
         dispatcher: Callable[[DomainModel], object | Awaitable[object]],
         *,
         orchestration_driver: DaemonLifecycleService | None = None,
+        auxiliary_services: tuple[DaemonLifecycleService, ...] = (),
     ) -> None:
         self.barrier = barrier
         self.dispatcher = dispatcher
         self.state = DaemonState.CREATED
         self.startup_report: StartupReport | None = None
         self.orchestration_driver = orchestration_driver
+        self.auxiliary_services = auxiliary_services
 
     def start(self) -> StartupReport:
         if self.state is not DaemonState.CREATED:
@@ -56,6 +58,9 @@ class ResearchDaemon:
         )
         if self.state is DaemonState.READY and self.orchestration_driver is not None:
             self.orchestration_driver.start()
+        if self.state is DaemonState.READY:
+            for service in self.auxiliary_services:
+                service.start()
         return self.startup_report
 
     def execute(self, command: DomainModel) -> object:
@@ -68,6 +73,8 @@ class ResearchDaemon:
     def stop(self) -> None:
         if self.state is DaemonState.STARTING:
             raise RuntimeError("researchd cannot stop while startup is running")
+        for service in reversed(self.auxiliary_services):
+            service.stop()
         if self.orchestration_driver is not None:
             self.orchestration_driver.stop()
         self.state = DaemonState.STOPPED
@@ -84,4 +91,9 @@ class ResearchDaemon:
         }
         if self.orchestration_driver is not None:
             health["orchestration_driver"] = self.orchestration_driver.health()
+        if self.auxiliary_services:
+            health["auxiliary_services"] = {
+                type(service).__name__: service.health()
+                for service in self.auxiliary_services
+            }
         return health

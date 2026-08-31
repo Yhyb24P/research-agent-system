@@ -38,7 +38,7 @@ from researchd.daemon.reconciliation import (
 from researchd.daemon.runtime import ResearchDaemon
 from researchd.daemon.startup import build_startup_barrier
 from researchd.domain.base import DomainModel
-from researchd.domain.enums import AgentAdapterKind, DelegationPurpose
+from researchd.domain.enums import AgentAdapterKind, Capability, DelegationPurpose
 from researchd.executor.jobs import JobManager, LocalDurableJobBackend
 from researchd.executor.capability_broker import CapabilityBroker
 from researchd.executor.contracts import CommandLimits
@@ -52,7 +52,7 @@ from researchd.runtime_sessions.service import RuntimeSessionService
 from researchd.runtime_sessions.launch_profiles import RuntimeLaunchProfileService
 from researchd.runtime_sessions.managed_start import ManagedAgentStartService
 from researchd.storage.db import create_sqlite_engine, session_factory
-from researchd.supervisor.runtime import RuntimeSupervisor
+from researchd.supervisor.runtime import RuntimeLeaseHeartbeat, RuntimeSupervisor
 from researchd.verifier.driver import LocalVerificationDriver
 from researchd.workspace.service import WorkspaceDelegationService
 from researchd.workspace.transports import ArchiveWorkspaceTransport, GitWorktreeTransport
@@ -90,6 +90,8 @@ class DaemonConfig(DomainModel):
     ))
     host: str = "127.0.0.1"
     port: int = Field(default=8788, ge=0, le=65_535)
+    workspace_capabilities: frozenset[Capability] = frozenset()
+    user_capabilities: frozenset[Capability] = frozenset()
 
     @field_validator("database", "artifact_root", "state_root")
     @classmethod
@@ -154,6 +156,8 @@ class DaemonConfig(DomainModel):
             "executor_command_limits": self.executor_command_limits.model_dump(mode="json"),
             "host": self.host,
             "port": self.port,
+            "workspace_capabilities": sorted(item.value for item in self.workspace_capabilities),
+            "user_capabilities": sorted(item.value for item in self.user_capabilities),
         }
 
 
@@ -203,7 +207,9 @@ def compose_daemon(
     registry = AgentRegistryService(sessions)
     launch_profiles = RuntimeLaunchProfileService(sessions, registry)
     managed_start = ManagedAgentStartService(registry, launch_profiles)
-    supervisor = RuntimeSupervisor(RuntimeSessionService(sessions, registry))
+    supervisor = RuntimeSupervisor(
+        RuntimeSessionService(sessions, registry), registry=registry,
+    )
     barrier = build_startup_barrier(
         engine=engine,
         sessions=sessions,
@@ -279,6 +285,8 @@ def compose_daemon(
         verifier=verifier_driver,
         approvals=ApprovalService(sessions),
         jobs=jobs,
+        workspace_capabilities=config.workspace_capabilities,
+        user_capabilities=config.user_capabilities,
     )
     api = LocalControlAPI(sessions, orchestrator)
     orchestration_driver = OrchestrationDriver(orchestrator, sessions)
@@ -296,6 +304,7 @@ def compose_daemon(
         barrier,
         DurableDaemonCommandService(sessions, dispatcher),
         orchestration_driver=orchestration_driver,
+        auxiliary_services=(RuntimeLeaseHeartbeat(supervisor),),
     )
     resolution = DaemonCommandResolutionService(sessions, build_builtin_observers(sessions))
     return DaemonApplication(
