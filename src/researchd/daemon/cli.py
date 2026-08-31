@@ -4,6 +4,8 @@ import argparse
 import json
 import os
 from pathlib import Path
+from urllib.error import HTTPError, URLError
+from urllib.request import urlopen
 
 from alembic import command
 from alembic.config import Config
@@ -42,6 +44,18 @@ def _alembic_config(database: Path) -> Config:
     return config
 
 
+def _daemon_is_running(config: DaemonConfig) -> bool:
+    """Health is deliberately public; any HTTP response means the port is owned."""
+    host = f"[{config.host}]" if config.host == "::1" else config.host
+    try:
+        with urlopen(f"http://{host}:{config.port}/api/health", timeout=0.5):
+            return True
+    except HTTPError:
+        return True
+    except (URLError, TimeoutError, OSError):
+        return False
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
@@ -68,6 +82,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "install-agent":
+        if _daemon_is_running(config):
+            raise SystemExit("refusing AgentDefinition install while researchd is running")
         try:
             definition = AgentDefinition.model_validate_json(
                 args.definition.read_text(encoding="utf-8"),
