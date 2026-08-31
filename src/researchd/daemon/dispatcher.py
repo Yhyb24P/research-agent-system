@@ -44,6 +44,7 @@ class DaemonCommandDispatcher:
         managed_start: "ManagedAgentStartAuthority | None" = None,
         handoffs: "HandoffResolutionAuthority | None" = None,
         remote_attachments: "RemoteAttachmentAuthority | None" = None,
+        orchestration_driver: "OrchestrationWakeAuthority | None" = None,
     ) -> None:
         self.supervisor = supervisor
         self.control = control
@@ -51,6 +52,7 @@ class DaemonCommandDispatcher:
         self.managed_start = managed_start
         self.handoffs = handoffs
         self.remote_attachments = remote_attachments
+        self.orchestration_driver = orchestration_driver
 
     def __call__(self, command: DomainModel) -> DomainModel | Awaitable[DomainModel]:
         if isinstance(command, RuntimeSessionStartCommand):
@@ -113,6 +115,11 @@ class DaemonCommandDispatcher:
                 command.objective,
                 run_id=command.run_id,
             )
+            run_id = resource.get("run_id")
+            if not isinstance(run_id, str):
+                raise RuntimeError("ResearchTaskCreate did not return a run ID")
+            if self.orchestration_driver is not None:
+                self.orchestration_driver.wake(run_id)
             return self._accepted(command.command_id, "ResearchTaskCreate", resource)
         if isinstance(command, WorkOrderRejectCommand):
             control = self._control()
@@ -293,10 +300,17 @@ class RemoteAttachmentAuthority(Protocol):
     def renew(self, runtime_id: str) -> dict[str, object]: ...
 
 
+class OrchestrationWakeAuthority(Protocol):
+    """Wake-only hook; advancement authority remains in the orchestrator."""
+
+    def wake(self, run_id: str) -> None: ...
+
+
 __all__ = [
     "BackupMutationAuthority",
     "ControlMutationAuthority",
     "DaemonCommandDispatcher",
     "ManagedAgentStartAuthority",
+    "OrchestrationWakeAuthority",
     "RemoteAttachmentAuthority",
 ]

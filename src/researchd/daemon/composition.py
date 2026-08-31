@@ -45,6 +45,7 @@ from researchd.executor.contracts import CommandLimits
 from researchd.executor.sandbox import BubblewrapBackend
 from researchd.executor.worktree import WorktreeManager
 from researchd.orchestrator.engine import ResearchOrchestrator
+from researchd.orchestrator.driver import OrchestrationDriver
 from researchd.policy.approval import ApprovalService
 from researchd.policy.engine import DeterministicPolicyEngine, RecordingPolicyEngine
 from researchd.runtime_sessions.service import RuntimeSessionService
@@ -164,6 +165,7 @@ class DaemonApplication:
     managed_start: ManagedAgentStartService
     resolution: DaemonCommandResolutionService
     handoffs: HandoffResolutionService
+    orchestration_driver: OrchestrationDriver
 
 
 def compose_daemon(
@@ -279,6 +281,7 @@ def compose_daemon(
         jobs=jobs,
     )
     api = LocalControlAPI(sessions, orchestrator)
+    orchestration_driver = OrchestrationDriver(orchestrator, sessions)
     handoffs = HandoffResolutionService(sessions, orchestrator)
     dispatcher = DaemonCommandDispatcher(
         supervisor,
@@ -287,8 +290,13 @@ def compose_daemon(
         managed_start=managed_start,
         handoffs=handoffs,
         remote_attachments=RemoteAttachmentService(registry),
+        orchestration_driver=orchestration_driver,
     )
-    daemon = ResearchDaemon(barrier, DurableDaemonCommandService(sessions, dispatcher))
+    daemon = ResearchDaemon(
+        barrier,
+        DurableDaemonCommandService(sessions, dispatcher),
+        orchestration_driver=orchestration_driver,
+    )
     resolution = DaemonCommandResolutionService(sessions, build_builtin_observers(sessions))
     return DaemonApplication(
         config=config,
@@ -297,6 +305,7 @@ def compose_daemon(
         managed_start=managed_start,
         resolution=resolution,
         handoffs=handoffs,
+        orchestration_driver=orchestration_driver,
     )
 
 
