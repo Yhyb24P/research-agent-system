@@ -462,11 +462,14 @@ RuntimeSession whose LaunchProfile hash still matches the trusted catalog.
 Canonical invocation targets only the registry-owned loopback endpoint and
 never executes the launch argv a second time.
 
-This is still an implementation milestone, not completion of the productized
-launcher. The daily `research` client and LP03 managed Agent pilot remain open.
+At the 2026-08-30 architecture snapshot, this was still an implementation
+milestone rather than completion of the productized launcher; the daily
+`research` client and LP03 managed Agent pilot were then open. See the current
+status note at the top of this document for the superseding final state.
 
-这仍是实现里程碑，不代表产品化 Launcher 已完成。日常 `research` client 和 LP03
-managed Agent pilot 仍未完成。
+在 2026-08-30 的架构快照中，这仍是实现里程碑，不代表产品化 Launcher 已完成；当时
+日常 `research` client 和 LP03 managed Agent pilot 仍未完成。最新终态请以本文顶部
+的当前状态说明为准。
 
 ## 11. LP01/LP02 completion audit / 完成度审计
 
