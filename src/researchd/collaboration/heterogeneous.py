@@ -3,18 +3,26 @@ import hashlib
 import json
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 from urllib.parse import urlparse
 import httpx
 from pydantic import ValidationError, model_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
-from researchd.adapters.a2a.adapter import A2AAdapter
-from researchd.adapters.a2a.codec import A2ACodecError, decode_executor_result, encode_granted_work_order
+from researchd.adapters.a2a.adapter import A2AAdapter, A2AClient
+from researchd.adapters.a2a.codec import (
+    A2ACodecError,
+    RemoteExecutionRequest,
+    decode_executor_result,
+    encode_granted_work_order,
+    encode_remote_execution_request,
+)
+from researchd.adapters.a2a.schemas import A2A_PROTOCOL_VERSION
+from researchd.adapters.a2a.sdk_client import OfficialA2AClient
 from researchd.collaboration.action_broker import AgentActionBroker, AgentMessageAction
 from researchd.collaboration.handoff import HandoffProposalAction
 from researchd.collaboration.contracts import AgentHealth, AgentInvocationRequest, AgentInvocationResult, AgentRuntime, EvidenceInvocationInput, ExecuteInvocationInput, PlanInvocationInput, ReviewInvocationInput
-from researchd.domain.enums import DelegationPurpose, InvocationStatus
+from researchd.domain.enums import AgentAdapterKind, DelegationPurpose, InvocationStatus
 from researchd.domain.base import DomainModel
 from researchd.executor.capability_broker import CapabilityBroker
 from researchd.executor.contracts import (
@@ -146,6 +154,172 @@ class A2ARemoteAgentAdapter:
 
     async def cancel(self, invocation_id: str) -> None:
         await self.delegate.cancel(invocation_id)
+
+
+class GovernedA2ARemoteAgentAdapter:
+    """Resolve every external A2A call from the authoritative runtime registry.
+
+    This is intentionally distinct from the legacy directly-injected adapter:
+    product composition must never inherit an endpoint, tenant, local workspace
+    grant, or controller capability from an invocation payload.
+    """
+
+    def __init__(
+        self,
+        sessions: sessionmaker[Session],
+        client_factory: Callable[[str], A2AClient] = OfficialA2AClient,
+    ) -> None:
+        self.sessions = sessions
+        self.client_factory = client_factory
+
+    async def health(self, runtime: AgentRuntime) -> AgentHealth:
+        try:
+            self._runtime(str(runtime.runtime_id), str(runtime.agent_id))
+        except ValueError as error:
+            return AgentHealth(healthy=False, reason=str(error))
+        return AgentHealth(healthy=True)
+
+    async def invoke(self, request: AgentInvocationRequest) -> AgentInvocationResult:
+        if (
+            request.purpose is not DelegationPurpose.EXECUTE
+            or request.work_order_id is None
+            or request.attempt_id is None
+            or not isinstance(request.typed_input, ExecuteInvocationInput)
+            or request.context_bundle is None
+        ):
+            return AgentInvocationResult(
+                invocation_id=request.invocation_id,
+                status=InvocationStatus.FAILED,
+                reason_code="A2A_GOVERNED_SCOPE_REQUIRED",
+            )
+        try:
+            runtime, tenant = self._runtime(
+                str(request.runtime_id), str(request.agent_id),
+            )
+            context = request.context_bundle
+            if (
+                context.target_agent_id != str(request.agent_id)
+                or context.target_runtime_id != str(request.runtime_id)
+                or context.run_id != request.run_id
+                or context.work_order_id != request.work_order_id
+            ):
+                raise ValueError("A2A context bundle scope mismatch")
+            message = encode_remote_execution_request(RemoteExecutionRequest(
+                invocation_id=str(request.invocation_id),
+                run_id=request.run_id,
+                work_order_id=request.work_order_id,
+                attempt_id=request.attempt_id,
+                objective=context.selected_context.objective or context.selected_context.goal,
+                context=context,
+            ))
+            task = await A2AAdapter(
+                self.sessions,
+                self.client_factory(runtime.endpoint_ref or ""),
+                remote_agent_id=str(runtime.agent_id),
+            ).dispatch(
+                work_order_id=request.work_order_id,
+                attempt_id=request.attempt_id,
+                message=message,
+                tenant=tenant,
+                invocation_id=str(request.invocation_id),
+            )
+        except Exception as error:
+            return AgentInvocationResult(
+                invocation_id=request.invocation_id,
+                status=InvocationStatus.FAILED,
+                reason_code=f"A2A_GOVERNED_{type(error).__name__}"[:128],
+            )
+        status, reason = A2ARemoteAgentAdapter._map_task_status(task.status.state)
+        if status is not InvocationStatus.SUCCEEDED:
+            return AgentInvocationResult(
+                invocation_id=request.invocation_id,
+                status=status,
+                external_invocation_id=task.id,
+                output_type="A2ATask",
+                output=task.model_dump(mode="json"),
+                reason_code=reason,
+            )
+        try:
+            result = decode_executor_result(
+                task,
+                expected_attempt_id=request.attempt_id,
+                forbid_capability_results=True,
+            )
+        except A2ACodecError:
+            return AgentInvocationResult(
+                invocation_id=request.invocation_id,
+                status=InvocationStatus.FAILED,
+                external_invocation_id=task.id,
+                output_type="A2ATask",
+                output=task.model_dump(mode="json"),
+                reason_code="A2A_EXECUTOR_RESULT_INVALID",
+            )
+        return AgentInvocationResult(
+            invocation_id=request.invocation_id,
+            status=InvocationStatus.SUCCEEDED,
+            external_invocation_id=task.id,
+            output_type="ExecutorResult",
+            output=result.model_dump(mode="json"),
+        )
+
+    async def cancel(self, invocation_id: str) -> None:
+        with self.sessions() as session:
+            invocation = session.get(AgentInvocationRecord, invocation_id)
+        if invocation is None:
+            raise ValueError("A2A invocation is missing")
+        runtime, tenant = self._runtime(invocation.runtime_id, invocation.agent_id)
+        await A2AAdapter(
+            self.sessions,
+            self.client_factory(runtime.endpoint_ref or ""),
+            remote_agent_id=str(runtime.agent_id),
+        ).cancel(invocation_id, tenant=tenant)
+
+    def _runtime(self, runtime_id: str, agent_id: str) -> tuple[AgentRuntime, str | None]:
+        with self.sessions() as session:
+            row = session.scalar(select(AgentRuntimeRecord).join(
+                AgentRecord,
+                AgentRecord.agent_id == AgentRuntimeRecord.agent_id,
+            ).where(
+                AgentRuntimeRecord.runtime_id == runtime_id,
+                AgentRuntimeRecord.agent_id == agent_id,
+                AgentRuntimeRecord.adapter_kind == "A2A",
+                AgentRuntimeRecord.enabled.is_(True),
+                AgentRecord.enabled.is_(True),
+                AgentRuntimeRecord.runtime_lease_id.is_not(None),
+                AgentRuntimeRecord.lease_expires_at > datetime.now(UTC),
+            ))
+            if row is None:
+                raise ValueError("A2A runtime is disabled, unleased, or mismatched")
+            runtime = AgentRuntime(
+                runtime_id=row.runtime_id,
+                agent_id=row.agent_id,
+                adapter_kind=AgentAdapterKind(row.adapter_kind),
+                runtime_name=row.runtime_name,
+                endpoint_ref=row.endpoint_ref,
+                framework=row.framework,
+                model_provider=row.model_provider,
+                model_name=row.model_name,
+                protocols=tuple(row.protocols_json),
+                metadata=dict(row.metadata_json),
+            )
+        endpoint = runtime.endpoint_ref or ""
+        parsed = urlparse(endpoint)
+        loopback = parsed.hostname in {"127.0.0.1", "::1", "localhost"}
+        if (
+            not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+            or (parsed.scheme != "https" and not (parsed.scheme == "http" and loopback))
+        ):
+            raise ValueError("A2A endpoint is not a governed HTTPS/loopback URL")
+        if A2A_PROTOCOL_VERSION not in runtime.protocols:
+            raise ValueError("A2A runtime does not declare A2A/1.0")
+        tenant = runtime.metadata.get("a2a_tenant")
+        if tenant is not None and (not tenant or len(tenant) > 128 or any(ord(char) < 32 for char in tenant)):
+            raise ValueError("A2A tenant is invalid")
+        return runtime, tenant
 
 
 class HttpAgentAdapter:

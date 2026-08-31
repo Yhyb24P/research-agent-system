@@ -3,9 +3,12 @@ from researchd.adapters.a2a.codec import (
     A2ACodecError,
     EXECUTOR_RESULT_MEDIA_TYPE,
     GRANTED_WORK_ORDER_MEDIA_TYPE,
+    REMOTE_EXECUTION_REQUEST_MEDIA_TYPE,
+    RemoteExecutionRequest,
     decode_executor_result,
     encode_executor_result,
     encode_granted_work_order,
+    encode_remote_execution_request,
 )
 from researchd.adapters.a2a.schemas import (
     A2AAgentCard,
@@ -28,5 +31,6 @@ __all__ = [
     "A2AArtifact", "A2ASendMessageRequest", "A2ATask", "A2ATaskStatus",
     "A2A_PROTOCOL_VERSION", "A2ACodecError", "GRANTED_WORK_ORDER_MEDIA_TYPE",
     "EXECUTOR_RESULT_MEDIA_TYPE", "encode_granted_work_order", "encode_executor_result",
-    "decode_executor_result", "OfficialA2AClient", "agent_card",
+    "REMOTE_EXECUTION_REQUEST_MEDIA_TYPE", "RemoteExecutionRequest",
+    "encode_remote_execution_request", "decode_executor_result", "OfficialA2AClient", "agent_card",
 ]
