@@ -49,7 +49,9 @@ def load_client_config(config_path: Path) -> DaemonConfig:
 
 
 def base_url_for(config: DaemonConfig) -> str:
-    return f"http://{config.host}:{config.port}"
+    """Format an allowed loopback bind address as an HTTP authority."""
+    host = f"[{config.host}]" if ":" in config.host else config.host
+    return f"http://{host}:{config.port}"
 
 
 def researchd_argv(config_path: Path, *subcommand: str) -> list[str]:
