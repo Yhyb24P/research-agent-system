@@ -159,6 +159,10 @@ def main() -> int:
         "state_root": str(state_root),
         "host": "127.0.0.1",
         "port": args.daemon_port,
+        # PH07 exercises an explicitly operator-authorized local execution
+        # capability. Empty configuration remains fail-closed in production.
+        "workspace_capabilities": ["sandbox.shell"],
+        "user_capabilities": ["sandbox.shell"],
     }
     config_path.write_text(json.dumps(config, indent=2, sort_keys=True), encoding="utf-8")
     base_url = f"http://127.0.0.1:{args.daemon_port}"
