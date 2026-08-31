@@ -8,6 +8,7 @@ but a daemon that is not READY is surfaced, never bypassed.
 
 import json
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -26,6 +27,7 @@ from researchd.client.transport import (
 )
 from researchd.daemon.composition import DaemonConfig
 from researchd.daemon.security import ControlCredentialError
+from researchd.daemon.identity import identity_path, is_live
 
 
 class DaemonNotReadyError(RuntimeError):
@@ -148,6 +150,27 @@ def run_status(
     return 0 if health.get("ready") is True else 1
 
 
+def stop_daemon(config_path: Path, *, timeout: float = 10.0) -> int:
+    """Stop only the daemon whose persisted strong identity still matches."""
+    config = load_client_config(config_path)
+    try:
+        identity = json.loads(identity_path(config.state_root).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return 1
+    if not isinstance(identity, dict) or not is_live(identity):
+        return 1
+    pid = identity.get("pid")
+    if not isinstance(pid, int):
+        return 1
+    os.kill(pid, signal.SIGTERM)
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if probe_health(config) is None:
+            return 0
+        time.sleep(0.1)
+    return 1
+
+
 def open_browser(
     config_path: Path,
     *,
@@ -255,6 +278,7 @@ __all__ = [
     "researchd_argv",
     "run_init",
     "run_status",
+    "stop_daemon",
     "spawn_daemon",
     "wait_for_ready",
 ]

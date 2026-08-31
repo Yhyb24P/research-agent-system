@@ -9,7 +9,7 @@ The first shell commands land in PX02-04.
 import argparse
 from pathlib import Path
 
-from researchd.client.lifecycle import interactive_entry, open_browser, run_init, run_status
+from researchd.client.lifecycle import interactive_entry, open_browser, run_init, run_status, stop_daemon
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -21,6 +21,8 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command")
     subparsers.add_parser("init", help="bootstrap state via researchd init")
     subparsers.add_parser("status", help="report daemon reachability and readiness")
+    daemon = subparsers.add_parser("daemon", help="inspect or control the local daemon")
+    daemon.add_argument("action", choices=("status", "stop", "restart"))
     subparsers.add_parser("tui", help="open the optional collaboration workspace")
     subparsers.add_parser("browser", help="open the local Browser Control Tower")
     console = subparsers.add_parser("console", help="open a detached projection console")
@@ -37,6 +39,13 @@ def main(argv: list[str] | None = None) -> int:
         return run_init(args.config)
     if args.command == "status":
         return run_status(args.config)
+    if args.command == "daemon":
+        if args.action == "status":
+            return run_status(args.config)
+        stopped = stop_daemon(args.config)
+        if stopped != 0 or args.action == "stop":
+            return stopped
+        return interactive_entry(args.config, input_fn=lambda: "quit")
     if args.command == "tui":
         from researchd.client.tui import tui_entry
 
