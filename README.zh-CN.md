@@ -69,7 +69,7 @@ LangGraph state 都只是适配器或运行时表示，不能取代 `ResearchRun
   replay/follow，以及类型化 cancel/approve/human-decision 命令。
 - 可选 LangGraph Agent runtime。仓库内的 `agent_research_critic` pilot 会运行真实
   compiled graph 并返回结构化 specialist 结果，同时保持 researchd 的权威性。
-- loopback JSON 控制 API、静态 TUI renderer、SQLite backup/restore 检查、运行指标和
+- loopback JSON 控制 API、Browser Control Tower、静态 TUI renderer、SQLite backup/restore 检查、运行指标和
   基于 lock file 的 SBOM 生成。
 
 ## 环境与安装
@@ -161,8 +161,8 @@ commit/tag。旧快照格式和旧数据库 schema 会被直接拒绝，不做�
 Supervisor 的具体 `researchd` composition root 和 CLI；日常 `research` client 现已
 覆盖 lifecycle 面（`init`、`status`、交互入口）与首批 shell 命令（`status`、
 agent 工作集、`run list`、`task create`/`task cancel`、`msg`、`handoff list`/
-`handoff accept`/`handoff reject`、`events watch`、`approve`、`reject`）；浏览器
-应用启动入口仍未完成。
+`handoff accept`/`handoff reject`、`events watch`、`approve`、`reject`）；可通过
+`research browser` 打开 Browser Control Tower。
 
 嵌入式 composition 必须注册可信服务并使用 `build_startup_barrier(...)`。该屏障先验证
 migration `0025` 和实时 DB/CAS 状态，再按冻结顺序调用已有 workspace、worktree、
@@ -236,6 +236,7 @@ uv run researchctl --database researchd.db daemon-command resolve <command-id> -
 ```bash
 uv run research --config researchd.json init
 uv run research --config researchd.json status
+uv run research --config researchd.json browser
 uv run research --config researchd.json
 ```
 
@@ -247,6 +248,11 @@ uv run research --config researchd.json
 `agent list`/`agent use`/`agent remove`、`run list`、`task create`、
 `task cancel`、`msg`、`events watch`、`approve`、`reject` 与 `quit`；
 每条命令都走认证 transport，`agent remove` 仅清除会话本地工作集。
+
+`research browser` 会打开只监听 loopback 的 Browser Control Tower。HTML、CSS 和
+JavaScript 本身不包含控制器状态或凭据；日常 client 把本机已有凭据放入 URL fragment
+（HTTP 永远不会发送 fragment），页面会立即清除该 fragment，只在内存保留凭据。所有
+读取和类型化命令仍通过同一认证控制 API；浏览器布局与刷新状态不会成为权威状态。
 
 远端 attach 不等同于本地 runtime session。`remote attach <runtime-id>` /
 `remote renew <runtime-id>` / `remote detach <runtime-id>` 只能引用已安装的 A2A runtime；daemon 从 Registry
@@ -421,6 +427,5 @@ Migration `0022` 为已有 `AgentRuntime` 增加一对一、server-owned 的
 在预发布阶段仍保持 `0.1.0`，因此 Git RC tag 用于标识通过资格检查的源码 commit，并与
 package semantic version 有意分离。复现候选版本时必须使用最新 tag 及其精确 commit。
 
-项目不承诺普遍意义的分布式 exactly-once，不提供公开 control/A2A service，也尚未完成
-浏览器 control tower。正式运行批准仍需要绑定精确 commit 的证据，包括绿色 CI、
+项目不承诺普遍意义的分布式 exactly-once，也不提供公开 control/A2A service。正式运行批准仍需要绑定精确 commit 的证据，包括绿色 CI、
 backup/restore 验证、transport 治理和计划中的 soak/acceptance 检查。

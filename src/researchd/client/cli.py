@@ -9,7 +9,7 @@ The first shell commands land in PX02-04.
 import argparse
 from pathlib import Path
 
-from researchd.client.lifecycle import interactive_entry, run_init, run_status
+from researchd.client.lifecycle import interactive_entry, open_browser, run_init, run_status
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -22,6 +22,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("init", help="bootstrap state via researchd init")
     subparsers.add_parser("status", help="report daemon reachability and readiness")
     subparsers.add_parser("tui", help="open the optional collaboration workspace")
+    subparsers.add_parser("browser", help="open the local Browser Control Tower")
     console = subparsers.add_parser("console", help="open a detached projection console")
     console.add_argument("kind", choices=("collab", "agent", "system"))
     console.add_argument("agent_id", nargs="?")
@@ -40,6 +41,8 @@ def main(argv: list[str] | None = None) -> int:
         from researchd.client.tui import tui_entry
 
         return tui_entry(args.config)
+    if args.command == "browser":
+        return open_browser(args.config)
     if args.command == "console":
         from researchd.client.console import console_entry
 

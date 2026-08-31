@@ -79,7 +79,7 @@ replace `ResearchRun`, `Delegation`, `AgentInvocation`, `Artifact`, or
 - Optional LangGraph Agent runtime. The included `agent_research_critic` pilot
   runs a real compiled graph and returns a structured specialist result while
   researchd remains authoritative.
-- Loopback JSON control API, static TUI renderer, SQLite backup/restore checks,
+- Loopback JSON control API, Browser Control Tower, static TUI renderer, SQLite backup/restore checks,
   operational metrics, and lock-derived SBOM generation.
 
 ## Requirements and installation
@@ -178,7 +178,7 @@ RuntimeSession/Supervisor services. The daily `research` client now covers
 the lifecycle surface (`init`, `status`, interactive entry) and the first
 shell command batch (`status`, agent working set, `run list`,
 `task create`/`task cancel`, `msg`, `events watch`, `approve`, `reject`);
-the browser application bootstrap remains open.
+the Browser Control Tower opens with `research browser`.
 
 An embedding composition must register its trusted services and use
 `build_startup_barrier(...)`. The barrier verifies migration `0025` and live
@@ -261,6 +261,7 @@ authenticated HTTP surface and never opens the database:
 ```bash
 uv run research --config researchd.json init
 uv run research --config researchd.json status
+uv run research --config researchd.json browser
 uv run research --config researchd.json
 ```
 
@@ -275,6 +276,13 @@ batch offers `status`, `agent list` / `agent use` / `agent remove`,
 `handoff accept` / `handoff reject`, `events watch`, `approve`, `reject` and
 `remote attach <runtime-id>` / `remote renew <runtime-id>` / `remote detach <runtime-id>`, and `quit`; every command crosses the authenticated
 transport, and `agent remove` only clears the session-local working set.
+
+`research browser` opens a loopback-only Browser Control Tower. The HTML, CSS,
+and JavaScript contain neither controller state nor credential. The daily
+client places the already-local credential in the URL fragment (which is never
+sent in HTTP), and the page immediately removes it while retaining it only in
+memory. Every read and typed command still crosses the same authenticated
+control API; browser layout and refresh state are never authoritative.
 
 Remote attachment is distinct from a local runtime session. It can only attach
 an installed A2A runtime by ID; the daemon resolves its registered endpoint,
@@ -488,8 +496,8 @@ identify qualified source commits and are intentionally independent from the
 package semantic version. Use the latest Git tag and its exact commit when
 reproducing a candidate.
 
-The repository does not claim universal distributed exactly-once execution, a
-public control/A2A service, or a completed browser control tower.
+The repository does not claim universal distributed exactly-once execution or a
+public control/A2A service.
 Operational release approval still requires evidence tied to the exact commit,
 including a green CI run, backup/restore validation, transport governance, and
 the intended soak/acceptance checks.

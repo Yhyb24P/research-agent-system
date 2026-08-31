@@ -10,8 +10,10 @@ import json
 import subprocess
 import sys
 import time
+import webbrowser
 from collections.abc import Callable
 from pathlib import Path
+from urllib.parse import urlencode
 
 import httpx
 
@@ -142,6 +144,36 @@ def run_status(
     return 0 if health.get("ready") is True else 1
 
 
+def open_browser(
+    config_path: Path,
+    *,
+    open_url: Callable[[str], bool] = webbrowser.open_new_tab,
+    print_fn: Callable[[str], None] = print,
+) -> int:
+    """Open the non-authoritative browser projection for a READY daemon."""
+    config = load_client_config(config_path)
+    health = probe_health(config)
+    if health is None:
+        spawn_daemon(config, config_path)
+    if health is None or health.get("ready") is not True:
+        try:
+            wait_for_ready(config)
+        except (DaemonNotReadyError, TimeoutError) as error:
+            print_fn(f"researchd is not ready: {error}")
+            return 1
+    try:
+        token = load_owner_token(config.state_root)
+    except ControlCredentialError as error:
+        print_fn(f"cannot load the control credential: {error}")
+        return 1
+    url = f"{base_url_for(config)}/ui#{urlencode({'token': token})}"
+    if open_url(url):
+        print_fn("opened the local Browser Control Tower")
+    else:
+        print_fn(f"open this local URL in a browser: {url}")
+    return 0
+
+
 def interactive_entry(
     config_path: Path,
     *,
@@ -211,6 +243,7 @@ __all__ = [
     "base_url_for",
     "interactive_entry",
     "load_client_config",
+    "open_browser",
     "probe_health",
     "researchd_argv",
     "run_init",

@@ -11,6 +11,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 from pydantic import BaseModel, ValidationError
 
 from researchd.api.agui import AGUIProjectionAdapter
+from researchd.api.browser_assets import BROWSER_ASSETS
 from researchd.api.control import LocalControlAPI
 from researchd.daemon.runtime import ResearchDaemon
 from researchd.daemon.contracts import (
@@ -343,6 +344,10 @@ def make_handler(
 
         def do_GET(self) -> None:  # noqa: N802
             parsed = urlparse(self.path)
+            asset = BROWSER_ASSETS.get(parsed.path)
+            if asset is not None:
+                self._send_asset(*asset)
+                return
             parts = [unquote(item) for item in parsed.path.split("/") if item]
             if parts == ["api", "health"] and daemon is not None:
                 self._send_json(200 if daemon.health()["ready"] else 503, daemon.health())
@@ -386,6 +391,23 @@ def make_handler(
             self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _send_asset(self, content_type: str, asset: str) -> None:
+            """Serve the non-secret loopback shell with a no-egress CSP."""
+            body = asset.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header(
+                "Content-Security-Policy",
+                "default-src 'none'; connect-src 'self'; script-src 'self'; "
+                "style-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+            )
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header("X-Content-Type-Options", "nosniff")
             self.end_headers()
             self.wfile.write(body)
 
