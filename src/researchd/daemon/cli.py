@@ -5,6 +5,8 @@ import json
 import os
 from pathlib import Path
 from importlib.resources import files
+import shutil
+from datetime import UTC, datetime
 from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 
@@ -33,6 +35,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("validate", help="validate configuration without touching state")
     subparsers.add_parser("inspect", help="print a non-secret configuration projection")
     subparsers.add_parser("init", help="create a fresh database at the current schema")
+    subparsers.add_parser("migrate", help="backup and explicitly upgrade an existing database")
     install = subparsers.add_parser("install-agent", help="install a trusted AgentDefinition locally")
     install.add_argument("definition", type=Path)
     serve = subparsers.add_parser("serve", help="start the loopback control daemon")
@@ -85,6 +88,18 @@ def main(argv: list[str] | None = None) -> int:
         command.upgrade(_alembic_config(database), "head")
         config.artifact_root.mkdir(parents=True, exist_ok=True)
         create_control_token(config.state_root)
+        return 0
+
+    if args.command == "migrate":
+        if not database.exists():
+            raise SystemExit(f"refusing to migrate missing database: {database}")
+        if _daemon_is_running(config):
+            raise SystemExit("refusing migration while researchd is running")
+        stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+        backup = database.with_name(f"{database.name}.{stamp}.pre-migrate.bak")
+        shutil.copy2(database, backup)
+        command.upgrade(_alembic_config(database), "head")
+        print(json.dumps({"database": str(database), "backup": str(backup), "revision": "head"}, sort_keys=True))
         return 0
 
     if args.command == "install-agent":
