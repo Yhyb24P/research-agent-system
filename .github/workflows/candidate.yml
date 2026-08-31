@@ -1,0 +1,137 @@
+name: exact-candidate
+
+on:
+  push:
+    tags: ["v*-rc.*"]
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "preflight validates an untagged tree; exact validates an immutable tag"
+        required: true
+        default: preflight
+        type: choice
+        options: [preflight, exact]
+      ref:
+        description: "Git ref for preflight (ignored by tag push)"
+        required: false
+        type: string
+      candidate_tag:
+        description: "Required in exact mode; optional mapping check in preflight"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  candidate:
+    runs-on: ubuntu-22.04
+    env:
+      UV_LINK_MODE: copy
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v5
+      - name: Resolve candidate identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          mode="${{ inputs.mode }}"
+          ref="${{ inputs.ref }}"
+          tag="${{ inputs.candidate_tag }}"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            mode=exact
+            tag="${GITHUB_REF_NAME}"
+          fi
+          if [ -z "${mode}" ]; then mode=preflight; fi
+          git fetch --force --tags origin
+          if [ "${mode}" = exact ]; then
+            test -n "${tag}"
+            candidate_commit="$(git rev-parse "refs/tags/${tag}^{}")"
+            git checkout --detach "${candidate_commit}"
+          else
+            if [ -n "${ref}" ]; then git checkout --detach "${ref}"; fi
+            candidate_commit="$(git rev-parse HEAD)"
+          fi
+          checked_out_commit="$(git rev-parse HEAD)"
+          test "${candidate_commit}" = "${checked_out_commit}"
+          printf 'MODE=%s\nCANDIDATE_TAG=%s\nCANDIDATE_COMMIT=%s\nCHECKED_OUT_COMMIT=%s\n' \
+            "${mode}" "${tag}" "${candidate_commit}" "${checked_out_commit}" >> "${GITHUB_ENV}"
+      - name: Verify immutable identity and clean tree
+        run: |
+          set -euo pipefail
+          test -z "$(git status --porcelain)"
+          if [ "${MODE}" = exact ]; then
+            uv run python scripts/version_policy_check.py --candidate-tag "${CANDIDATE_TAG}" --require-head-tag
+          elif [ -n "${CANDIDATE_TAG}" ]; then
+            uv run python scripts/version_policy_check.py --candidate-tag "${CANDIDATE_TAG}"
+          else
+            uv run python scripts/version_policy_check.py
+          fi
+      - name: Install sandbox prerequisite
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap libcap2-bin
+          sudo mkdir -p /workspace
+          sudo chown "${USER}" /workspace
+      - name: Build and hash candidate artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/candidate-evidence/dist"
+          uv build --out-dir "${RUNNER_TEMP}/candidate-evidence/dist"
+          sha256sum "${RUNNER_TEMP}/candidate-evidence/dist/"* > "${RUNNER_TEMP}/candidate-evidence/artifact-sha256.txt"
+          echo "WHEEL=$(find "${RUNNER_TEMP}/candidate-evidence/dist" -name '*.whl' -print -quit)" >> "${GITHUB_ENV}"
+          echo "SDIST=$(find "${RUNNER_TEMP}/candidate-evidence/dist" -name '*.tar.gz' -print -quit)" >> "${GITHUB_ENV}"
+      - name: Install wheel outside checkout and prove isolation
+        run: |
+          set -euo pipefail
+          CLEAN_ROOT="$(mktemp -d /tmp/research-candidate.XXXXXX)"
+          python -m venv "${CLEAN_ROOT}/venv"
+          "${CLEAN_ROOT}/venv/bin/pip" install "${WHEEL}[a2a,langgraph-agent,qualification,tui]"
+          (cd "${CLEAN_ROOT}" && env -u PYTHONPATH "${CLEAN_ROOT}/venv/bin/python" -c 'import researchd; from pathlib import Path; p=Path(researchd.__file__).resolve(); assert "/site-packages/researchd/" in str(p), p; print(p)')
+          for command in research researchd researchctl research-coder-agent; do "${CLEAN_ROOT}/venv/bin/${command}" --help; done
+          echo "CLEAN_ROOT=${CLEAN_ROOT}" >> "${GITHUB_ENV}"
+      - name: Smoke installed migration and READY lifecycle
+        run: |
+          set -euo pipefail
+          STATE="${CLEAN_ROOT}/smoke-state"
+          CONFIG="${CLEAN_ROOT}/smoke-config.json"
+          "${CLEAN_ROOT}/venv/bin/python" -c 'import json,sys; from pathlib import Path; root=Path(sys.argv[1]); print(json.dumps({"database":str(root/"researchd.db"),"artifact_root":str(root/"artifacts"),"state_root":str(root),"host":"127.0.0.1","port":18787}))' "${STATE}" > "${CONFIG}"
+          "${CLEAN_ROOT}/venv/bin/researchd" --config "${CONFIG}" init
+          "${CLEAN_ROOT}/venv/bin/researchd" --config "${CONFIG}" migrate
+          "${CLEAN_ROOT}/venv/bin/researchd" --config "${CONFIG}" serve > "${CLEAN_ROOT}/serve.log" 2>&1 &
+          for _ in $(seq 1 60); do curl -fsS http://127.0.0.1:18787/api/health | grep -q '"ready": true' && break; sleep 1; done
+          curl -fsS http://127.0.0.1:18787/api/health | grep -q '"ready": true'
+          "${CLEAN_ROOT}/venv/bin/research" --config "${CONFIG}" daemon stop
+      - name: Run installed product E2E explicitly
+        run: |
+          set -euo pipefail
+          E2E_ROOT="${CLEAN_ROOT}/e2e-state"
+          GIT_SOURCE="/workspace/research-candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          env -u PYTHONPATH "${CLEAN_ROOT}/venv/bin/python" tests/product_e2e/run_e2e.py \
+            --root "${E2E_ROOT}" --commit "${CHECKED_OUT_COMMIT}" --git-source-root "${GIT_SOURCE}" \
+            > "${RUNNER_TEMP}/candidate-evidence/product-e2e.json"
+      - name: Generate manifest, SBOM and evidence summary
+        run: |
+          set -euo pipefail
+          uv run python scripts/release_manifest.py --output "${RUNNER_TEMP}/candidate-evidence/release-manifest.json"
+          uv run python scripts/lock_sbom.py --output "${RUNNER_TEMP}/candidate-evidence/sbom.json"
+          project_version="$(uv run python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          uv run python scripts/candidate_evidence.py --mode "${MODE}" --candidate-tag "${CANDIDATE_TAG}" \
+            --candidate-commit "${CANDIDATE_COMMIT}" --checked-out-commit "${CHECKED_OUT_COMMIT}" \
+            --project-version "${project_version}" --wheel "${WHEEL}" --sdist "${SDIST}" \
+            --manifest "${RUNNER_TEMP}/candidate-evidence/release-manifest.json" \
+            --sbom "${RUNNER_TEMP}/candidate-evidence/sbom.json" \
+            --e2e "${RUNNER_TEMP}/candidate-evidence/product-e2e.json" \
+            --workflow-run-identity "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            --output "${RUNNER_TEMP}/candidate-evidence/candidate-evidence.json"
+          sha256sum "${RUNNER_TEMP}/candidate-evidence/"*.json >> "${RUNNER_TEMP}/candidate-evidence/artifact-sha256.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: candidate-evidence-${{ github.run_id }}
+          path: ${{ runner.temp }}/candidate-evidence
+          if-no-files-found: error

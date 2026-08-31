@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 jobs:
-  quality:
+  merge_compatibility:
     # Bubblewrap security tests require the user/network namespace behavior
     # available on this runner image; do not silently skip those tests.
     runs-on: ubuntu-22.04
