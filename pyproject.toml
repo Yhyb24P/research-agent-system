@@ -47,8 +47,10 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/researchd"]
 
-[tool.hatch.build.targets.sdist]
-include = ["/src/researchd/storage/migrations/**"]
+# The sdist keeps hatchling's default selection (every version-controlled
+# file), which already ships src/researchd/storage/migrations/** including
+# env.py, script.py.mako and all versions/*.py.  An explicit `include`
+# filter here would replace that selection and strip the source tree.
 
 [tool.pytest.ini_options]
 addopts = "-ra"
