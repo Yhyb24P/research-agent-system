@@ -127,9 +127,18 @@ jobs:
           set -euo pipefail
           E2E_ROOT="${CLEAN_ROOT}/e2e-state"
           GIT_SOURCE="/workspace/research-candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          set +e
           env -u PYTHONPATH "${CLEAN_ROOT}/venv/bin/python" tests/product_e2e/run_e2e.py \
             --root "${E2E_ROOT}" --commit "${CHECKED_OUT_COMMIT}" --git-source-root "${GIT_SOURCE}" \
-            > "${RUNNER_TEMP}/candidate-evidence/product-e2e.json"
+            > >(tee "${RUNNER_TEMP}/candidate-evidence/product-e2e.json") \
+            2> >(tee "${RUNNER_TEMP}/candidate-evidence/product-e2e.stderr.log" >&2)
+          e2e_status=$?
+          set -e
+          printf '%s\n' "${e2e_status}" > "${RUNNER_TEMP}/candidate-evidence/product-e2e.exit-code"
+          if [ "${e2e_status}" -ne 0 ]; then
+            echo "::error::installed product E2E failed; diagnostics are preserved in candidate-evidence"
+            exit "${e2e_status}"
+          fi
       - name: Generate manifest, SBOM and evidence summary
         run: |
           set -euo pipefail
@@ -146,6 +155,7 @@ jobs:
             --output "${RUNNER_TEMP}/candidate-evidence/candidate-evidence.json"
           sha256sum "${RUNNER_TEMP}/candidate-evidence/"*.json >> "${RUNNER_TEMP}/candidate-evidence/artifact-sha256.txt"
       - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
         with:
           name: candidate-evidence-${{ github.run_id }}
           path: ${{ runner.temp }}/candidate-evidence

@@ -116,12 +116,16 @@ def test_exact_manifest_tag_mismatch_fails_closed(monkeypatch: pytest.MonkeyPatc
     assert not (tmp_path / "evidence.json").exists()
 
 
-def test_malformed_commit_fails_closed(monkeypatch, tmp_path) -> None:
+def test_malformed_commit_fails_closed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     with pytest.raises(SystemExit, match="40-hex"):
         _run(monkeypatch, tmp_path, "preflight", candidate_commit="abc")
 
 
-def test_preflight_correct_inputs_yield_hash_bound_summary(monkeypatch, tmp_path) -> None:
+def test_preflight_correct_inputs_yield_hash_bound_summary(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     files = _inputs(tmp_path)
     assert _run(monkeypatch, tmp_path, "preflight", candidate_tag=None) == 0
     summary = json.loads((tmp_path / "evidence.json").read_text(encoding="utf-8"))
@@ -139,7 +143,9 @@ def test_preflight_correct_inputs_yield_hash_bound_summary(monkeypatch, tmp_path
     assert summary["sbom_sha256"] == _sha256(Path(files["sbom"]))
 
 
-def test_exact_correct_inputs_bind_tag_and_gate_claim(monkeypatch, tmp_path) -> None:
+def test_exact_correct_inputs_bind_tag_and_gate_claim(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     assert _run(monkeypatch, tmp_path, "exact") == 0
     summary = json.loads((tmp_path / "evidence.json").read_text(encoding="utf-8"))
     assert summary["mode"] == "exact"
