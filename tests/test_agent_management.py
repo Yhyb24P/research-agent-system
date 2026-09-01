@@ -56,5 +56,6 @@ def test_generated_definition_uses_real_paths_and_profile_reference_only(
     assert payload["runtimes"][0]["framework"] == "research-agent-json-v1"
     assert str(aweswitch.resolve()) in encoded
     assert '"--qwen", "/bin/true"' in encoded
+    assert '"--timeout", "600"' in encoded
     assert str(project.resolve()) in encoded
     assert "TOKEN" not in encoded

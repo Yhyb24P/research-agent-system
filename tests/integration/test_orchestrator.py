@@ -32,7 +32,7 @@ from researchd.policy.approval import ApprovalService
 from researchd.policy.engine import BudgetLimits, DeterministicPolicyEngine, RecordingPolicyEngine
 from researchd.storage.db import create_sqlite_engine, session_factory
 from researchd.storage.models import (
-    AgentRecord, AgentRuntimeRecord, AttemptRecord, AuditEventRecord, DelegationRecord, ResearchRunRecord,
+    AgentRecord, AgentRuntimeRecord, AttemptRecord, AuditEventRecord, DelegationRecord, PlanRecord, ResearchRunRecord,
     VerificationResultRecord, WorkOrderRecord, WorkspaceRecord,
 )
 from researchd.verifier.contracts import VerificationInputs
@@ -378,6 +378,25 @@ def test_orchestrator_accepts_collaboration_only_constructor(tmp_path: Path) -> 
     with pytest.raises(TypeError, match="collaboration"):
         ResearchOrchestrator(sessions, policy=policy, verifier=FakeVerifier(sessions))  # type: ignore[call-arg]
     assert build_parser().parse_args(["events", "run_demo", "--after", "17"]).after_stream_offset == 17
+
+
+def test_same_agent_plan_proposal_is_scoped_to_each_run(tmp_path: Path) -> None:
+    sessions, orchestrator, _, _ = make_orchestrator(
+        tmp_path, cloud_responses=[_proposal(), _proposal()]
+    )
+    run_ids = [
+        orchestrator.create_run(workspace_id="ws_e2e", objective="same objective")
+        for _ in range(2)
+    ]
+    for run_id in run_ids:
+        asyncio.run(orchestrator.advance(run_id))
+        asyncio.run(orchestrator.advance(run_id))
+    with sessions() as session:
+        plans = session.scalars(select(PlanRecord).order_by(PlanRecord.run_id)).all()
+        assert len(plans) == 2
+        assert {plan.run_id for plan in plans} == set(run_ids)
+        assert len({plan.plan_id for plan in plans}) == 2
+        assert {plan.proposal_json["proposal_id"] for plan in plans} == {"plan_nan_001"}
 
 
 def test_retry_unchanged_work_order_creates_new_attempt(tmp_path: Path) -> None:

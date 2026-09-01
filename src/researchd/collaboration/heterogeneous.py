@@ -423,12 +423,12 @@ class HttpxAgentClient:
         self.readiness_poll_seconds = readiness_poll_seconds
 
     async def invoke(self, endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
+        read_timeout = self._read_timeout_seconds(payload)
         async with httpx.AsyncClient(
-            # The managed bridge bounds a model turn at 180 seconds.  Keep
-            # connection and write failures short while allowing that declared
-            # read bound to complete; the controller must not impose a hidden
-            # 30-second timeout beneath the protocol contract.
-            timeout=httpx.Timeout(connect=5.0, read=190.0, write=10.0, pool=5.0),
+            # Connection and write failures remain short.  The read boundary is
+            # purpose-aware and stays ten seconds beyond the corresponding
+            # trusted bridge limit, so the bridge owns turn termination.
+            timeout=httpx.Timeout(connect=5.0, read=read_timeout, write=10.0, pool=5.0),
             follow_redirects=False,
             trust_env=False,
         ) as client:
@@ -439,6 +439,11 @@ class HttpxAgentClient:
         if not isinstance(decoded, dict):
             raise ValueError("Agent endpoint returned non-object JSON")
         return decoded
+
+    @staticmethod
+    def _read_timeout_seconds(payload: dict[str, Any]) -> float:
+        purpose = payload.get("purpose")
+        return 610.0 if purpose == DelegationPurpose.EXECUTE.value else 310.0
 
     async def _wait_until_ready(
         self,

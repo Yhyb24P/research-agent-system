@@ -3,6 +3,7 @@
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+import hashlib
 from typing import Any, Protocol
 from uuid import uuid4
 
@@ -170,18 +171,30 @@ class ResearchOrchestrator:
             self._transition_run(run_id, ResearchRunState.FAILED, "CLOUD_PLAN_FAILED", {"error": type(error).__name__})
             return False
         self._persist_plan(run_id, result)
-        self._transition_run(run_id, ResearchRunState.ACTIVE, "PLAN_CREATED", {"plan_id": result.output.proposal_id})
+        self._transition_run(
+            run_id,
+            ResearchRunState.ACTIVE,
+            "PLAN_CREATED",
+            {"plan_id": self._plan_id(run_id, result.output.proposal_id)},
+        )
         return True
+
+    @staticmethod
+    def _plan_id(run_id: str, proposal_id: str) -> str:
+        return "plan_" + hashlib.sha256(
+            f"{run_id}\0{proposal_id}".encode("utf-8")
+        ).hexdigest()
 
     def _persist_plan(self, run_id: str, result: CloudLeadResult[PlanProposal]) -> None:
         now = utc_now()
+        plan_id = self._plan_id(run_id, result.output.proposal_id)
         assigned = self.collaboration.assigned_agent_for_run(run_id, DelegationPurpose.PLAN)
         if assigned is None:
             raise OrchestrationError(f"no assigned planning Agent for run {run_id}")
         actor_type, actor_id = "agent", assigned
         with self.sessions.begin() as session:
             session.add(PlanRecord(
-                plan_id=result.output.proposal_id, run_id=run_id,
+                plan_id=plan_id, run_id=run_id,
                 proposal_json=result.output.model_dump(mode="json"), version=1,
                 created_at=now, updated_at=now,
             ))
@@ -189,7 +202,7 @@ class ResearchOrchestrator:
                 self._add_work_order(session, run_id, proposal, parent=None, reason=None)
             session.add(AuditEventRecord(
                 event_id=f"evt_{uuid4().hex}", event_type="PLAN_CREATED", run_id=run_id,
-                entity_type="plan", entity_id=result.output.proposal_id, actor_type=actor_type,
+                entity_type="plan", entity_id=plan_id, actor_type=actor_type,
                 actor_id=actor_id, timestamp=now, correlation_id=run_id,
                 causation_id=result.interaction_id, metadata_json={"work_order_count": len(result.output.proposed_work_orders)},
             ))
