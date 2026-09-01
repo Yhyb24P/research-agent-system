@@ -110,7 +110,8 @@ curl -fsSL https://<product-domain>/install-preview.sh | \
 
 安装器会验证 wheel SHA-256，创建版本化的用户自有环境，并且只暴露
 `~/.local/bin/research`。可变分支、非 HTTPS 工件、非 Preview manifest 或已存在的安装
-目标都会被拒绝。manifest 合同示例见
+目标都会被拒绝。私有工件服务可以显式传入 `--ca-file <pem>`；该 CA 只用于下载
+manifest/wheel，不会导出给包安装进程。manifest 合同示例见
 [`examples/preview_install_manifest.example.json`](examples/preview_install_manifest.example.json)。
 发布操作者只能从已提交且 tracked 工作树干净的版本生成正式 manifest：
 

@@ -122,7 +122,9 @@ curl -fsSL https://<product-domain>/install-preview.sh | \
 The installer verifies the wheel SHA-256, creates a versioned user-owned
 environment, and exposes only `~/.local/bin/research`. It refuses mutable
 branches, non-HTTPS artifacts, non-Preview manifests, and existing install
-targets. The manifest contract is illustrated in
+targets. A private artifact service may supply `--ca-file <pem>`; that CA is
+scoped to manifest/wheel downloads and is not exported to package installation.
+The manifest contract is illustrated in
 [`examples/preview_install_manifest.example.json`](examples/preview_install_manifest.example.json).
 Release operators generate the real manifest only from a clean committed tree:
 

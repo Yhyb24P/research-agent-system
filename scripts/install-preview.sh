@@ -2,16 +2,22 @@
 set -eu
 
 usage() {
-    echo "usage: install-preview.sh --manifest <immutable-https-url>" >&2
+    echo "usage: install-preview.sh --manifest <immutable-https-url> [--ca-file <pem>]" >&2
     exit 2
 }
 
 manifest_url=""
+ca_file=""
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --manifest)
             [ "$#" -ge 2 ] || usage
             manifest_url=$2
+            shift 2
+            ;;
+        --ca-file)
+            [ "$#" -ge 2 ] || usage
+            ca_file=$2
             shift 2
             ;;
         *) usage ;;
@@ -23,6 +29,10 @@ case "$manifest_url" in
     https://*) ;;
     *) echo "preview manifest URL must use HTTPS" >&2; exit 2 ;;
 esac
+[ -z "$ca_file" ] || [ -f "$ca_file" ] || {
+    echo "Preview artifact CA file does not exist" >&2
+    exit 2
+}
 
 command -v curl >/dev/null 2>&1 || { echo "curl is required" >&2; exit 1; }
 command -v python3 >/dev/null 2>&1 || { echo "Python 3 is required" >&2; exit 1; }
@@ -32,8 +42,20 @@ cleanup() { rm -rf "$preview_tmp"; }
 trap cleanup EXIT HUP INT TERM
 
 manifest=$preview_tmp/manifest.json
-curl --fail --silent --show-error --location \
-    --proto '=https' --tlsv1.2 "$manifest_url" --output "$manifest"
+fetch() {
+    fetch_url=$1
+    fetch_output=$2
+    if [ -n "$ca_file" ]; then
+        curl --fail --silent --show-error --location \
+            --proto '=https' --tlsv1.2 --cacert "$ca_file" \
+            "$fetch_url" --output "$fetch_output"
+    else
+        curl --fail --silent --show-error --location \
+            --proto '=https' --tlsv1.2 "$fetch_url" --output "$fetch_output"
+    fi
+}
+
+fetch "$manifest_url" "$manifest"
 
 python3 - "$manifest" "$preview_tmp" <<'PY'
 import json
@@ -95,8 +117,7 @@ wheel_url=$(cat "$preview_tmp/wheel_url")
 wheel_filename=$(cat "$preview_tmp/wheel_filename")
 wheel=$preview_tmp/$wheel_filename
 
-curl --fail --silent --show-error --location \
-    --proto '=https' --tlsv1.2 "$wheel_url" --output "$wheel"
+fetch "$wheel_url" "$wheel"
 actual_sha256=$(python3 - "$wheel" <<'PY'
 import hashlib
 import sys
