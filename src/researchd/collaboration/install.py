@@ -189,6 +189,10 @@ class AgentInstallService:
         row.model_name = runtime.model_name
         row.protocols_json = list(runtime.protocols)
         row.metadata_json = dict(runtime.metadata)
+        # Presence in an accepted AgentDefinition means the runtime is active.
+        # Reinstallation is the explicit product operation that reverses a
+        # prior disable while preserving the durable identity and history.
+        row.enabled = True
         row.version += 1
         row.updated_at = now
 

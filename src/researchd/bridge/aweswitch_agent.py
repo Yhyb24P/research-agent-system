@@ -12,7 +12,6 @@ import argparse
 import json
 import os
 import re
-import shutil
 import signal
 import subprocess
 import tempfile
@@ -23,13 +22,20 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from researchd.agents.schemas import PlanProposal
 from researchd.collaboration.heterogeneous import (
     ManagedAgentTurnRequest,
     ManagedAgentTurnResponse,
 )
+from researchd.domain.enums import DelegationPurpose
+from researchd.domain.review import ReviewDecision
 
 _ENV_REFERENCE = re.compile(r"^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$")
 _LOOPBACK = frozenset({"127.0.0.1", "localhost", "::1"})
+_MANAGED_PROMPT = (
+    "Process the managed request context supplied on stdin and return only "
+    "the JSON response required by that context."
+)
 _SAFE_ENVIRONMENT = frozenset({
     "HOME",
     "LANG",
@@ -158,6 +164,17 @@ def build_managed_prompt(turn: ManagedAgentTurnRequest) -> str:
         sort_keys=True,
         separators=(",", ":"),
     )
+    target_schema: dict[str, object] | None = None
+    if turn.purpose is DelegationPurpose.PLAN:
+        target_schema = PlanProposal.model_json_schema()
+    elif turn.purpose is DelegationPurpose.REVIEW:
+        target_schema = ReviewDecision.model_json_schema()
+    target = json.dumps(
+        target_schema,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
     return (
         "You are a managed research Agent. Return exactly one JSON object and no "
         "Markdown or commentary. The object must validate against the supplied "
@@ -166,6 +183,7 @@ def build_managed_prompt(turn: ManagedAgentTurnRequest) -> str:
         "listed in payload.granted_capabilities; use execution.final_claim only when "
         "the work is complete. For PLAN or REVIEW, place the typed domain result in "
         "output.\nREQUEST=" + request + "\nRESPONSE_SCHEMA=" + schema
+        + "\nTARGET_OUTPUT_SCHEMA=" + target
     )
 
 
@@ -176,6 +194,7 @@ class AweswitchManagedBridge:
         self,
         *,
         aweswitch: Path,
+        qwen: Path,
         config_path: Path,
         profile: str,
         cwd: Path,
@@ -184,11 +203,14 @@ class AweswitchManagedBridge:
     ) -> None:
         if not aweswitch.is_absolute() or not aweswitch.is_file():
             raise AweswitchProfileError("aweswitch executable must be an absolute file")
+        if not qwen.is_absolute() or not qwen.is_file() or not os.access(qwen, os.X_OK):
+            raise AweswitchProfileError("qwen executable must be an absolute executable file")
         if not cwd.is_absolute() or not cwd.is_dir():
             raise AweswitchProfileError("bridge cwd must be an absolute directory")
         if timeout_seconds <= 0 or max_output_bytes <= 0:
             raise AweswitchProfileError("bridge bounds must be positive")
         self.aweswitch = aweswitch
+        self.qwen = qwen
         self.config_path = config_path
         self.profile = profile
         self.cwd = cwd
@@ -198,8 +220,6 @@ class AweswitchManagedBridge:
     def health(self) -> dict[str, object]:
         try:
             provider, metadata = load_profile_metadata(self.config_path, self.profile)
-            if shutil.which("qwen") is None:
-                raise AweswitchProfileError("qwen executable is unavailable")
         except AweswitchProfileError as error:
             return {"healthy": False, "reason": str(error)}
         return {"healthy": True, "provider": provider, **metadata}
@@ -215,11 +235,15 @@ class AweswitchManagedBridge:
             str(self.aweswitch),
             self.profile,
             "-p",
-            "",
+            _MANAGED_PROMPT,
             "-o",
             "json",
         )
         child_env = build_aweswitch_environment(self.config_path, self.profile)
+        # aweswitch launches the provider by its stable command name.  Admit
+        # only the directory containing the installer-resolved Qwen binary;
+        # never inherit an arbitrary caller PATH into the managed process.
+        child_env["PATH"] = os.pathsep.join((str(self.qwen.parent), os.defpath))
         with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
             process = subprocess.Popen(
                 command,
@@ -267,17 +291,32 @@ class AweswitchManagedBridge:
     def _decode(payload: bytes) -> ManagedAgentTurnResponse:
         try:
             document: object = json.loads(payload)
-            if isinstance(document, dict):
-                try:
-                    return ManagedAgentTurnResponse.model_validate(document)
-                except ValidationError:
-                    for key in ("response", "result", "text", "content"):
-                        candidate = document.get(key)
-                        if isinstance(candidate, str):
-                            return ManagedAgentTurnResponse.model_validate_json(candidate)
+            if not isinstance(document, list):
+                raise AweswitchProfileError("aweswitch JSON output must be an event array")
+            terminal = [
+                event
+                for event in document
+                if isinstance(event, dict) and event.get("type") == "result"
+            ]
+            if len(terminal) != 1:
+                raise AweswitchProfileError(
+                    "aweswitch output must contain exactly one terminal result event"
+                )
+            result = terminal[0]
+            if (
+                result.get("subtype") != "success"
+                or result.get("is_error") is not False
+            ):
+                raise AweswitchProfileError("aweswitch terminal result is not successful")
+            denials = result.get("permission_denials", [])
+            if not isinstance(denials, list) or denials:
+                raise AweswitchProfileError("aweswitch turn contains permission denials")
+            managed = result.get("result")
+            if not isinstance(managed, str):
+                raise AweswitchProfileError("aweswitch terminal result has no text result")
+            return ManagedAgentTurnResponse.model_validate_json(managed)
         except (json.JSONDecodeError, UnicodeDecodeError, ValidationError) as error:
             raise AweswitchProfileError("aweswitch returned invalid managed JSON") from error
-        raise AweswitchProfileError("aweswitch returned no managed response object")
 
 
 class _BridgeServer(ThreadingHTTPServer):
@@ -331,6 +370,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="research-aweswitch-agent")
     parser.add_argument("--profile", required=True)
     parser.add_argument("--aweswitch", type=Path, required=True)
+    parser.add_argument("--qwen", type=Path, required=True)
     parser.add_argument("--config", type=Path, default=None)
     parser.add_argument("--cwd", type=Path, required=True)
     parser.add_argument("--host", default="127.0.0.1")
@@ -342,6 +382,7 @@ def main(argv: list[str] | None = None) -> int:
     config = args.config or default_aweswitch_config()
     bridge = AweswitchManagedBridge(
         aweswitch=args.aweswitch.resolve(strict=True),
+        qwen=args.qwen.absolute(),
         config_path=config.resolve(strict=True),
         profile=args.profile,
         cwd=args.cwd.resolve(strict=True),

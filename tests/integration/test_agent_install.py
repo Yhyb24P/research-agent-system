@@ -134,6 +134,22 @@ def test_disable_preserves_identity_and_disables_runtime_catalog(tmp_path: Path)
     assert launch_profiles.get("runtime_install").enabled is False
 
 
+def test_reinstall_reenables_the_complete_agent_definition(tmp_path: Path) -> None:
+    sessions, registry, launch_profiles, installer = _services(tmp_path)
+    definition = _definition(
+        runtimes=(_process_runtime(),),
+        launch_profiles=(_launch_profile(),),
+    )
+    installer.install(definition)
+    installer.disable(AgentId("agent_install"))
+
+    installer.install(definition)
+
+    assert registry.get_agent("agent_install").enabled is True
+    assert registry.require_enabled_runtime("runtime_install").runtime_id == "runtime_install"
+    assert launch_profiles.get("runtime_install").enabled is True
+
+
 def test_update_install_advances_versions_without_duplicates(tmp_path: Path) -> None:
     sessions, registry, launch_profiles, installer = _services(tmp_path)
     installer.install(_definition(

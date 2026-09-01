@@ -77,18 +77,26 @@ def test_missing_referenced_secret_fails_closed(tmp_path: Path) -> None:
 
 def test_bridge_validates_outer_cli_json_as_managed_response(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config = _config(tmp_path / "aweswitch.json")
     response = json.dumps({"execution": {"actions": [], "final_claim": "done"}})
-    outer = json.dumps({"response": response})
+    outer = json.dumps([
+        {"type": "system", "subtype": "init"},
+        {
+            "type": "result",
+            "subtype": "success",
+            "is_error": False,
+            "permission_denials": [],
+            "result": response,
+        },
+    ])
     executable = _executable(
         tmp_path / "aweswitch",
         f"printf '%s' '{outer}'\n",
     )
-    monkeypatch.setattr("researchd.bridge.aweswitch_agent.shutil.which", lambda name: "/bin/true")
     bridge = AweswitchManagedBridge(
         aweswitch=executable,
+        qwen=Path("/bin/true"),
         config_path=config,
         profile="qw",
         cwd=tmp_path,
@@ -113,13 +121,12 @@ def test_bridge_validates_outer_cli_json_as_managed_response(
 
 def test_bridge_rejects_unstructured_cli_output(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config = _config(tmp_path / "aweswitch.json")
     executable = _executable(tmp_path / "aweswitch", "printf '%s' 'not-json'\n")
-    monkeypatch.setattr("researchd.bridge.aweswitch_agent.shutil.which", lambda name: "/bin/true")
     bridge = AweswitchManagedBridge(
         aweswitch=executable,
+        qwen=Path("/bin/true"),
         config_path=config,
         profile="qw",
         cwd=tmp_path,
@@ -132,6 +139,46 @@ def test_bridge_rejects_unstructured_cli_output(
     )
 
     with pytest.raises(AweswitchProfileError, match="invalid managed JSON"):
+        bridge.invoke(turn)
+
+
+@pytest.mark.parametrize(
+    "events, message",
+    [
+        ([], "exactly one terminal result"),
+        ([{"type": "result"}, {"type": "result"}], "exactly one terminal result"),
+        ([{"type": "result", "subtype": "error_during_execution", "is_error": True}], "not successful"),
+        ([{
+            "type": "result", "subtype": "success", "is_error": False,
+            "permission_denials": [{"tool": "write"}], "result": "{}",
+        }], "permission denials"),
+    ],
+)
+def test_bridge_rejects_noncanonical_terminal_event(
+    tmp_path: Path,
+    events: list[dict[str, object]],
+    message: str,
+) -> None:
+    config = _config(tmp_path / "aweswitch.json")
+    executable = _executable(
+        tmp_path / "aweswitch",
+        f"printf '%s' '{json.dumps(events)}'\n",
+    )
+    bridge = AweswitchManagedBridge(
+        aweswitch=executable,
+        qwen=Path("/bin/true"),
+        config_path=config,
+        profile="qw",
+        cwd=tmp_path,
+    )
+    turn = ManagedAgentTurnRequest(
+        invocation_id="inv_bridge",
+        run_id="run_bridge",
+        purpose=DelegationPurpose.PLAN,
+        payload={},
+    )
+
+    with pytest.raises(AweswitchProfileError, match=message):
         bridge.invoke(turn)
 
 

@@ -96,6 +96,7 @@ def build_aweswitch_definition(
     profile: str,
     project_root: Path,
     aweswitch: Path,
+    qwen: Path,
     aweswitch_config: Path,
 ) -> AgentDefinition:
     """Generate a referentially closed definition containing no credentials."""
@@ -103,7 +104,12 @@ def build_aweswitch_definition(
     agent_id = AgentId(f"agent_{role}")
     runtime_id = AgentRuntimeId(f"runtime_{role}_aweswitch")
     endpoint = f"http://127.0.0.1:{port}/invoke"
-    executable = Path(sys.executable).resolve(strict=True)
+    # Keep the environment's interpreter path intact.  Resolving a virtualenv
+    # symlink to the system Python discards the environment that contains
+    # ``researchd`` and makes the managed bridge exit before binding its port.
+    executable = Path(sys.executable).absolute()
+    if not executable.is_file():
+        raise ValueError("current Python executable is unavailable")
     launch_spec = ProcessLaunchSpec(
         argv=(
             str(executable),
@@ -113,6 +119,8 @@ def build_aweswitch_definition(
             profile,
             "--aweswitch",
             str(aweswitch),
+            "--qwen",
+            str(qwen),
             "--config",
             str(aweswitch_config),
             "--cwd",
@@ -232,6 +240,11 @@ def add_aweswitch_agent(
         print_fn("aweswitch is not installed")
         return 1
     aweswitch = Path(executable_name).resolve(strict=True)
+    qwen_name = shutil.which("qwen")
+    if qwen_name is None:
+        print_fn("qwen is not installed")
+        return 1
+    qwen = Path(qwen_name).absolute()
     profile_config = default_aweswitch_config().resolve(strict=True)
     try:
         load_profile_metadata(profile_config, profile)
@@ -240,6 +253,7 @@ def add_aweswitch_agent(
             profile=profile,
             project_root=_project_root(config_path),
             aweswitch=aweswitch,
+            qwen=qwen,
             aweswitch_config=profile_config,
         )
     except (AweswitchProfileError, OSError, ValueError) as error:
@@ -290,6 +304,10 @@ def install_aweswitch_agents_for_setup(
     if executable_name is None:
         raise ValueError("aweswitch is not installed")
     aweswitch = Path(executable_name).resolve(strict=True)
+    qwen_name = shutil.which("qwen")
+    if qwen_name is None:
+        raise ValueError("qwen is not installed")
+    qwen = Path(qwen_name).absolute()
     profile_config = default_aweswitch_config().resolve(strict=True)
     load_profile_metadata(profile_config, profile)
     project_root = _project_root(config_path)
@@ -301,6 +319,7 @@ def install_aweswitch_agents_for_setup(
             profile=profile,
             project_root=project_root,
             aweswitch=aweswitch,
+            qwen=qwen,
             aweswitch_config=profile_config,
         )
         descriptor, name = tempfile.mkstemp(

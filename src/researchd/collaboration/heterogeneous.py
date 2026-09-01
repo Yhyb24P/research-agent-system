@@ -1,4 +1,5 @@
 """Adapters for non-model Agent Runtimes; controller records remain authoritative."""
+import asyncio
 import hashlib
 import json
 from datetime import UTC, datetime
@@ -409,18 +410,61 @@ class LocalProcessAgentAdapter:
 class HttpxAgentClient:
     """Bounded JSON transport to a registry-owned Agent endpoint."""
 
+    def __init__(
+        self,
+        *,
+        readiness_timeout_seconds: float = 5.0,
+        readiness_poll_seconds: float = 0.05,
+    ) -> None:
+        if readiness_timeout_seconds <= 0 or readiness_poll_seconds <= 0:
+            raise ValueError("managed Agent readiness bounds must be positive")
+        self.readiness_timeout_seconds = readiness_timeout_seconds
+        self.readiness_poll_seconds = readiness_poll_seconds
+
     async def invoke(self, endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
         async with httpx.AsyncClient(
-            timeout=30.0,
+            # The managed bridge bounds a model turn at 180 seconds.  Keep
+            # connection and write failures short while allowing that declared
+            # read bound to complete; the controller must not impose a hidden
+            # 30-second timeout beneath the protocol contract.
+            timeout=httpx.Timeout(connect=5.0, read=190.0, write=10.0, pool=5.0),
             follow_redirects=False,
             trust_env=False,
         ) as client:
+            await self._wait_until_ready(client, endpoint)
             response = await client.post(endpoint, json=payload)
             response.raise_for_status()
             decoded = response.json()
         if not isinstance(decoded, dict):
             raise ValueError("Agent endpoint returned non-object JSON")
         return decoded
+
+    async def _wait_until_ready(
+        self,
+        client: httpx.AsyncClient,
+        endpoint: str,
+    ) -> None:
+        """Wait for protocol readiness, not merely for the bridge PID to exist."""
+        parsed = urlparse(endpoint)
+        health_endpoint = parsed._replace(path="/health", params="", query="", fragment="").geturl()
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self.readiness_timeout_seconds
+        while True:
+            try:
+                remaining = max(deadline - loop.time(), 0.001)
+                response = await client.get(
+                    health_endpoint,
+                    timeout=min(0.25, remaining),
+                )
+                if response.status_code == 200:
+                    health = response.json()
+                    if isinstance(health, dict) and health.get("healthy") is True:
+                        return
+            except (httpx.HTTPError, ValueError):
+                pass
+            if loop.time() >= deadline:
+                raise httpx.ConnectTimeout("managed Agent endpoint did not become ready")
+            await asyncio.sleep(self.readiness_poll_seconds)
 
 
 class ManagedProcessAgentAdapter:
