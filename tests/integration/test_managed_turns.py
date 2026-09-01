@@ -228,6 +228,7 @@ class ManagedFixture:
         self.adapter = ManagedProcessAgentAdapter(
             self.sessions, self.launch_profiles, self.client, self.broker,
             AgentActionBroker(self.sessions),
+            planning_capabilities=frozenset({Capability.SANDBOX_SHELL}),
         )
 
     def execute_request(self, *, granted: frozenset[Capability] = frozenset({Capability.WORKSPACE_WRITE}),
@@ -387,6 +388,7 @@ def test_plan_turn_output_validates_as_plan_proposal(managed: ManagedFixture) ->
     plan = PlanProposal.model_validate(result.output)
     assert plan.proposal_id == "plan_managed"
     assert managed.client.requests[0]["purpose"] == "PLAN"
+    assert managed.client.requests[0]["allowed_capabilities"] == ["sandbox.shell"]
 
 
 def test_review_turn_output_validates_as_review_decision(managed: ManagedFixture) -> None:

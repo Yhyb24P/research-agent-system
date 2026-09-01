@@ -285,6 +285,9 @@ def compose_daemon(
             agent_client or HttpxAgentClient(),
             capability_broker,
             action_broker,
+            planning_capabilities=(
+                config.workspace_capabilities & config.user_capabilities
+            ),
         ),
     )
     # A2A is an external execution candidate only.  Its adapter resolves the

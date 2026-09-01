@@ -5,6 +5,7 @@ import io
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import tarfile
 from typing import Protocol
@@ -112,11 +113,23 @@ class GitWorktreeTransport:
         target = Path(planned.transport_handle["worktree_root"])
         if target.exists():
             raise WorkspaceAdmissionError("Git transport target already exists")
-        _git(source_root, "worktree", "add", "--detach", str(target), planned.transport_handle["base_revision"])
+        # Linked worktrees contain an absolute pointer to the source repository's
+        # Git metadata.  That pointer is unusable inside the executor sandbox and
+        # mounting the source metadata would leak authority into the delegation.
+        # A no-hardlink clone keeps the delegated repository self-contained.
+        _git(
+            source_root,
+            "clone",
+            "--no-hardlinks",
+            "--no-checkout",
+            str(source_root.resolve()),
+            str(target),
+        )
         patterns = list(grant.allowed_paths or (".",))
         patterns.extend(f"!{item}" for item in grant.excluded_paths)
         if patterns != ["."]:
             _git(target, "sparse-checkout", "set", "--no-cone", "--", *patterns)
+        _git(target, "checkout", "--detach", planned.transport_handle["base_revision"])
         if grant.access_mode is WorkspaceAccessMode.READ_ONLY:
             self._set_read_only(target, read_only=True)
         return planned
@@ -191,13 +204,10 @@ class GitWorktreeTransport:
 
     def cleanup(self, grant: WorkspaceGrant, provisioned: ProvisionedWorkspace) -> None:
         target = Path(provisioned.transport_handle["worktree_root"])
-        source = Path(provisioned.transport_handle["source_root"])
         if grant.access_mode is WorkspaceAccessMode.READ_ONLY and target.exists():
             self._set_read_only(target, read_only=False)
         if target.exists():
-            _git(source, "worktree", "remove", "--force", str(target))
-        else:
-            _git(source, "worktree", "prune")
+            shutil.rmtree(target)
 
     @staticmethod
     def _set_read_only(root: Path, *, read_only: bool) -> None:

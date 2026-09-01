@@ -36,6 +36,15 @@ _MANAGED_PROMPT = (
     "Process the managed request context supplied on stdin and return only "
     "the JSON response required by that context."
 )
+_CAPABILITY_PARAMETER_CONTRACTS: dict[str, dict[str, object]] = {
+    "sandbox.shell": {"argv": ["/usr/bin/executable", "argument"]},
+    "git.status": {},
+    "git.diff": {},
+    "test.run": {"target": "relative pytest target"},
+    "python.run": {"script": "relative path", "arguments": ["argument"]},
+    "workspace.read": {"path": "relative path"},
+    "workspace.write": {"path": "relative path", "content": "text"},
+}
 _SAFE_ENVIRONMENT = frozenset({
     "HOME",
     "LANG",
@@ -175,15 +184,32 @@ def build_managed_prompt(turn: ManagedAgentTurnRequest) -> str:
         sort_keys=True,
         separators=(",", ":"),
     )
+    capabilities = {item.value for item in turn.allowed_capabilities}
+    granted = turn.payload.get("granted_capabilities")
+    if isinstance(granted, list):
+        capabilities.update(item for item in granted if isinstance(item, str))
+    parameter_contracts = json.dumps(
+        {
+            capability: _CAPABILITY_PARAMETER_CONTRACTS[capability]
+            for capability in sorted(capabilities)
+            if capability in _CAPABILITY_PARAMETER_CONTRACTS
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
     return (
         "You are a managed research Agent. Return exactly one JSON object and no "
         "Markdown or commentary. The object must validate against the supplied "
         "ManagedAgentTurnResponse schema. Never claim controller, approval, policy, "
         "verification, or capability authority. For EXECUTE, request only capabilities "
         "listed in payload.granted_capabilities; use execution.final_claim only when "
-        "the work is complete. For PLAN or REVIEW, place the typed domain result in "
-        "output.\nREQUEST=" + request + "\nRESPONSE_SCHEMA=" + schema
+        "the work is complete. For PLAN, every requested_capabilities value must be "
+        "listed in allowed_capabilities. Refer to the logical workspace as /workspace "
+        "and never emit a host filesystem path. For PLAN or REVIEW, place the typed "
+        "domain result in output.\nREQUEST=" + request + "\nRESPONSE_SCHEMA=" + schema
         + "\nTARGET_OUTPUT_SCHEMA=" + target
+        + "\nCAPABILITY_PARAMETER_CONTRACTS=" + parameter_contracts
     )
 
 

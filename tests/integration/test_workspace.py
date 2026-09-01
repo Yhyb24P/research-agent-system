@@ -190,6 +190,8 @@ def test_git_workspace_delegation_reconciles_to_artifact_then_verifier(tmp_path:
     ))
     provisioned = service.provision("wsg_git", source)
     remote = Path(provisioned.remote_workspace_handle)
+    assert (remote / ".git").is_dir()
+    assert not (source / ".git" / "worktrees").exists()
     assert (remote / "src" / "allowed.txt").read_text() == "before\n"
     assert not (remote / "src" / "private.txt").exists()
 

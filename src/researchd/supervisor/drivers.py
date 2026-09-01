@@ -50,7 +50,7 @@ class ManagedProcessDriver:
         process = subprocess.Popen(
             list(spec.argv),
             cwd=cwd,
-            env={"LANG": "C.UTF-8", "PATH": os.defpath},
+            env=self._environment(),
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -69,6 +69,20 @@ class ManagedProcessDriver:
                 process.kill()
                 process.wait(timeout=1)
             raise
+
+    @staticmethod
+    def _environment() -> dict[str, str]:
+        """Return the fixed non-secret process environment.
+
+        HOME is required by managed CLIs to locate their owner-only profile
+        configuration.  It grants no additional OS access and, unlike copying
+        API-key variables, does not disclose credentials to every PROCESS
+        runtime.
+        """
+        home = Path.home().resolve(strict=True)
+        if not home.is_dir():
+            raise ValueError("process home is not a directory")
+        return {"HOME": str(home), "LANG": "C.UTF-8", "PATH": os.defpath}
 
     def observe(self, external_identity: dict[str, object]) -> ExternalObservation:
         try:

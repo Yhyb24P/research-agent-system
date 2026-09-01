@@ -16,6 +16,7 @@ Post-hoc test: no source changes, no commits.
 """
 
 import json
+import shutil
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
@@ -249,12 +250,9 @@ def test_execute_grant_auto_created_provisioned_and_reused(env: GrantEnv) -> Non
 def test_pending_grant_recovers_via_provision(env: GrantEnv) -> None:
     env.gateway._ensure_execution_workspace(DELEGATION_ID)
     # Simulate a crash that left the durable grant PENDING with the
-    # worktree rolled back: recovery must re-provision, not fail closed.
+    # cloned repository rolled back: recovery must re-provision, not fail closed.
     target = env.transport_root / GRANT_ID
-    subprocess.run(
-        ["git", "-C", str(env.source_root), "worktree", "remove", "--force", str(target)],
-        check=True,
-    )
+    shutil.rmtree(target, ignore_errors=True)
     env.set_grant_state(WorkspaceGrantState.PENDING)
     env.gateway._ensure_execution_workspace(DELEGATION_ID)
     grant = env.grant_row()

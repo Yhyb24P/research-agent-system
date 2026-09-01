@@ -1,5 +1,6 @@
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+import os
 from pathlib import Path
 
 import httpx
@@ -451,3 +452,20 @@ def test_managed_process_driver_rejects_pid_reuse_and_reaps_child(tmp_path: Path
     finally:
         if driver.observe(identity) is ExternalObservation.PRESENT:
             driver.stop(identity)
+
+
+def test_managed_process_environment_exposes_home_but_not_credentials(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("LOCAL_QWEN38_API_KEY", "must-not-cross")
+
+    environment = ManagedProcessDriver._environment()
+
+    assert environment == {
+        "HOME": str(tmp_path.resolve()),
+        "LANG": "C.UTF-8",
+        "PATH": os.defpath,
+    }
+    assert "LOCAL_QWEN38_API_KEY" not in environment

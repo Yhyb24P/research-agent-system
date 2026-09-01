@@ -9,6 +9,7 @@ import pytest
 from researchd.bridge.aweswitch_agent import (
     AweswitchManagedBridge,
     AweswitchProfileError,
+    build_managed_prompt,
     build_aweswitch_environment,
     load_profile_metadata,
 )
@@ -73,6 +74,22 @@ def test_missing_referenced_secret_fails_closed(tmp_path: Path) -> None:
 
     with pytest.raises(AweswitchProfileError, match="QWEN_TEST_SECRET"):
         load_profile_metadata(config, "qw", environ={})
+
+
+def test_execute_prompt_declares_granted_capability_parameter_contracts() -> None:
+    prompt = build_managed_prompt(ManagedAgentTurnRequest(
+        invocation_id="inv_prompt",
+        run_id="run_prompt",
+        purpose=DelegationPurpose.EXECUTE,
+        payload={
+            "objective": "inspect",
+            "prior_results": [],
+            "granted_capabilities": ["sandbox.shell"],
+        },
+    ))
+
+    assert 'CAPABILITY_PARAMETER_CONTRACTS={"sandbox.shell":{"argv":' in prompt
+    assert '"arguments"' not in prompt.split("CAPABILITY_PARAMETER_CONTRACTS=", 1)[1]
 
 
 def test_bridge_validates_outer_cli_json_as_managed_response(

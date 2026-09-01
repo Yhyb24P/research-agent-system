@@ -23,7 +23,7 @@ from researchd.adapters.a2a.sdk_client import OfficialA2AClient
 from researchd.collaboration.action_broker import AgentActionBroker, AgentMessageAction
 from researchd.collaboration.handoff import HandoffProposalAction
 from researchd.collaboration.contracts import AgentHealth, AgentInvocationRequest, AgentInvocationResult, AgentRuntime, EvidenceInvocationInput, ExecuteInvocationInput, PlanInvocationInput, ReviewInvocationInput
-from researchd.domain.enums import AgentAdapterKind, DelegationPurpose, InvocationStatus
+from researchd.domain.enums import AgentAdapterKind, Capability, DelegationPurpose, InvocationStatus
 from researchd.domain.ids import AgentId, AgentRuntimeId
 from researchd.domain.base import DomainModel
 from researchd.executor.capability_broker import CapabilityBroker
@@ -61,6 +61,7 @@ class ManagedAgentTurnRequest(DomainModel):
     purpose: DelegationPurpose
     work_order_id: str | None = None
     attempt_id: str | None = None
+    allowed_capabilities: tuple[Capability, ...] = ()
     payload: dict[str, object]
 
 
@@ -477,12 +478,14 @@ class ManagedProcessAgentAdapter:
         client: HttpAgentClient,
         broker: CapabilityBroker,
         action_broker: AgentActionBroker,
+        planning_capabilities: frozenset[Capability] = frozenset(),
     ) -> None:
         self.sessions = sessions
         self.launch_profiles = launch_profiles
         self.client = client
         self.broker = broker
         self.action_broker = action_broker
+        self.planning_capabilities = planning_capabilities
 
     def _require_live(self, runtime_id: object) -> str:
         profile = self.launch_profiles.resolve_process(str(runtime_id))
@@ -607,6 +610,10 @@ class ManagedProcessAgentAdapter:
                     invocation_id=str(request.invocation_id), run_id=request.run_id,
                     purpose=request.purpose, work_order_id=request.work_order_id,
                     attempt_id=request.attempt_id, payload=payload,
+                    allowed_capabilities=tuple(sorted(
+                        self.planning_capabilities,
+                        key=lambda capability: capability.value,
+                    )),
                 ).model_dump(mode="json"),
             ))
             self._submit_agent_actions(request, response)
