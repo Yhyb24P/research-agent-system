@@ -586,8 +586,9 @@ final `vX.Y.Z` tag maps to `X.Y.Z`. `v1.0.0-rc.81` /
 `1.0.0rc81` at `f7785244acc0687324376806666ead2be26bf478` is an immutable,
 unsigned historical product-candidate snapshot. Its qualification is not
 established and it has no GitHub Release. It must never move or be reused.
-The next frozen candidate uses `v1.0.0-rc.82` / `1.0.0rc82`; its tag freezes
-only that candidate identity, not qualification or release status. See [the
+The current frozen source candidate is `v1.0.0-rc.82` / `1.0.0rc82`; the
+`1.0.0rc83.dev0` Developer Preview derives from it without moving that tag or
+inheriting a qualification claim. See [the
 candidate and release contract](docs/qualification/CANDIDATE_RELEASE_CONTRACT.md).
 
 The repository does not claim universal distributed exactly-once execution or a

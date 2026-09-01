@@ -505,8 +505,9 @@ mode 不匹配或被篡改的 profile 均失败关闭。
 Git tag `vX.Y.Z-rc.N` 必须精确映射到 Python distribution `X.Y.ZrcN`，最终 `vX.Y.Z` tag
 映射到 `X.Y.Z`。`v1.0.0-rc.81` / `1.0.0rc81` 对应
 `f7785244acc0687324376806666ead2be26bf478`，是不可移动、不可复用且未签名的历史
-product-candidate snapshot；其 qualification 尚未建立，也没有 GitHub Release。下一个冻结候选为
-`v1.0.0-rc.82` / `1.0.0rc82`；其 tag 只冻结候选身份，不代表 qualification 或发布状态。详见[候选与发行合同](docs/qualification/CANDIDATE_RELEASE_CONTRACT.md)。
+product-candidate snapshot；其 qualification 尚未建立，也没有 GitHub Release。当前冻结的源码候选为
+`v1.0.0-rc.82` / `1.0.0rc82`；`1.0.0rc83.dev0` Developer Preview 从它派生，既不移动
+该 tag，也不继承 qualification 声明。详见[候选与发行合同](docs/qualification/CANDIDATE_RELEASE_CONTRACT.md)。
 
 项目不承诺普遍意义的分布式 exactly-once，也不提供公开 control/A2A service。正式运行批准仍需要绑定精确 commit 的证据，包括绿色 CI、
 backup/restore 验证、transport 治理和计划中的 soak/acceptance 检查。

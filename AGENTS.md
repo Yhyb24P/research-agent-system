@@ -75,3 +75,12 @@ Product-hardening PH01–PH05 is closed at `83361ba` by exact-head CI
 approval, daily bootstrap/workspace controls, strong daemon identity, and
 packaged explicit migrations. Do not reintroduce grant-bearing public approval
 routes, arbitrary runtime launch input, or legacy command compatibility.
+
+The active `preview/developer-ux` track is a Developer Preview derived from
+the immutable rc.82 source candidate. It adds trusted global setup, managed
+aweswitch-backed planner/coder/reviewer onboarding, an interactive TUI,
+continuous detached projections, schema `0026` Run-scoped Artifact ingress,
+and an immutable-manifest installer. It is not a Production Go claim. Keep
+raw host paths, expanded profile secrets, and file bytes out of Agent identity,
+audit metadata, and command authority; downstream Agents receive only
+policy-admitted Artifact context.

@@ -12,6 +12,17 @@ as architecture/audit history, not as the current implementation status.
 PX09，精确 head CI `33351341328` 全绿。下文按日期记录的 LP01/LP02/LP03 表述
 保留为架构与审计历史，不再表示当前实现状态。
 
+**Developer Preview extension (2026-09-01):** the separate
+`preview/developer-ux` track consumes these frozen authorities and adds the
+one-command client, generated managed-Agent onboarding, interactive terminal
+views, and schema `0026` Run-scoped Artifact ingress. It does not alter the
+launcher authority model and does not upgrade the rc.82 qualification claim.
+
+**Developer Preview 扩展（2026-09-01）：** 独立的
+`preview/developer-ux` 轨道复用上述冻结权威，增加一条命令启动、生成式 managed
+Agent 接入、交互终端视图和 schema `0026` 的 Run 级 Artifact 入口；它不改变
+launcher 权威模型，也不提升 rc.82 的 qualification 声明。
+
 This decision belongs to the post-V1 productization line. It is not part of
 the immutable V1 qualification candidate and must not be used as evidence for
 rc.80.
