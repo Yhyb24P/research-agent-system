@@ -58,7 +58,7 @@ class ParsedCommand:
 
 
 @dataclass
-class _ShellState:
+class ShellState:
     current_agent: str | None = None
     current_workspace: str | None = None
     working_set: list[str] = field(default_factory=list)
@@ -253,7 +253,7 @@ def run_shell(
     print_fn: Callable[[str], None] = print,
 ) -> None:
     """Run the line loop until quit/exit/EOF; errors never kill the shell."""
-    state = _ShellState()
+    session = ShellSession(client, print_fn=print_fn)
     while True:
         try:
             line = input_fn()
@@ -262,23 +262,45 @@ def run_shell(
         line = line.strip()
         if not line:
             continue
+        if not session.execute(line):
+            break
+
+
+class ShellSession:
+    """Execute individual commands while keeping only client-local focus."""
+
+    def __init__(
+        self,
+        client: ShellTransport,
+        *,
+        print_fn: Callable[[str], None] = print,
+    ) -> None:
+        self.client = client
+        self.print_fn = print_fn
+        self.state = ShellState()
+
+    def execute(self, line: str) -> bool:
+        """Execute one line; return false only when the client should close."""
         try:
             command = parse_line(line)
         except ShellParseError as error:
-            print_fn(f"parse error: {error}")
-            continue
+            self.print_fn(f"parse error: {error}")
+            return True
+        if not command.name:
+            return True
         if command.name == "quit":
-            break
+            return False
         try:
-            _execute(command, client, state, print_fn)
+            _execute(command, self.client, self.state, self.print_fn)
         except (TransportError, ShellParseError) as error:
-            print_fn(f"error: {error}")
+            self.print_fn(f"error: {error}")
+        return True
 
 
 def _execute(
     command: ParsedCommand,
     client: ShellTransport,
-    state: _ShellState,
+    state: ShellState,
     print_fn: Callable[[str], None],
 ) -> None:
     if command.name == "status":
@@ -362,8 +384,16 @@ def _execute(
     elif command.name == "task create":
         if state.current_workspace is None:
             if len(command.args) < 2:
-                raise ShellParseError("task create requires a workspace id and an objective")
-            workspace_id, objective = command.args[0], " ".join(command.args[1:])
+                workspaces = client.get("/api/workspaces")
+                if len(workspaces) != 1:
+                    raise ShellParseError(
+                        "select a workspace first with `workspace use <id>`"
+                    )
+                workspace_id = str(workspaces[0]["workspace_id"])
+                state.current_workspace = workspace_id
+                objective = " ".join(command.args)
+            else:
+                workspace_id, objective = command.args[0], " ".join(command.args[1:])
         else:
             workspace_id, objective = state.current_workspace, " ".join(command.args)
         envelope = client.post_command(
@@ -440,6 +470,8 @@ def _execute(
 __all__ = [
     "ParsedCommand",
     "ShellParseError",
+    "ShellSession",
+    "ShellState",
     "ShellTransport",
     "parse_line",
     "resolve_agent_reference",

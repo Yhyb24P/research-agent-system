@@ -4,6 +4,11 @@
 
 [简体中文](README.zh-CN.md)
 
+> **Developer Preview / Early Access.** Trusted boundaries are preserved, but
+> production qualification is still in progress. This is not a Production Go
+> release; see
+> [docs/qualification/CANDIDATE_RELEASE_CONTRACT.md](docs/qualification/CANDIDATE_RELEASE_CONTRACT.md).
+
 Research Agent System is an **Agent Collaboration Plane + Trusted Control
 Plane** for durable, policy-controlled research workflows. The integration
 identity is an Agent. Frameworks, providers, protocols, and execution
@@ -79,7 +84,7 @@ replace `ResearchRun`, `Delegation`, `AgentInvocation`, `Artifact`, or
 - Optional LangGraph Agent runtime. The included `agent_research_critic` pilot
   runs a real compiled graph and returns a structured specialist result while
   researchd remains authoritative.
-- Loopback JSON control API, Browser Control Tower, static TUI renderer, SQLite backup/restore checks,
+- Loopback JSON control API, Browser Control Tower, interactive TUI, SQLite backup/restore checks,
   operational metrics, and lock-derived SBOM generation.
 
 ## Requirements and installation
@@ -104,6 +109,36 @@ uv sync --frozen --extra a2a --extra langgraph-agent
 ```
 
 The extras remain outside the trusted domain/storage/policy core.
+
+## Developer Preview quick start
+
+From the Git project you want the Agents to work on, launch the daily client:
+
+```bash
+uv sync --frozen --extra tui
+uv run research
+```
+
+On first launch, `research` creates an owner-only global configuration,
+initializes the controller, creates the local project workspace through the
+authenticated API, starts `researchd`, and opens the TUI. Repository-local
+configuration files are never discovered implicitly. You can inspect the
+installation without exposing credentials with:
+
+```bash
+uv run research doctor
+uv run research agent profiles
+uv run research agent add planner
+uv run research agent add coder
+uv run research agent add reviewer
+```
+
+When a single supported aweswitch profile is present, `agent add` selects it;
+otherwise pass `--profile aweswitch:<profile>`. The initial bridge supports
+Qwen profiles and validates every response against the managed Agent JSON
+contract. In the TUI, use `/task <objective>`, `/msg @agent <text>`, and
+`/approve <approval-id>`. Closing a TUI or detached console does not stop the
+daemon or an Agent runtime.
 
 ## Initialize and test
 

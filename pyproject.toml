@@ -1,6 +1,6 @@
 [project]
 name = "research-agent-system"
-version = "1.0.0rc82"
+version = "1.0.0rc83.dev0"
 description = "Agent collaboration plane and trusted control plane for research workflows"
 license = "Apache-2.0"
 readme = "README.md"
@@ -29,6 +29,7 @@ tui = [
 
 [project.scripts]
 research = "researchd.client.cli:entrypoint"
+research-aweswitch-agent = "researchd.bridge.aweswitch_agent:entrypoint"
 research-coder-agent = "researchd.pilot.coder_agent:entrypoint"
 researchctl = "researchd.cli.main:entrypoint"
 researchd = "researchd.daemon.cli:entrypoint"

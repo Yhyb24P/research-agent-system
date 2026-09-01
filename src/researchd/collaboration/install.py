@@ -11,6 +11,7 @@ no parallel registry or profile model is introduced.
 from datetime import UTC, datetime
 
 from pydantic import PositiveInt
+from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from researchd.collaboration.agent_definitions import AgentDefinition
@@ -41,6 +42,13 @@ class AgentInstallation(DomainModel):
     definition_sha256: str
     runtimes: tuple[str, ...] = ()
     launch_profile_runtimes: tuple[str, ...] = ()
+
+
+class AgentRemoval(DomainModel):
+    """Receipt for disabling an installed Agent while preserving history."""
+
+    agent_id: AgentId
+    disabled_runtimes: tuple[str, ...] = ()
 
 
 class AgentInstallService:
@@ -74,6 +82,31 @@ class AgentInstallService:
                 str(launch_profile.runtime_id) for launch_profile in definition.launch_profiles
             ),
         )
+
+    def disable(self, agent_id: AgentId) -> AgentRemoval:
+        """Disable an Agent, its runtimes and launch profiles atomically."""
+        now = datetime.now(UTC)
+        with self.sessions.begin() as session:
+            agent = session.get(AgentRecord, str(agent_id))
+            if agent is None:
+                raise ValueError(f"agent does not exist: {agent_id}")
+            runtimes = list(session.scalars(select(AgentRuntimeRecord).where(
+                AgentRuntimeRecord.agent_id == str(agent_id)
+            )))
+            runtime_ids = tuple(sorted(row.runtime_id for row in runtimes))
+            agent.enabled = False
+            agent.version += 1
+            agent.updated_at = now
+            for runtime in runtimes:
+                runtime.enabled = False
+                runtime.version += 1
+                runtime.updated_at = now
+                launch = session.get(RuntimeLaunchProfileRecord, runtime.runtime_id)
+                if launch is not None:
+                    launch.enabled = False
+                    launch.version += 1
+                    launch.updated_at = now
+        return AgentRemoval(agent_id=agent_id, disabled_runtimes=runtime_ids)
 
     def _validate_staged(self, definition: AgentDefinition) -> None:
         AgentRegistryService._validate_profile(definition.profile)
@@ -187,4 +220,4 @@ class AgentInstallService:
         row.updated_at = now
 
 
-__all__ = ["AgentInstallation", "AgentInstallService"]
+__all__ = ["AgentInstallation", "AgentInstallService", "AgentRemoval"]

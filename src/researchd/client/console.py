@@ -40,23 +40,37 @@ def console_entry(
             return 1
     client = ResearchClient(base_url_for(config), load_owner_token(config.state_root))
     try:
-        print("detached research console; Enter/r refreshes, q quits")
-        while True:
-            try:
-                print(_render(client, kind, agent_id=agent_id, run_id=run_id))
-            except TransportError as error:
-                print(f"console refresh failed: {error}")
-            try:
-                command = input().strip().lower()
-            except EOFError:
-                break
-            if command in {"q", "quit", "exit"}:
-                break
-            if command not in {"", "r", "refresh"}:
-                print("Enter/r refreshes; q quits")
+        selected_run = run_id or _select_run(client)
+        print("detached live research console; press Ctrl-C to close this view")
+        print(_render(client, kind, agent_id=agent_id, run_id=selected_run))
+        path = (
+            f"/api/runs/{selected_run}/stream"
+            if selected_run is not None
+            else "/api/system-stream"
+        )
+        after: int | None = None
+        try:
+            while True:
+                for frame in client.stream(path, after=after, follow=True):
+                    if frame.offset is not None:
+                        after = frame.offset
+                    print(_render(client, kind, agent_id=agent_id, run_id=selected_run))
+        except KeyboardInterrupt:
+            pass
+        except TransportError as error:
+            print(f"console stream failed: {error}")
     finally:
         client.close()
     return 0
+
+
+def _select_run(client: ResearchClient) -> str | None:
+    runs = client.get("/api/runs")
+    if not runs:
+        return None
+    active = [item for item in runs if item.get("state") not in {"COMPLETED", "FAILED", "CANCELLED"}]
+    selected = active[-1] if active else runs[-1]
+    return str(selected["run_id"])
 
 
 def _render(

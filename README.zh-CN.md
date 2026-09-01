@@ -4,6 +4,10 @@
 
 [English](README.md)
 
+> **开发者预览 / 早期体验（Developer Preview / Early Access）**：可信边界保持
+> 不变，但生产级资格认证仍在进行中。本版本不是 Production Go 发布；详见
+> [docs/qualification/CANDIDATE_RELEASE_CONTRACT.md](docs/qualification/CANDIDATE_RELEASE_CONTRACT.md)。
+
 Research Agent System 是面向持久化、受策略约束研究流程的 **Agent 协作面 +
 可信控制面**。系统接入的实体是 Agent；框架、provider、协议和运行位置都是
 `AgentRuntime` 的实现细节。
@@ -69,7 +73,7 @@ LangGraph state 都只是适配器或运行时表示，不能取代 `ResearchRun
   replay/follow，以及类型化 cancel/approve/human-decision 命令。
 - 可选 LangGraph Agent runtime。仓库内的 `agent_research_critic` pilot 会运行真实
   compiled graph 并返回结构化 specialist 结果，同时保持 researchd 的权威性。
-- loopback JSON 控制 API、Browser Control Tower、静态 TUI renderer、SQLite backup/restore 检查、运行指标和
+- loopback JSON 控制 API、Browser Control Tower、交互式 TUI、SQLite backup/restore 检查、运行指标和
   基于 lock file 的 SBOM 生成。
 
 ## 环境与安装
@@ -94,6 +98,32 @@ uv sync --frozen --extra a2a --extra langgraph-agent
 ```
 
 这些 extra 不会进入可信 domain/storage/policy 核心。
+
+## Developer Preview 快速启动
+
+进入你希望 Agent 操作的 Git 项目，然后启动日常客户端：
+
+```bash
+uv sync --frozen --extra tui
+uv run research
+```
+
+首次启动时，`research` 会创建仅属主可读写的全局配置，初始化控制器，通过认证 API
+创建本地项目 workspace，启动 `researchd` 并打开 TUI。系统不会隐式信任仓库内的配置
+文件。可用以下命令检查安装并接入 Agent，诊断信息不会回显凭据：
+
+```bash
+uv run research doctor
+uv run research agent profiles
+uv run research agent add planner
+uv run research agent add coder
+uv run research agent add reviewer
+```
+
+如果本机仅发现一个受支持的 aweswitch profile，`agent add` 会自动选择；否则显式传入
+`--profile aweswitch:<profile>`。首个 bridge 支持 Qwen profile，并会按 managed Agent
+JSON 合同校验每次响应。TUI 中可使用 `/task <目标>`、`/msg @agent <消息>` 和
+`/approve <approval-id>`。关闭 TUI 或独立 console 不会停止 daemon 或 Agent runtime。
 
 ## 初始化与测试
 

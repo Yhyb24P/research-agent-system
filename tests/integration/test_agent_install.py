@@ -21,6 +21,7 @@ from researchd.runtime_sessions.contracts import (
 )
 from researchd.runtime_sessions.launch_profiles import RuntimeLaunchProfileService
 from researchd.storage.db import create_sqlite_engine, session_factory
+from researchd.storage.models import AgentRuntimeRecord
 from tests.integration.test_storage import migrate
 
 
@@ -112,6 +113,25 @@ def test_fresh_install_registers_profile_runtime_and_launch_profile(tmp_path: Pa
         LaunchMode.PROCESS, _process_configuration(),
     )
     assert resolved.spec_sha256 == expected_digest
+
+
+def test_disable_preserves_identity_and_disables_runtime_catalog(tmp_path: Path) -> None:
+    sessions, registry, launch_profiles, installer = _services(tmp_path)
+    installer.install(_definition(
+        runtimes=(_process_runtime(),),
+        launch_profiles=(_launch_profile(),),
+    ))
+
+    receipt = installer.disable(AgentId("agent_install"))
+
+    assert receipt.agent_id == AgentId("agent_install")
+    assert receipt.disabled_runtimes == ("runtime_install",)
+    assert registry.get_agent("agent_install").enabled is False
+    with sessions() as session:
+        runtime = session.get(AgentRuntimeRecord, "runtime_install")
+        assert runtime is not None
+        assert runtime.enabled is False
+    assert launch_profiles.get("runtime_install").enabled is False
 
 
 def test_update_install_advances_versions_without_duplicates(tmp_path: Path) -> None:

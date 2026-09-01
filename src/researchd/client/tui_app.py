@@ -8,6 +8,7 @@ the newest non-terminal Run is selected, then the newest Run.
 from __future__ import annotations
 
 import time
+import shlex
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -15,8 +16,9 @@ from textual import work
 from textual.app import App, ComposeResult
 from textual.containers import VerticalScroll
 from textual.worker import get_current_worker
-from textual.widgets import Footer, Header, Static, TabbedContent, TabPane
+from textual.widgets import Footer, Header, Input, Static, TabbedContent, TabPane
 
+from researchd.client.shell import ShellSession
 from researchd.client.transport import ResearchClient, TransportError
 
 
@@ -88,6 +90,8 @@ class ResearchWorkspace(App[None]):
         self.state = TuiProjectionState()
         self._runs: list[dict[str, Any]] = []
         self._agent_views: dict[str, str] = {}
+        self._command_lines: list[str] = []
+        self._shell = ShellSession(client, print_fn=self._capture_command_output)
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -102,6 +106,11 @@ class ResearchWorkspace(App[None]):
                 with TabPane(title, id=f"tab-{pane_id}"):
                     with VerticalScroll():
                         yield Static("Loading…", id=f"view-{pane_id}")
+        yield Static(
+            "Commands: /task <objective> · /msg @agent <text> · /approve <id> · /help",
+            id="command-output",
+        )
+        yield Input(placeholder="Type /help or a research command", id="command-input")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -118,6 +127,77 @@ class ResearchWorkspace(App[None]):
     def action_next_run(self) -> None:
         self.state.cycle_run(self._runs, 1)
         self.refresh_projections()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        line = event.value.strip()
+        event.input.clear()
+        if not line:
+            return
+        if line == "/help":
+            self._capture_command_output(
+                "/task <objective> | /msg @agent <text> | /approve <id> | "
+                "/agent use <id> | /workspace use <id> | /run list"
+            )
+            return
+        translated = self._translate_command(line)
+        if translated is None:
+            return
+        if translated == "quit":
+            self.exit()
+            return
+        if translated.startswith("events watch"):
+            self._capture_command_output("Use the live projections instead of events watch in the TUI.")
+            return
+        self._capture_command_output(f"> {line}")
+        self.execute_command(translated)
+
+    def _translate_command(self, line: str) -> str | None:
+        if not line.startswith("/"):
+            return line
+        body = line[1:].strip()
+        if body.startswith("task "):
+            return f"task create {shlex.quote(body[5:].strip())}"
+        if body.startswith("approve "):
+            return f"approval approve {shlex.quote(body[8:].strip())}"
+        if body.startswith("msg "):
+            run_id = self.state.focused_run_id
+            if run_id is None:
+                self._capture_command_output("No focused run; create a task first.")
+                return None
+            try:
+                tokens = shlex.split(body)
+            except ValueError as error:
+                self._capture_command_output(f"parse error: {error}")
+                return None
+            if len(tokens) < 3 or not tokens[1].startswith("@"):
+                self._capture_command_output("usage: /msg @agent <text>")
+                return None
+            recipient = tokens[1][1:]
+            message = " ".join(tokens[2:])
+            return (
+                f"msg {shlex.quote(run_id)} {shlex.quote(message)} "
+                f"--to {shlex.quote(recipient)}"
+            )
+        return body
+
+    @work(thread=True, group="command")
+    def execute_command(self, line: str) -> None:
+        keep_open = self._shell.execute(line)
+        if not keep_open:
+            self.call_from_thread(self.exit)
+            return
+        self.call_from_thread(self.refresh_projections)
+
+    def _capture_command_output(self, message: str) -> None:
+        def update() -> None:
+            self._command_lines.append(message)
+            del self._command_lines[:-5]
+            self.query_one("#command-output", Static).update("\n".join(self._command_lines))
+
+        try:
+            self.call_from_thread(update)
+        except RuntimeError:
+            update()
 
     @work(thread=True, exclusive=True, group="projection")
     def refresh_projections(self) -> None:

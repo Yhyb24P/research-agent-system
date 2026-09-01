@@ -23,6 +23,7 @@ from researchd.daemon.security import (
     create_control_token,
     load_control_token,
 )
+from researchd.domain.ids import AgentId
 from researchd.daemon.identity import claim as claim_daemon, release as release_daemon
 from researchd.runtime_sessions.launch_profiles import RuntimeLaunchProfileService
 from researchd.storage.db import create_sqlite_engine, session_factory
@@ -38,6 +39,8 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("migrate", help="backup and explicitly upgrade an existing database")
     install = subparsers.add_parser("install-agent", help="install a trusted AgentDefinition locally")
     install.add_argument("definition", type=Path)
+    remove = subparsers.add_parser("remove-agent", help="disable an installed Agent locally")
+    remove.add_argument("agent_id")
     serve = subparsers.add_parser("serve", help="start the loopback control daemon")
     return parser
 
@@ -102,23 +105,32 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"database": str(database), "backup": str(backup), "revision": "head"}, sort_keys=True))
         return 0
 
-    if args.command == "install-agent":
+    if args.command in {"install-agent", "remove-agent"}:
         if _daemon_is_running(config):
-            raise SystemExit("refusing AgentDefinition install while researchd is running")
+            action = "AgentDefinition install" if args.command == "install-agent" else "Agent removal"
+            raise SystemExit(f"refusing {action} while researchd is running")
+        sessions = session_factory(create_sqlite_engine(database))
+        registry = AgentRegistryService(sessions)
+        installer = AgentInstallService(
+            sessions,
+            registry,
+            RuntimeLaunchProfileService(sessions, registry),
+        )
+        if args.command == "remove-agent":
+            try:
+                removal = installer.disable(AgentId(args.agent_id))
+            except ValueError as error:
+                raise SystemExit(str(error)) from error
+            print(json.dumps(removal.model_dump(mode="json"), sort_keys=True))
+            return 0
         try:
             definition = AgentDefinition.model_validate_json(
                 args.definition.read_text(encoding="utf-8"),
             )
         except OSError as error:
             raise SystemExit(f"cannot read AgentDefinition: {args.definition}") from error
-        sessions = session_factory(create_sqlite_engine(database))
-        registry = AgentRegistryService(sessions)
-        receipt = AgentInstallService(
-            sessions,
-            registry,
-            RuntimeLaunchProfileService(sessions, registry),
-        ).install(definition)
-        print(json.dumps(receipt.model_dump(mode="json"), sort_keys=True))
+        installation = installer.install(definition)
+        print(json.dumps(installation.model_dump(mode="json"), sort_keys=True))
         return 0
 
     control_token = load_control_token(config.state_root)
