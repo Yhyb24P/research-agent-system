@@ -8,11 +8,14 @@ and ``agent remove`` only drops an Agent from its local working set.
 """
 
 import json
+import base64
+import mimetypes
 import shlex
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 from uuid import uuid4
+from pathlib import Path
 
 from researchd.client.transport import StreamFrame, TransportError
 
@@ -61,6 +64,7 @@ class ParsedCommand:
 class ShellState:
     current_agent: str | None = None
     current_workspace: str | None = None
+    current_run: str | None = None
     working_set: list[str] = field(default_factory=list)
 
 
@@ -93,6 +97,8 @@ def parse_line(line: str) -> ParsedCommand:
         return _parse_simple_subcommand(head, tokens[1:], {"watch": (0, 1)})
     if head == "msg":
         return _parse_msg(tokens[1:])
+    if head == "attach":
+        return _parse_attach(tokens[1:])
     if head == "handoff":
         return _parse_handoff(tokens[1:])
     if head == "remote":
@@ -217,6 +223,28 @@ def _parse_handoff(tokens: list[str]) -> ParsedCommand:
     if len(positionals) < 2:
         raise ShellParseError(f"handoff {subcommand} requires a proposal id and reason")
     return ParsedCommand(f"handoff {subcommand}", tuple(positionals), options)
+
+
+def _parse_attach(tokens: list[str]) -> ParsedCommand:
+    if not tokens:
+        raise ShellParseError("attach requires a local file")
+    path = tokens[0]
+    options: dict[str, str] = {}
+    index = 1
+    while index < len(tokens):
+        key = tokens[index]
+        if key not in {"--to", "--classification", "--mime", "--message"}:
+            raise ShellParseError(f"unknown attach option: {key}")
+        if index + 1 >= len(tokens):
+            raise ShellParseError(f"option {key} requires a value")
+        options[key[2:]] = tokens[index + 1]
+        index += 2
+    classification = options.get("classification", "PROJECT_PRIVATE")
+    if classification not in _CLASSIFICATIONS:
+        raise ShellParseError(
+            "classification must be one of: " + ", ".join(_CLASSIFICATIONS)
+        )
+    return ParsedCommand("attach", (path,), options)
 
 
 def _require_arity(name: str, rest: list[str], expected: int) -> None:
@@ -400,6 +428,9 @@ def _execute(
             "/api/runs",
             {"workspace_id": workspace_id, "objective": objective},
         )
+        resource = envelope.get("resource")
+        if isinstance(resource, dict) and isinstance(resource.get("run_id"), str):
+            state.current_run = resource["run_id"]
         print_fn(f"{envelope['status']} {envelope['command_id']}")
     elif command.name == "task cancel":
         envelope = client.post_command(f"/api/runs/{command.args[0]}/cancel", {})
@@ -414,7 +445,9 @@ def _execute(
             "body": body,
         }
         if "to" in command.options:
-            payload["recipient_agent_id"] = command.options["to"]
+            reference = command.options["to"].removeprefix("@")
+            recipient = resolve_agent_reference(client.get("/api/agents"), reference)
+            payload["recipient_agent_id"] = recipient["agent_id"]
         if "classification" in command.options:
             payload["classification"] = command.options["classification"]
         if "reply-to" in command.options:
@@ -425,6 +458,46 @@ def _execute(
             payload["invocation_id"] = command.options["invocation"]
         envelope = client.post_command("/api/collaboration-messages", payload)
         print_fn(f"{envelope['status']} {envelope['command_id']}")
+    elif command.name == "attach":
+        attachment_run_id = state.current_run or _select_current_run(client)
+        if attachment_run_id is None:
+            raise ShellParseError("attach requires a current Run; create a task first")
+        supplied = Path(command.args[0]).expanduser()
+        try:
+            attachment_path = supplied.resolve(strict=True)
+        except OSError as error:
+            raise ShellParseError("attachment file was not found") from error
+        if not attachment_path.is_file():
+            raise ShellParseError("attachment path must be a regular file")
+        data = attachment_path.read_bytes()
+        recipient_agent_id = None
+        if "to" in command.options:
+            reference = command.options["to"].removeprefix("@")
+            recipient = resolve_agent_reference(client.get("/api/agents"), reference)
+            recipient_agent_id = str(recipient["agent_id"])
+        mime_type = command.options.get("mime") or mimetypes.guess_type(
+            attachment_path.name,
+        )[0]
+        payload = {
+            "source_name": attachment_path.name,
+            "content_base64": base64.b64encode(data).decode("ascii"),
+            "mime_type": mime_type or "application/octet-stream",
+            "classification": command.options.get(
+                "classification", "PROJECT_PRIVATE",
+            ),
+        }
+        if recipient_agent_id is not None:
+            payload["recipient_agent_id"] = recipient_agent_id
+        if "message" in command.options:
+            payload["message_id"] = command.options["message"]
+        attached = client.post_command(
+            f"/api/runs/{attachment_run_id}/attachments", payload,
+        )
+        state.current_run = attachment_run_id
+        print_fn(
+            f"attached {attached['artifact_id']} to {attachment_run_id} "
+            f"as {attached['attachment_id']}"
+        )
     elif command.name == "handoff list":
         params = {"run": command.args[0]} if command.args else None
         proposals = client.get("/api/handoffs", params=params)
@@ -449,12 +522,12 @@ def _execute(
         print_fn(f"{envelope['status']} {envelope['command_id']}")
     elif command.name == "events watch":
         target = command.args[0] if command.args else None
-        path = f"/api/runs/{target}/stream" if target else "/api/system-stream"
-        print_fn(f"watching {path}; press Ctrl-C to stop")
+        stream_path = f"/api/runs/{target}/stream" if target else "/api/system-stream"
+        print_fn(f"watching {stream_path}; press Ctrl-C to stop")
         after: int | None = None
         try:
             while True:
-                for frame in client.stream(path, after=after, follow=True):
+                for frame in client.stream(stream_path, after=after, follow=True):
                     print_fn(f"[{frame.offset}] {json.dumps(frame.data, sort_keys=True)}")
                     if frame.offset is not None:
                         after = frame.offset
@@ -465,6 +538,19 @@ def _execute(
             f"/api/approvals/{command.args[0]}/approve",
         )
         print_fn(f"{envelope['status']} {envelope['command_id']}")
+
+
+def _select_current_run(client: ShellTransport) -> str | None:
+    runs = client.get("/api/runs")
+    if not runs:
+        return None
+    active = [
+        item
+        for item in runs
+        if item.get("state") not in {"COMPLETED", "FAILED", "CANCELLED"}
+    ]
+    selected = active[-1] if active else runs[-1]
+    return str(selected["run_id"])
 
 
 __all__ = [

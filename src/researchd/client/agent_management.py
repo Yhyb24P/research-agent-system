@@ -274,6 +274,53 @@ def add_aweswitch_agent(
     return 0
 
 
+def install_aweswitch_agents_for_setup(
+    config_path: Path,
+    roles: tuple[PreviewRole, ...],
+    profile_ref: str,
+    *,
+    run_fn: Callable[..., subprocess.CompletedProcess[Any]] = subprocess.run,
+) -> None:
+    """Install generated definitions while first-run researchd is still stopped."""
+    prefix = "aweswitch:"
+    if not profile_ref.startswith(prefix) or len(profile_ref) == len(prefix):
+        raise ValueError("profile must use aweswitch:<profile>")
+    profile = profile_ref.removeprefix(prefix)
+    executable_name = shutil.which("aweswitch")
+    if executable_name is None:
+        raise ValueError("aweswitch is not installed")
+    aweswitch = Path(executable_name).resolve(strict=True)
+    profile_config = default_aweswitch_config().resolve(strict=True)
+    load_profile_metadata(profile_config, profile)
+    project_root = _project_root(config_path)
+    config = load_client_config(config_path)
+    config.state_root.mkdir(parents=True, exist_ok=True)
+    for role in roles:
+        definition = build_aweswitch_definition(
+            role,
+            profile=profile,
+            project_root=project_root,
+            aweswitch=aweswitch,
+            aweswitch_config=profile_config,
+        )
+        descriptor, name = tempfile.mkstemp(
+            prefix=f"definition-{role}-", suffix=".json", dir=config.state_root,
+        )
+        definition_path = Path(name)
+        try:
+            os.chmod(definition_path, 0o600)
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                handle.write(definition.model_dump_json(indent=2))
+                handle.write("\n")
+            completed = run_fn(researchd_argv(
+                config_path, "install-agent", str(definition_path),
+            ))
+            if completed.returncode != 0:
+                raise RuntimeError(f"failed to install {role} AgentDefinition")
+        finally:
+            definition_path.unlink(missing_ok=True)
+
+
 def remove_agent(
     config_path: Path,
     role: PreviewRole,
@@ -319,5 +366,6 @@ __all__ = [
     "default_profile_ref",
     "discover_aweswitch_profiles",
     "list_agents",
+    "install_aweswitch_agents_for_setup",
     "remove_agent",
 ]

@@ -1,6 +1,5 @@
 """Detached, projection-only terminal clients for collaboration workspaces."""
 
-import json
 from pathlib import Path
 from typing import Literal
 
@@ -82,26 +81,77 @@ def _render(
 ) -> str:
     if kind == "collab":
         if run_id is None:
-            payload = {"runs": client.get("/api/runs"), "handoffs": client.get("/api/handoffs")}
+            runs = client.get("/api/runs")
+            handoffs = client.get("/api/handoffs")
+            lines = ["Collaboration · all Runs"]
+            lines.extend(
+                f"- {item['run_id']}  {item['state']}" for item in runs
+            )
+            lines.extend(
+                f"- handoff {item['proposal_id']}  {item['status']}"
+                for item in handoffs
+            )
         else:
-            payload = {
-                "run": client.get(f"/api/runs/{run_id}"),
-                "messages": client.get(f"/api/runs/{run_id}/messages")["messages"],
-                "handoffs": client.get("/api/handoffs", params={"run": run_id}),
-            }
+            run = client.get(f"/api/runs/{run_id}")
+            messages = client.get(f"/api/runs/{run_id}/messages")["messages"]
+            handoffs = client.get("/api/handoffs", params={"run": run_id})
+            lines = [f"Collaboration · {run_id} · {run['state']}", "Messages"]
+            lines.extend(
+                f"- {item['sender_actor_id']} → "
+                f"{item.get('recipient_agent_id') or 'all'}: "
+                f"{'[redacted]' if item['body_redacted'] else item['body']}"
+                for item in messages
+            )
+            lines.append("Handoffs")
+            lines.extend(
+                f"- {item['proposal_id']}  {item['status']}  {item['requested_mode']}"
+                for item in handoffs
+            )
     elif kind == "agent":
         assert agent_id is not None
         payload = client.get(
             f"/api/agents/{agent_id}/console",
             params={"run": run_id} if run_id else None,
         )
+        agent = payload["agent"]
+        lines = [
+            f"Agent · {agent['display_name']} [{agent['agent_id']}]",
+            f"Run · {run_id or 'all'}",
+            "Runtime sessions",
+        ]
+        lines.extend(
+            f"- {item['runtime_id']}  {item['supervisor_state']}"
+            for item in payload["runtime_sessions"]
+        )
+        lines.append("Invocations")
+        lines.extend(
+            f"- {item['invocation_id']}  {item['purpose']}  {item['status']}"
+            for item in payload["invocations"]
+        )
+        lines.append("Artifacts")
+        lines.extend(
+            f"- {item['artifact_id']}  {item['classification']}"
+            for item in payload["artifacts"]
+        )
     else:
-        payload = {
-            "health": client.health(),
-            "runtime_sessions": client.get("/api/runtime-sessions"),
-            "daemon_commands": client.get("/api/daemon-commands"),
-        }
-    return json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False)
+        health = client.health()
+        sessions = client.get("/api/runtime-sessions")
+        commands = client.get("/api/daemon-commands")
+        lines = [
+            f"System · daemon {health.get('state', 'unknown')} · "
+            f"ready={health.get('ready', False)}",
+            "Runtime sessions",
+        ]
+        lines.extend(
+            f"- {item['runtime_session_id']}  {item['supervisor_state']}"
+            for item in sessions
+        )
+        lines.append("Recent commands")
+        lines.extend(
+            f"- {item['command_id']}  {item['command_type']}  {item['status']}"
+            for item in commands[-20:]
+        )
+    return "\n".join(lines)
 
 
 __all__ = ["ConsoleKind", "console_entry"]

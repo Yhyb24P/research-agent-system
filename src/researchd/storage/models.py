@@ -505,6 +505,35 @@ class ArtifactRecord(Base):
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
 
 
+class RunArtifactAttachmentRecord(Base):
+    """Run-scoped reference to immutable bytes admitted by local HUMAN ingress."""
+
+    __tablename__ = "run_artifact_attachments"
+    __table_args__ = (
+        Index("ix_run_artifact_attachments_run_created", "run_id", "created_at"),
+        Index("ix_run_artifact_attachments_artifact", "artifact_id"),
+        Index("ix_run_artifact_attachments_recipient", "recipient_agent_id"),
+    )
+    attachment_id: Mapped[str] = mapped_column(String(96), primary_key=True)
+    command_id: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    run_id: Mapped[str] = mapped_column(
+        ForeignKey("research_runs.run_id"), nullable=False,
+    )
+    artifact_id: Mapped[str] = mapped_column(
+        ForeignKey("artifacts.artifact_id"), nullable=False,
+    )
+    message_id: Mapped[str | None] = mapped_column(
+        ForeignKey("collaboration_messages.message_id"),
+    )
+    recipient_agent_id: Mapped[str | None] = mapped_column(
+        ForeignKey("agents.agent_id"),
+    )
+    source_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    actor_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    actor_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+
+
 class AuditEventRecord(Base):
     __tablename__ = "audit_events"
     __table_args__ = (

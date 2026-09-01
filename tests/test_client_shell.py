@@ -1,6 +1,7 @@
 """PX02-04: research shell parser and first command batch."""
 
 import re
+import base64
 from typing import Any
 
 import pytest
@@ -69,6 +70,11 @@ class _FakeClient:
         command_id: str | None = None,
     ) -> dict[str, Any]:
         self.posts.append((path, dict(payload or {})))
+        if path.endswith("/attachments"):
+            return {
+                "attachment_id": "attach_fake",
+                "artifact_id": "artifact://sha256/fake",
+            }
         return {"status": "ACCEPTED", "command_id": command_id or "cmd_fake"}
 
     def stream(self, path: str, **kwargs: Any) -> Any:
@@ -195,6 +201,32 @@ def test_parse_msg_with_options() -> None:
         parse_line("msg run_one body --to")
     with pytest.raises(ShellParseError):
         parse_line("msg run_one body --classification BOGUS")
+
+
+def test_parse_and_execute_run_scoped_attachment(tmp_path: Any) -> None:
+    note = tmp_path / "note.md"
+    note.write_text("preview", encoding="utf-8")
+    parsed = parse_line(
+        f"attach {note} --to @alpha --classification LOCAL_ONLY"
+    )
+    assert parsed.name == "attach"
+    client = _FakeClient()
+
+    output = _drive([
+        f"attach {note} --to @alpha --classification LOCAL_ONLY",
+        "quit",
+    ], client)
+
+    path, payload = client.posts[0]
+    assert path == "/api/runs/run_one/attachments"
+    assert payload["source_name"] == "note.md"
+    assert payload["recipient_agent_id"] == "agent_alpha"
+    assert payload["classification"] == "LOCAL_ONLY"
+    assert base64.b64decode(payload["content_base64"]) == b"preview"
+    assert str(tmp_path) not in str(payload)
+    assert output == [
+        "attached artifact://sha256/fake to run_one as attach_fake"
+    ]
 
 
 def test_parse_events_watch() -> None:

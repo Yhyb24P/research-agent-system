@@ -10,7 +10,7 @@ import subprocess
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import ValidationError
 
@@ -38,6 +38,9 @@ class SetupResult:
 
     config_path: Path
     project_root: Path
+
+
+SetupRole = Literal["planner", "coder", "reviewer"]
 
 
 def discover_git_root(start: Path) -> Path | None:
@@ -79,6 +82,8 @@ def setup_payload(
             },
         },
         "job_commands": {},
+        "workspace_capabilities": ["sandbox.shell"],
+        "user_capabilities": ["sandbox.shell"],
         "host": "127.0.0.1",
         "port": port,
     }
@@ -113,8 +118,12 @@ def run_setup(
     print_fn: Callable[[str], None] = print,
     run_fn: Callable[..., subprocess.CompletedProcess[Any]] = subprocess.run,
     initialize_workspace_fn: Callable[[Path], None] | None = None,
+    agent_roles: tuple[SetupRole, ...] | None = None,
+    profile_ref: str | None = None,
+    install_agents_fn: Callable[[Path, tuple[SetupRole, ...], str], None] | None = None,
 ) -> SetupResult | None:
     """Create and initialize a fresh trusted local installation profile."""
+    print_fn("Research Developer Preview")
     env = os.environ if environ is None else environ
     base_home = Path.home() if home is None else home
     start = Path.cwd() if cwd is None else cwd
@@ -164,6 +173,43 @@ def run_setup(
         if completed.returncode != 0:
             print_fn(f"researchd {command} failed with exit code {completed.returncode}")
             return None
+    selected_roles = agent_roles
+    if selected_roles is None and not assume_yes:
+        from researchd.client.agent_management import default_profile_ref
+
+        discovered_profile = profile_ref or default_profile_ref()
+        if discovered_profile is not None:
+            answer = input_fn(
+                "Add planner, coder and reviewer using "
+                f"{discovered_profile}? [Y/n] "
+            ).strip().lower()
+            if answer in {"", "y", "yes"}:
+                selected_roles = ("planner", "coder", "reviewer")
+                profile_ref = discovered_profile
+    if selected_roles:
+        from researchd.client.agent_management import (
+            default_profile_ref,
+            install_aweswitch_agents_for_setup,
+        )
+
+        selected_profile = profile_ref or default_profile_ref()
+        if selected_profile is None:
+            print_fn(
+                "no unambiguous supported aweswitch profile; "
+                "setup will continue without Agents"
+            )
+        else:
+            installer = install_agents_fn or install_aweswitch_agents_for_setup
+            try:
+                installer(target_config, selected_roles, selected_profile)
+                print_fn(
+                    "installed Preview Agents: " + ", ".join(selected_roles)
+                )
+            except (OSError, RuntimeError, ValueError) as error:
+                print_fn(
+                    "Agent installation was skipped after a safe failure: "
+                    f"{type(error).__name__}"
+                )
     initializer = (
         initialize_default_workspace
         if initialize_workspace_fn is None
@@ -190,12 +236,14 @@ def initialize_default_workspace(config_path: Path) -> None:
     client = ResearchClient(base_url_for(config), load_owner_token(config.state_root))
     try:
         workspaces = client.get("/api/workspaces")
-        if any(item.get("workspace_id") == "workspace_local" for item in workspaces):
-            return
-        client.post_command(
-            "/api/workspaces",
-            {"workspace_id": "workspace_local", "name": "Local project"},
-        )
+        if not any(item.get("workspace_id") == "workspace_local" for item in workspaces):
+            client.post_command(
+                "/api/workspaces",
+                {"workspace_id": "workspace_local", "name": "Local project"},
+            )
+        for agent in client.get("/api/agents"):
+            if agent.get("enabled") is True:
+                client.post_command(f"/api/agents/{agent['agent_id']}/start", {})
     finally:
         client.close()
 

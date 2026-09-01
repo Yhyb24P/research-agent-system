@@ -101,6 +101,29 @@ uv sync --frozen --extra a2a --extra langgraph-agent
 
 ## Developer Preview 快速启动
 
+发布渠道只允许从不可变 HTTPS manifest 安装：
+
+```bash
+curl -fsSL https://<product-domain>/install-preview.sh | \
+  sh -s -- --manifest https://<product-domain>/<release>/preview-manifest.json
+```
+
+安装器会验证 wheel SHA-256，创建版本化的用户自有环境，并且只暴露
+`~/.local/bin/research`。可变分支、非 HTTPS 工件、非 Preview manifest 或已存在的安装
+目标都会被拒绝。manifest 合同示例见
+[`examples/preview_install_manifest.example.json`](examples/preview_install_manifest.example.json)。
+发布操作者只能从已提交且 tracked 工作树干净的版本生成正式 manifest：
+
+```bash
+uv build
+uv run python scripts/preview_manifest.py \
+  --wheel dist/<preview-wheel>.whl \
+  --wheel-url https://<product-domain>/<release>/<preview-wheel>.whl \
+  --source-candidate-commit ca67f55acf95afd114e5af3059bd224ce45adf29 \
+  --source-candidate-tag v1.0.0-rc.82 \
+  --output dist/preview-manifest.json
+```
+
 进入你希望 Agent 操作的 Git 项目，然后启动日常客户端：
 
 ```bash
@@ -123,7 +146,9 @@ uv run research agent add reviewer
 如果本机仅发现一个受支持的 aweswitch profile，`agent add` 会自动选择；否则显式传入
 `--profile aweswitch:<profile>`。首个 bridge 支持 Qwen profile，并会按 managed Agent
 JSON 合同校验每次响应。TUI 中可使用 `/task <目标>`、`/msg @agent <消息>` 和
-`/approve <approval-id>`。关闭 TUI 或独立 console 不会停止 daemon 或 Agent runtime。
+`/attach <文件> [--to @agent]`、`/approve <approval-id>`。附件内容有大小上限和明确
+分类，经内容寻址后关联到当前 Run；Agent 只能取得策略允许的 Artifact 上下文，绝不会
+收到宿主绝对路径。关闭 TUI 或独立 console 不会停止 daemon 或 Agent runtime。
 
 ## 初始化与测试
 
@@ -197,7 +222,7 @@ client 覆盖初始化、daemon 的 status/stop/restart、以 workspace 为焦�
 可分离的投影 console 与 Browser Control Tower。
 
 嵌入式 composition 必须注册可信服务并使用 `build_startup_barrier(...)`。该屏障先验证
-migration `0025` 和实时 DB/CAS 状态，再按冻结顺序调用已有 workspace、worktree、
+migration `0026` 和实时 DB/CAS 状态，再按冻结顺序调用已有 workspace、worktree、
 RuntimeSession、job 和 invocation 恢复路径。任一阶段失败或跳过都会让
 `ResearchDaemon` 保持 non-ready；调用方不能用 free-text 或直接 SQL mutation 绕过。
 

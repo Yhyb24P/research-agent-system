@@ -112,6 +112,30 @@ The extras remain outside the trusted domain/storage/policy core.
 
 ## Developer Preview quick start
 
+The publication channel installs only from an immutable HTTPS manifest:
+
+```bash
+curl -fsSL https://<product-domain>/install-preview.sh | \
+  sh -s -- --manifest https://<product-domain>/<release>/preview-manifest.json
+```
+
+The installer verifies the wheel SHA-256, creates a versioned user-owned
+environment, and exposes only `~/.local/bin/research`. It refuses mutable
+branches, non-HTTPS artifacts, non-Preview manifests, and existing install
+targets. The manifest contract is illustrated in
+[`examples/preview_install_manifest.example.json`](examples/preview_install_manifest.example.json).
+Release operators generate the real manifest only from a clean committed tree:
+
+```bash
+uv build
+uv run python scripts/preview_manifest.py \
+  --wheel dist/<preview-wheel>.whl \
+  --wheel-url https://<product-domain>/<release>/<preview-wheel>.whl \
+  --source-candidate-commit ca67f55acf95afd114e5af3059bd224ce45adf29 \
+  --source-candidate-tag v1.0.0-rc.82 \
+  --output dist/preview-manifest.json
+```
+
 From the Git project you want the Agents to work on, launch the daily client:
 
 ```bash
@@ -137,8 +161,10 @@ When a single supported aweswitch profile is present, `agent add` selects it;
 otherwise pass `--profile aweswitch:<profile>`. The initial bridge supports
 Qwen profiles and validates every response against the managed Agent JSON
 contract. In the TUI, use `/task <objective>`, `/msg @agent <text>`, and
-`/approve <approval-id>`. Closing a TUI or detached console does not stop the
-daemon or an Agent runtime.
+`/attach <file> [--to @agent]`, and `/approve <approval-id>`. Attachment bytes
+are bounded, classified, content-addressed and associated with the focused Run;
+Agents receive only policy-admitted Artifact context, never the host path.
+Closing a TUI or detached console does not stop the daemon or an Agent runtime.
 
 ## Initialize and test
 
@@ -219,7 +245,7 @@ daemon status/stop/restart, an interactive workspace-focused shell, detached
 projection consoles, and the Browser Control Tower.
 
 An embedding composition must register its trusted services and use
-`build_startup_barrier(...)`. The barrier verifies migration `0025` and live
+`build_startup_barrier(...)`. The barrier verifies migration `0026` and live
 DB/CAS state, then invokes the existing workspace, worktree, RuntimeSession,
 job, and invocation recovery paths in the frozen order. A failed or skipped
 phase leaves `ResearchDaemon` non-ready; callers cannot bypass that state with

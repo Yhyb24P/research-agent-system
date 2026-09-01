@@ -24,7 +24,7 @@ def tui_entry(config_path: Path) -> int:
             return 1
     client = ResearchClient(base_url_for(config), load_owner_token(config.state_root))
     try:
-        run_tui(client)
+        run_tui(client, config_path=config_path)
     finally:
         client.close()
     return 0

@@ -85,6 +85,23 @@ class ExternalCollaborationMessageSendRequest(ExternalCommandRequest):
     ] = "PROJECT_PRIVATE"
 
 
+class ExternalArtifactIngressRequest(ExternalCommandRequest):
+    """Bounded local bytes; host paths and actor identity are never accepted."""
+
+    source_name: str = Field(min_length=1, max_length=255)
+    content_base64: str = Field(max_length=5_592_408)
+    mime_type: str = Field(min_length=1, max_length=256)
+    classification: Literal[
+        "PUBLIC", "CLOUD_SAFE", "PROJECT_PRIVATE", "LOCAL_ONLY", "SECRET"
+    ] = "PROJECT_PRIVATE"
+    message_id: str | None = Field(
+        default=None, pattern=r"^msg_[A-Za-z0-9][A-Za-z0-9_-]*$"
+    )
+    recipient_agent_id: str | None = Field(
+        default=None, pattern=r"^agent_[A-Za-z0-9][A-Za-z0-9_-]*$"
+    )
+
+
 class ExternalHandoffDecisionRequest(ExternalCommandRequest):
     decision: Literal["accept", "reject"]
     reason: str = Field(min_length=1, max_length=16_384)
@@ -284,6 +301,7 @@ __all__ = [
     "DaemonCommandResolveCommand",
     "DaemonCommandResult",
     "ExternalBackupCreateRequest",
+    "ExternalArtifactIngressRequest",
     "ExternalApprovalApproveRequest",
     "ExternalBackupVerifyRequest",
     "ExternalCommandRequest",

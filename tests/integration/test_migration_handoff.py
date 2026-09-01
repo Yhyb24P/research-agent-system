@@ -49,12 +49,13 @@ def test_upgrade_0024_to_0025_adds_resolution_columns(tmp_path: Path) -> None:
     columns = _column_names(database, "handoff_proposals")
     assert "resolution_entity_type" in columns
     assert "resolution_entity_id" in columns
+    command.upgrade(config, "head")
     # The head is clean against the models (no autogenerate drift).
     command.check(config)
 
 
-def test_daemon_schema_gate_accepts_only_0025(tmp_path: Path) -> None:
-    assert EXPECTED_SCHEMA_REVISION == "0025"
+def test_daemon_schema_gate_accepts_only_current_head(tmp_path: Path) -> None:
+    assert EXPECTED_SCHEMA_REVISION == "0026"
 
     head_db = tmp_path / "head.db"
     command.upgrade(_config(head_db), "head")
@@ -89,7 +90,7 @@ def test_backup_restore_round_trip_preserves_handoff_data(tmp_path: Path) -> Non
         database, artifact_root, snapshot,
         candidate_commit=CANDIDATE_COMMIT, candidate_tag=CANDIDATE_TAG,
     )
-    assert manifest.schema_revision == "0025"
+    assert manifest.schema_revision == "0026"
 
     restored_db = tmp_path / "restored.db"
     restored_artifacts = tmp_path / "restored-artifacts"

@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-BACKUP_FORMAT_VERSION = 3
+BACKUP_FORMAT_VERSION = 4
 
 _COMMIT_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 _TAG_PATTERN = re.compile(r"^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9A-Za-z.-]+$")
@@ -28,7 +28,7 @@ _MANIFEST_KEYS = {
     "created_at_utc",
 }
 
-# Every authoritative table created by migrations 0001-0025 (alembic_version
+# Every authoritative table created by migrations 0001-0026 (alembic_version
 # excluded). A migration that changes this set must update the restore gate.
 AUTHORITATIVE_TABLES: tuple[str, ...] = (
     "agent_interactions",
@@ -59,6 +59,7 @@ AUTHORITATIVE_TABLES: tuple[str, ...] = (
     "policy_decisions",
     "research_runs",
     "review_decisions",
+    "run_artifact_attachments",
     "runtime_session_commands",
     "runtime_launch_profiles",
     "runtime_sessions",

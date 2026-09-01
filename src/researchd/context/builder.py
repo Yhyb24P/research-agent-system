@@ -1,4 +1,5 @@
 from collections.abc import Sequence
+import base64
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
@@ -174,17 +175,21 @@ class ContextBuilder:
         return list(session.scalars(query).all())
 
     def _build_item(self, record: ArtifactRecord) -> CloudArtifactItem:
-        if record.mime_type not in self.text_mime_types:
-            raise EgressDenied(f"artifact MIME type is not eligible for inline cloud context: {record.mime_type}")
         content = self.store.read(record.artifact_id)
         if len(content) > self.max_artifact_bytes:
-            raise EgressDenied("artifact exceeds cloud context byte limit")
-        try:
-            text = content.decode("utf-8")
-        except UnicodeDecodeError as error:
-            raise EgressDenied("artifact is not valid UTF-8 text") from error
+            rendered = (
+                f"[content omitted: {len(content)} bytes exceeds the "
+                f"{self.max_artifact_bytes}-byte inline context limit]"
+            )
+        elif record.mime_type in self.text_mime_types:
+            try:
+                rendered = self.redactor.redact(content.decode("utf-8"))
+            except UnicodeDecodeError:
+                rendered = "base64:" + base64.b64encode(content).decode("ascii")
+        else:
+            rendered = "base64:" + base64.b64encode(content).decode("ascii")
         return CloudArtifactItem(
             artifact_id=record.artifact_id, sha256=record.sha256,
             mime_type=record.mime_type, artifact_type=record.artifact_type,
-            classification=record.classification, content=self.redactor.redact(text),
+            classification=record.classification, content=rendered,
         )

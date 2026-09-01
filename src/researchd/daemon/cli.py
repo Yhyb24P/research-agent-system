@@ -144,6 +144,7 @@ def main(argv: list[str] | None = None) -> int:
         host=config.host,
         port=config.port,
         control_token=control_token,
+        artifact_attachments=application.artifact_attachments,
     )
     try:
         server.serve_forever()

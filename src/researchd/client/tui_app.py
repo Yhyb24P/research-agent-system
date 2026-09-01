@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import time
 import shlex
+from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -77,6 +78,9 @@ class TuiProjectionState:
 class ResearchWorkspace(App[None]):
     """A disposable projection/control client for the local daemon."""
 
+    TITLE = "Research Developer Preview"
+    SUB_TITLE = "Agent collaboration workspace"
+
     BINDINGS = [
         ("r", "refresh", "Refresh"),
         ("[", "previous_run", "Previous run"),
@@ -84,9 +88,15 @@ class ResearchWorkspace(App[None]):
         ("q", "quit", "Quit"),
     ]
 
-    def __init__(self, client: ResearchClient) -> None:
+    def __init__(
+        self,
+        client: ResearchClient,
+        *,
+        config_path: Path | None = None,
+    ) -> None:
         super().__init__()
         self.client = client
+        self.config_path = config_path
         self.state = TuiProjectionState()
         self._runs: list[dict[str, Any]] = []
         self._agent_views: dict[str, str] = {}
@@ -107,7 +117,7 @@ class ResearchWorkspace(App[None]):
                     with VerticalScroll():
                         yield Static("Loading…", id=f"view-{pane_id}")
         yield Static(
-            "Commands: /task <objective> · /msg @agent <text> · /approve <id> · /help",
+            "Commands: /task <objective> · /msg @agent <text> · /attach <file> · /approve <id> · /help",
             id="command-output",
         )
         yield Input(placeholder="Type /help or a research command", id="command-input")
@@ -135,9 +145,12 @@ class ResearchWorkspace(App[None]):
             return
         if line == "/help":
             self._capture_command_output(
-                "/task <objective> | /msg @agent <text> | /approve <id> | "
+                "/task <objective> | /msg @agent <text> | /attach <file> | /approve <id> | "
                 "/agent use <id> | /workspace use <id> | /run list"
             )
+            return
+        if line.startswith(("/agent add ", "/agent refresh ", "/agent remove ")):
+            self.manage_agent(line)
             return
         translated = self._translate_command(line)
         if translated is None:
@@ -186,6 +199,55 @@ class ResearchWorkspace(App[None]):
         if not keep_open:
             self.call_from_thread(self.exit)
             return
+        self.call_from_thread(self.refresh_projections)
+
+    @work(thread=True, exclusive=True, group="agent-management")
+    def manage_agent(self, line: str) -> None:
+        if self.config_path is None:
+            self._capture_command_output("Agent catalog management needs a trusted config path.")
+            return
+        try:
+            tokens = shlex.split(line[1:])
+        except ValueError as error:
+            self._capture_command_output(f"parse error: {error}")
+            return
+        if len(tokens) < 3 or tokens[0] != "agent":
+            self._capture_command_output("usage: /agent add|refresh|remove <role>")
+            return
+        action, role = tokens[1], tokens[2]
+        if role not in {"planner", "coder", "reviewer"}:
+            self._capture_command_output("Agent role must be planner, coder, or reviewer.")
+            return
+        from typing import cast
+
+        from researchd.client.agent_management import (
+            PreviewRole,
+            add_aweswitch_agent,
+            default_profile_ref,
+            remove_agent,
+        )
+
+        preview_role = cast(PreviewRole, role)
+        output = self._capture_command_output
+        if action == "remove":
+            if len(tokens) != 3:
+                output("usage: /agent remove <role>")
+                return
+            remove_agent(self.config_path, preview_role, print_fn=output)
+        else:
+            profile = None
+            if len(tokens) == 5 and tokens[3] == "--profile":
+                profile = tokens[4]
+            elif len(tokens) != 3:
+                output(f"usage: /agent {action} <role> [--profile aweswitch:<profile>]")
+                return
+            selected = profile or default_profile_ref()
+            if selected is None:
+                output("Select a supported profile with --profile aweswitch:<profile>.")
+                return
+            add_aweswitch_agent(
+                self.config_path, preview_role, selected, print_fn=output,
+            )
         self.call_from_thread(self.refresh_projections)
 
     def _capture_command_output(self, message: str) -> None:
@@ -258,6 +320,12 @@ class ResearchWorkspace(App[None]):
 
     def _apply_snapshot(self, snapshot: dict[str, Any]) -> None:
         self._runs = list(snapshot["runs"])
+        self._shell.state.current_run = snapshot["active_run"]
+        self.sub_title = (
+            f"workspace: {self._shell.state.current_workspace or 'auto'} · "
+            f"run: {snapshot['active_run'] or 'none'} · "
+            f"daemon: {snapshot['health'].get('state', 'unknown')}"
+        )
         self._reconcile_agent_panes(list(snapshot["agents"]))
         active_run = snapshot["active_run"]
         focused = active_run or "none"
@@ -310,7 +378,7 @@ class ResearchWorkspace(App[None]):
 
 def _render_tasks(runs: list[dict[str, Any]], active_run: str | None) -> str:
     if not runs:
-        return "Tasks\nNo durable ResearchRuns."
+        return "Tasks\nNo durable ResearchRuns. Use /task <objective> to begin."
     lines = ["Tasks", f"Focused run: {active_run or 'none'}"]
     for run in runs:
         marker = "▶" if run["run_id"] == active_run else " "
@@ -325,6 +393,12 @@ def _render_collaboration(
     handoffs: list[dict[str, Any]],
 ) -> str:
     lines = ["Collaboration", f"Focused run: {active_run}", "Messages:"]
+    if active_run != "none":
+        lines.extend((
+            "Detached views:",
+            f"  research console collab --run {active_run}",
+            f"  research console system",
+        ))
     lines.extend(
         f"- {item['purpose']} from {item['sender_actor_id']}: {item['body'] if not item['body_redacted'] else '[redacted]'}"
         for item in messages
@@ -352,12 +426,20 @@ def _render_agents(agents: list[dict[str, Any]]) -> str:
             f"- {agent['display_name']} [{agent['agent_id']}] {'enabled' if agent['enabled'] else 'disabled'}",
             f"  {runtimes}",
         ))
-    return "\n".join(lines) if len(lines) > 1 else "Agents\nNo installed Agents."
+    return (
+        "\n".join(lines)
+        if len(lines) > 1
+        else "Agents\nNo installed Agents. Use /agent add coder to begin."
+    )
 
 
 def _render_agent_console(console: dict[str, Any], active_run: str | None) -> str:
     agent = console["agent"]
     lines = [f"Agent console: {agent['display_name']}", f"Focused run: {active_run or 'all'}"]
+    command = f"research console agent {agent['agent_id']}"
+    if active_run is not None:
+        command += f" --run {active_run}"
+    lines.append(f"Detached: {command}")
     lines.append("Runtime sessions:")
     lines.extend(
         f"- {item['runtime_id']}: {item['supervisor_state']}"
@@ -390,8 +472,8 @@ def _render_system(health: dict[str, Any], last_offset: int) -> str:
     ))
 
 
-def run_tui(client: ResearchClient) -> None:
-    ResearchWorkspace(client).run()
+def run_tui(client: ResearchClient, *, config_path: Path | None = None) -> None:
+    ResearchWorkspace(client, config_path=config_path).run()
 
 
 __all__ = ["ResearchWorkspace", "TuiProjectionState", "run_tui"]

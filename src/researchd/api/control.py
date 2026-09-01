@@ -10,7 +10,7 @@ from researchd.collaboration.contracts import CollaborationMessage
 from researchd.collaboration.messages import CollaborationMessageService
 from researchd.domain.enums import AttemptState, WorkOrderState
 from researchd.orchestrator.engine import ResearchOrchestrator
-from researchd.storage.models import AgentRecord, AgentRuntimeRecord, ArtifactRecord, ApprovalRequestRecord, AuditEventRecord, ClaimRecord, CollaborationMessageRecord, DaemonCommandRecord, DelegationRecord, AgentInvocationRecord, AttemptRecord, HandoffProposalRecord, ObservationRecord, PlanRecord, ResearchRunRecord, ReviewDecisionRecord, RuntimeSessionRecord, VerificationResultRecord, WorkOrderRecord, WorkspaceGrantRecord, WorkspaceReconciliationRecord, WorkspaceTransportRecord, WorkspaceRecord
+from researchd.storage.models import AgentRecord, AgentRuntimeRecord, ArtifactRecord, ApprovalRequestRecord, AuditEventRecord, ClaimRecord, CollaborationMessageRecord, DaemonCommandRecord, DelegationRecord, AgentInvocationRecord, AttemptRecord, HandoffProposalRecord, ObservationRecord, PlanRecord, ResearchRunRecord, ReviewDecisionRecord, RunArtifactAttachmentRecord, RuntimeSessionRecord, VerificationResultRecord, WorkOrderRecord, WorkspaceGrantRecord, WorkspaceReconciliationRecord, WorkspaceTransportRecord, WorkspaceRecord
 from researchd.workspace.creation import WorkspaceCreationService
 
 
@@ -317,6 +317,27 @@ class LocalControlAPI:
             if run_id is not None:
                 artifacts_query = artifacts_query.where(DelegationRecord.run_id == run_id)
             artifacts = session.scalars(artifacts_query).all()
+            attachments_query = (
+                select(ArtifactRecord)
+                .join(
+                    RunArtifactAttachmentRecord,
+                    RunArtifactAttachmentRecord.artifact_id == ArtifactRecord.artifact_id,
+                )
+                .where(
+                    (RunArtifactAttachmentRecord.recipient_agent_id.is_(None))
+                    | (RunArtifactAttachmentRecord.recipient_agent_id == agent_id)
+                )
+                .order_by(
+                    RunArtifactAttachmentRecord.created_at,
+                    RunArtifactAttachmentRecord.attachment_id,
+                )
+            )
+            if run_id is not None:
+                attachments_query = attachments_query.where(
+                    RunArtifactAttachmentRecord.run_id == run_id,
+                )
+            attached = session.scalars(attachments_query).all()
+            artifacts = list({item.artifact_id: item for item in (*artifacts, *attached)}.values())
             runtimes = session.scalars(select(AgentRuntimeRecord).where(
                 AgentRuntimeRecord.agent_id == agent_id,
             ).order_by(AgentRuntimeRecord.runtime_id)).all()
@@ -422,8 +443,25 @@ class LocalControlAPI:
 
     def artifacts(self, run_id: str) -> list[dict[str, Any]]:
         with self.sessions() as session:
-            rows = session.execute(select(ArtifactRecord).join(AttemptRecord, AttemptRecord.attempt_id == ArtifactRecord.attempt_id).join(WorkOrderRecord, WorkOrderRecord.work_order_id == AttemptRecord.work_order_id).where(WorkOrderRecord.run_id == run_id).order_by(ArtifactRecord.created_at, ArtifactRecord.artifact_id)).scalars().all()
-            return [{"artifact_id": row.artifact_id, "sha256": row.sha256, "artifact_type": row.artifact_type, "classification": row.classification, "mime_type": row.mime_type, "attempt_id": row.attempt_id, "created_at": row.created_at.isoformat()} for row in rows]
+            if session.get(ResearchRunRecord, run_id) is None:
+                raise LookupError(run_id)
+            attempt_rows = session.execute(select(ArtifactRecord).join(AttemptRecord, AttemptRecord.attempt_id == ArtifactRecord.attempt_id).join(WorkOrderRecord, WorkOrderRecord.work_order_id == AttemptRecord.work_order_id).where(WorkOrderRecord.run_id == run_id).order_by(ArtifactRecord.created_at, ArtifactRecord.artifact_id)).scalars().all()
+            attachment_rows = session.execute(
+                select(RunArtifactAttachmentRecord, ArtifactRecord)
+                .join(
+                    ArtifactRecord,
+                    ArtifactRecord.artifact_id
+                    == RunArtifactAttachmentRecord.artifact_id,
+                )
+                .where(RunArtifactAttachmentRecord.run_id == run_id)
+                .order_by(
+                    RunArtifactAttachmentRecord.created_at,
+                    RunArtifactAttachmentRecord.attachment_id,
+                )
+            ).all()
+            payload = [{"artifact_id": row.artifact_id, "sha256": row.sha256, "artifact_type": row.artifact_type, "classification": row.classification, "mime_type": row.mime_type, "attempt_id": row.attempt_id, "attachment_id": None, "source_name": row.relative_source_path, "recipient_agent_id": None, "created_at": row.created_at.isoformat()} for row in attempt_rows]
+            payload.extend({"artifact_id": artifact.artifact_id, "sha256": artifact.sha256, "artifact_type": artifact.artifact_type, "classification": artifact.classification, "mime_type": artifact.mime_type, "attempt_id": None, "attachment_id": attachment.attachment_id, "source_name": attachment.source_name, "recipient_agent_id": attachment.recipient_agent_id, "created_at": attachment.created_at.isoformat()} for attachment, artifact in attachment_rows)
+            return payload
 
     def timeline(self, run_id: str) -> list[dict[str, Any]]:
         items: list[dict[str, Any]] = [{**event, "kind": "event"} for event in self.events(run_id)]

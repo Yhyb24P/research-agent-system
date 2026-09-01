@@ -1,0 +1,15 @@
+{
+  "manifest_version": 1,
+  "channel": "preview",
+  "version": "1.0.0rc83.dev0",
+  "preview_commit": "cdb4f1dd52a6586769f341d16ca5a631dde5e6dc",
+  "source_candidate": {
+    "commit": "ca67f55acf95afd114e5af3059bd224ce45adf29",
+    "tag": "v1.0.0-rc.82"
+  },
+  "wheel": {
+    "filename": "research_agent_system-1.0.0rc83.dev0-py3-none-any.whl",
+    "url": "https://downloads.example.invalid/research_agent_system-1.0.0rc83.dev0-py3-none-any.whl",
+    "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+  }
+}

@@ -41,6 +41,13 @@ def build_parser() -> argparse.ArgumentParser:
     setup.add_argument("--project", type=Path, default=None)
     setup.add_argument("--yes", action="store_true", help="accept the detected Git project")
     setup.add_argument("--port", type=int, default=8788)
+    setup.add_argument(
+        "--agents",
+        nargs="+",
+        choices=("planner", "coder", "reviewer"),
+        default=None,
+    )
+    setup.add_argument("--profile", default=None)
     subparsers.add_parser("doctor", help="inspect the local Preview installation")
     agent = subparsers.add_parser("agent", help="manage trusted Preview Agents")
     agent_commands = agent.add_subparsers(dest="agent_action", required=True)
@@ -100,6 +107,8 @@ def main(argv: list[str] | None = None) -> int:
             config_path=args.config,
             port=args.port,
             assume_yes=args.yes,
+            agent_roles=tuple(args.agents) if args.agents else None,
+            profile_ref=args.profile,
         )
         return 0 if result is not None else 1
     if args.command == "doctor":

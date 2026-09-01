@@ -1,5 +1,7 @@
 """Loopback-only HTTP client facade over the in-process LocalControlAPI."""
 import asyncio
+import base64
+import binascii
 import inspect
 import hmac
 import json
@@ -13,6 +15,7 @@ from pydantic import BaseModel, ValidationError
 from researchd.api.agui import AGUIProjectionAdapter
 from researchd.api.browser_assets import BROWSER_ASSETS
 from researchd.api.control import LocalControlAPI
+from researchd.artifacts.attachments import RunArtifactAttachmentService
 from researchd.daemon.runtime import ResearchDaemon
 from researchd.daemon.contracts import (
     ApprovalApproveCommand,
@@ -21,6 +24,7 @@ from researchd.daemon.contracts import (
     CollaborationMessageSendCommand,
     DaemonCommandResolveCommand,
     ExternalBackupCreateRequest,
+    ExternalArtifactIngressRequest,
     ExternalBackupVerifyRequest,
     ExternalApprovalApproveRequest,
     ExternalCollaborationMessageSendRequest,
@@ -50,6 +54,7 @@ from researchd.daemon.contracts import (
 )
 from researchd.daemon.reconciliation import DaemonCommandResolutionService
 from researchd.domain.base import DomainModel
+from researchd.domain.enums import DataClassification
 from researchd.domain.ids import RuntimeSessionId
 from researchd.runtime_sessions.contracts import (
     ExternalRuntimeSessionStopRequest,
@@ -331,6 +336,7 @@ def make_handler(
     *,
     control_token: str | None = None,
     resolution: DaemonCommandResolutionService | None = None,
+    artifact_attachments: RunArtifactAttachmentService | None = None,
 ) -> type[BaseHTTPRequestHandler]:
     router = ControlResourceRouter(api)
     commands = ControlCommandRouter(
@@ -368,7 +374,13 @@ def make_handler(
             # Consume the request body before replying so a 401 on a reused
             # keep-alive connection cannot desynchronize the stream.
             content_length = self._content_length()
-            if content_length < 0 or content_length > 65_536:
+            attachment_route = (
+                len(parts := [unquote(item) for item in urlparse(self.path).path.split("/") if item]) == 4
+                and parts[:2] == ["api", "runs"]
+                and parts[3] == "attachments"
+            )
+            maximum = 5_700_000 if attachment_route else 65_536
+            if content_length < 0 or content_length > maximum:
                 # An oversized body is not drained; close to keep the stream clean.
                 self.close_connection = True
                 self._send_json(413, {"error": "command payload too large"})
@@ -380,6 +392,30 @@ def make_handler(
                 decoded = json.loads(raw_body) if raw_body else {}
                 if not isinstance(decoded, dict):
                     raise ValueError("command payload must be an object")
+                if attachment_route:
+                    if artifact_attachments is None:
+                        raise RuntimeError("artifact ingress is not configured")
+                    if daemon is None or daemon.health().get("ready") is not True:
+                        raise RuntimeError("researchd is not ready for artifact ingress")
+                    request = ExternalArtifactIngressRequest.model_validate(decoded)
+                    try:
+                        data = base64.b64decode(request.content_base64, validate=True)
+                    except (binascii.Error, ValueError) as error:
+                        raise ValueError("attachment content is not valid base64") from error
+                    attachment = artifact_attachments.attach(
+                        data,
+                        command_id=request.command_id,
+                        run_id=parts[2],
+                        source_name=request.source_name,
+                        mime_type=request.mime_type,
+                        classification=DataClassification(request.classification),
+                        actor_type="HUMAN",
+                        actor_id="local-control-client",
+                        message_id=request.message_id,
+                        recipient_agent_id=request.recipient_agent_id,
+                    )
+                    self._send_json(202, attachment.model_dump(mode="json"))
+                    return
                 status, payload = asyncio.run(commands.post(self.path, decoded))
                 self._send_json(status, payload)
             except ValidationError as error:
@@ -541,6 +577,7 @@ def serve_local_control(
     port: int = 8788,
     control_token: str | None = None,
     resolution: DaemonCommandResolutionService | None = None,
+    artifact_attachments: RunArtifactAttachmentService | None = None,
 ) -> ThreadingHTTPServer:
     if host not in {"127.0.0.1", "localhost", "::1"}:
         raise ValueError("control HTTP server must bind loopback")
@@ -553,6 +590,7 @@ def serve_local_control(
             daemon,
             control_token=control_token,
             resolution=resolution,
+            artifact_attachments=artifact_attachments,
         ),
     )
     return server

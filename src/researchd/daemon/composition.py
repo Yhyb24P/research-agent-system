@@ -9,7 +9,11 @@ import re
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
 from researchd.api.control import LocalControlAPI
-from researchd.artifacts import ArtifactService, ContentAddressedArtifactStore
+from researchd.artifacts import (
+    ArtifactService,
+    ContentAddressedArtifactStore,
+    RunArtifactAttachmentService,
+)
 from researchd.backup.commands import BackupCommandService
 from researchd.collaboration.delegation import DelegationService
 from researchd.collaboration.action_broker import AgentActionBroker
@@ -186,6 +190,7 @@ class DaemonApplication:
     resolution: DaemonCommandResolutionService
     handoffs: HandoffResolutionService
     orchestration_driver: OrchestrationDriver
+    artifact_attachments: RunArtifactAttachmentService
 
 
 def compose_daemon(
@@ -204,6 +209,7 @@ def compose_daemon(
     sessions = session_factory(engine)
     store = ContentAddressedArtifactStore(artifacts_path)
     artifact_service = ArtifactService(store, sessions)
+    artifact_attachments = RunArtifactAttachmentService(store, sessions)
     workspace = WorkspaceDelegationService(
         sessions,
         artifact_service,
@@ -345,6 +351,7 @@ def compose_daemon(
         resolution=resolution,
         handoffs=handoffs,
         orchestration_driver=orchestration_driver,
+        artifact_attachments=artifact_attachments,
     )
 
 

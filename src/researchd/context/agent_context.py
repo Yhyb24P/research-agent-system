@@ -4,8 +4,12 @@ from researchd.context.builder import CloudContextSelection, ContextBuilder
 from researchd.context.cloud_bundle import CloudContextBundle
 from researchd.domain.base import DomainModel
 from researchd.domain.enums import AgentTrustZone, DataClassification, DelegationPurpose
-from researchd.storage.models import ArtifactDerivationRecord, ArtifactRecord
-from sqlalchemy import select
+from researchd.storage.models import (
+    ArtifactDerivationRecord,
+    ArtifactRecord,
+    RunArtifactAttachmentRecord,
+)
+from sqlalchemy import or_, select
 
 
 class AgentContextSelection(DomainModel):
@@ -69,9 +73,26 @@ class AgentContextBuilder:
 
     def build(self, selection: AgentContextSelection) -> AgentContextBundle:
         policy = self.policy_for(selection.target_trust_zone)
+        with self.cloud_builder.sessions() as session:
+            attached = session.scalars(
+                select(RunArtifactAttachmentRecord.artifact_id)
+                .where(
+                    RunArtifactAttachmentRecord.run_id == selection.run_id,
+                    or_(
+                        RunArtifactAttachmentRecord.recipient_agent_id.is_(None),
+                        RunArtifactAttachmentRecord.recipient_agent_id
+                        == selection.target_agent_id,
+                    ),
+                )
+                .order_by(
+                    RunArtifactAttachmentRecord.created_at,
+                    RunArtifactAttachmentRecord.attachment_id,
+                )
+            ).all()
+        artifact_ids = tuple(dict.fromkeys((*selection.artifact_ids, *attached)))
         context = self.cloud_builder.build(
             run_id=selection.run_id, work_order_id=selection.work_order_id,
-            artifact_ids=selection.artifact_ids, observation_ids=selection.observation_ids,
+            artifact_ids=artifact_ids, observation_ids=selection.observation_ids,
             verification_id=selection.verification_id,
             allowed_classifications=policy.allowed_classifications,
         )
