@@ -5,6 +5,8 @@ Historical qualification evidence is immutable.  New product candidates use
 ``vX.Y.Z-rc.N`` Git tags and the PEP 440 distribution version ``X.Y.ZrcN``;
 the final release maps ``vX.Y.Z`` to ``X.Y.Z``.  Branch commits may be
 untagged, but a requested candidate tag must map exactly to project metadata.
+Developer Preview versions use ``X.Y.ZrcN.devM`` and must remain untagged;
+they bind publication through the immutable Preview manifest instead.
 """
 
 from __future__ import annotations
@@ -21,6 +23,9 @@ ROOT = Path(__file__).resolve().parents[1]
 _RC_TAG = re.compile(r"^v(?P<version>\d+\.\d+\.\d+)-rc\.(?P<number>[1-9]\d*)$")
 _FINAL_TAG = re.compile(r"^v(?P<version>\d+\.\d+\.\d+)$")
 _RC_VERSION = re.compile(r"^(?P<version>\d+\.\d+\.\d+)rc(?P<number>[1-9]\d*)$")
+_PREVIEW_VERSION = re.compile(
+    r"^(?P<version>\d+\.\d+\.\d+)rc(?P<number>[1-9]\d*)\.dev(?P<dev>\d+)$"
+)
 _FINAL_VERSION = re.compile(r"^\d+\.\d+\.\d+$")
 
 
@@ -33,12 +38,14 @@ def project_version() -> str:
     return version
 
 
-def tag_for_version(version: str) -> str:
+def tag_for_version(version: str) -> str | None:
+    if _PREVIEW_VERSION.fullmatch(version):
+        return None
     if match := _RC_VERSION.fullmatch(version):
         return f"v{match.group('version')}-rc.{match.group('number')}"
     if _FINAL_VERSION.fullmatch(version):
         return f"v{version}"
-    raise ValueError("project.version must be X.Y.ZrcN or X.Y.Z")
+    raise ValueError("project.version must be X.Y.ZrcN.devM, X.Y.ZrcN, or X.Y.Z")
 
 
 def version_for_tag(tag: str) -> str:
@@ -67,6 +74,7 @@ def main() -> int:
 
     version = project_version()
     expected_tag = tag_for_version(version)
+    release_kind = "developer-preview" if expected_tag is None else "release"
     failures: list[str] = []
     if args.candidate_tag is not None:
         try:
@@ -74,7 +82,11 @@ def main() -> int:
         except ValueError as error:
             failures.append(str(error))
         else:
-            if requested_version != version:
+            if expected_tag is None:
+                failures.append(
+                    "Developer Preview versions cannot be mapped to a release tag"
+                )
+            elif requested_version != version:
                 failures.append(
                     f"candidate tag {args.candidate_tag} maps to {requested_version}, "
                     f"not project.version {version}"
@@ -82,17 +94,23 @@ def main() -> int:
     tags = head_tags()
     if len(tags) > 1:
         failures.append("HEAD has more than one release tag")
+    elif expected_tag is None and tags:
+        failures.append("Developer Preview HEAD must not carry a release tag")
     elif tags and tags[0] != expected_tag:
         failures.append(
             f"HEAD tag {tags[0]} does not match project.version {version} "
             f"(expected {expected_tag})"
         )
-    if args.require_head_tag and tags != [expected_tag]:
-        failures.append(f"HEAD must have exactly the release tag {expected_tag}")
+    if args.require_head_tag:
+        if expected_tag is None:
+            failures.append("Developer Preview versions cannot require a release tag")
+        elif tags != [expected_tag]:
+            failures.append(f"HEAD must have exactly the release tag {expected_tag}")
 
     result = {
         "valid": not failures,
         "project_version": version,
+        "release_kind": release_kind,
         "expected_tag": expected_tag,
         "head_release_tags": tags,
         "failures": failures,
