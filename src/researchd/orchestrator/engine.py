@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from researchd.agents.cloud_lead import CloudLeadResult
 from researchd.collaboration.gateway import CollaborationGateway
+from researchd.collaboration.contracts import AgentInvocationFailure
 from researchd.agents.schemas import PlanProposal, WorkOrderProposal
 from researchd.context.builder import CloudContextSelection
 from researchd.domain.enums import (
@@ -145,11 +146,7 @@ class ResearchOrchestrator:
         if state is ResearchRunState.PLANNING:
             return await self._plan(run_id)
         if state is ResearchRunState.WAITING_EXTERNAL:
-            if self._has_reviewing_order(run_id):
-                self._transition_run(run_id, ResearchRunState.REVIEWING, "EXTERNAL_WAIT_RESUMED")
-                return True
-            self._transition_run(run_id, ResearchRunState.PLANNING, "EXTERNAL_WAIT_RESUMED")
-            return True
+            return False
         if state is ResearchRunState.WAITING_HUMAN:
             return False
         if state is ResearchRunState.REVIEWING:
@@ -164,6 +161,15 @@ class ResearchOrchestrator:
             return False
         try:
             result = await self.collaboration.plan(CloudContextSelection(run_id=run_id))
+        except AgentInvocationFailure as error:
+            self._transition_run(
+                run_id, ResearchRunState.WAITING_EXTERNAL, "AGENT_PLAN_WAITING",
+                {
+                    "failure_category": error.failure_category.value,
+                    "reason_code": error.result.reason_code,
+                },
+            )
+            return False
         except (CloudProviderUnavailable, TimeoutError) as error:
             self._transition_run(run_id, ResearchRunState.WAITING_EXTERNAL, "CLOUD_PLAN_WAITING", {"error": type(error).__name__})
             return False
@@ -247,11 +253,7 @@ class ResearchOrchestrator:
         if state is WorkOrderState.EXECUTING:
             return await self._execute_or_resume(order)
         if state is WorkOrderState.EXECUTION_FAILED:
-            refreshed = self._order(order.work_order_id)
-            self.transitions.transition_work_order(refreshed.work_order_id, refreshed.version, WorkOrderState.REVISION_REQUIRED,
-                event_type="REVISION_REQUIRED", actor_type="controller", actor_id="orchestrator", correlation_id=refreshed.work_order_id)
-            self._create_revision(self._order(refreshed.work_order_id), "execution failed")
-            return True
+            return False
         if state is WorkOrderState.VERIFYING:
             return self._verify(order)
         if state is WorkOrderState.VERIFICATION_FAILED:
@@ -532,15 +534,22 @@ class ResearchOrchestrator:
             raise OrchestrationError("EXECUTING WorkOrder has no Attempt")
         result = self._stored_execution_result(attempt.attempt_id)
         if result is None:
-            result = await self.collaboration.execute(order, attempt)
+            try:
+                result = await self.collaboration.execute(order, attempt)
+            except AgentInvocationFailure as error:
+                self._close_execution_failure(
+                    order, attempt,
+                    failure_category=error.failure_category.value,
+                    reason_code=error.result.reason_code or "AGENT_INVOCATION_FAILED",
+                )
+                return True
             self._store_execution_result(attempt.attempt_id, result)
         if result.status != "execution_complete":
-            actor_type, actor_id = self._agent_actor(order.work_order_id)
-            self.transitions.transition_attempt(attempt.attempt_id, attempt.version, AttemptState.FAILED,
-                event_type="EXECUTION_FAILED", actor_type=actor_type, actor_id=actor_id, correlation_id=attempt.attempt_id)
-            refreshed = self._order(order.work_order_id)
-            self.transitions.transition_work_order(refreshed.work_order_id, refreshed.version, WorkOrderState.EXECUTION_FAILED,
-                event_type="EXECUTION_FAILED", actor_type="controller", actor_id="orchestrator", correlation_id=attempt.attempt_id)
+            self._close_execution_failure(
+                order, attempt,
+                failure_category="AGENT_REPORTED_FAILURE",
+                reason_code=result.status,
+            )
             return True
         self.transitions.transition_attempt(attempt.attempt_id, attempt.version, AttemptState.VERIFYING,
             event_type="VERIFICATION_STARTED", actor_type="controller", actor_id="orchestrator", correlation_id=attempt.attempt_id)
@@ -548,6 +557,37 @@ class ResearchOrchestrator:
         self.transitions.transition_work_order(refreshed.work_order_id, refreshed.version, WorkOrderState.VERIFYING,
             event_type="VERIFICATION_STARTED", actor_type="controller", actor_id="orchestrator", correlation_id=attempt.attempt_id)
         return True
+
+    def _close_execution_failure(
+        self,
+        order: WorkOrderRecord,
+        attempt: AttemptRecord,
+        *,
+        failure_category: str,
+        reason_code: str,
+    ) -> None:
+        metadata = {
+            "failure_category": failure_category,
+            "reason_code": reason_code[:128],
+        }
+        actor_type, actor_id = self._agent_actor(order.work_order_id)
+        current_attempt = self._attempt(attempt.attempt_id)
+        self.transitions.transition_attempt(
+            current_attempt.attempt_id, current_attempt.version, AttemptState.FAILED,
+            event_type="EXECUTION_FAILED", actor_type=actor_type, actor_id=actor_id,
+            correlation_id=current_attempt.attempt_id, metadata=metadata,
+        )
+        current_order = self._order(order.work_order_id)
+        self.transitions.transition_work_order(
+            current_order.work_order_id, current_order.version,
+            WorkOrderState.EXECUTION_FAILED, event_type="EXECUTION_FAILED",
+            actor_type="controller", actor_id="orchestrator",
+            correlation_id=current_attempt.attempt_id, metadata=metadata,
+        )
+        self._transition_run(
+            order.run_id, ResearchRunState.WAITING_EXTERNAL,
+            "AGENT_EXECUTION_WAITING", metadata,
+        )
 
     def _verify(self, order: WorkOrderRecord) -> bool:
         attempt = self._latest_attempt(order.work_order_id)
@@ -590,6 +630,15 @@ class ResearchOrchestrator:
                 run_id=run_id, work_order_id=order.work_order_id,
                 verification_id=self._latest_verification_id(order.work_order_id),
             ))
+        except AgentInvocationFailure as error:
+            self._transition_run(
+                run_id, ResearchRunState.WAITING_EXTERNAL, "AGENT_REVIEW_WAITING",
+                {
+                    "failure_category": error.failure_category.value,
+                    "reason_code": error.result.reason_code,
+                },
+            )
+            return False
         except (CloudProviderUnavailable, TimeoutError) as error:
             self._transition_run(run_id, ResearchRunState.WAITING_EXTERNAL, "CLOUD_REVIEW_WAITING", {"error": type(error).__name__})
             return False
