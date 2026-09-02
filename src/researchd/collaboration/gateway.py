@@ -533,6 +533,18 @@ class CollaborationGateway:
         for invocation_id in invocation_ids:
             self._finish(InvocationId(invocation_id), success=result.status == "execution_complete", output_type="ExecutorResult", output=result.model_dump(mode="json"), reason=None if result.status == "execution_complete" else result.status)
 
+    def finalize_attempt_workspace(self, attempt_id: str) -> str | None:
+        """Close workspace authority for the Attempt's immutable Delegation."""
+        if self.workspace is None or self.invocations is None:
+            return None
+        with self.invocations.sessions() as session:
+            delegation_id = session.scalar(select(AttemptRecord.delegation_id).where(
+                AttemptRecord.attempt_id == attempt_id,
+            ))
+        if delegation_id is None:
+            return None
+        return self.workspace.finalize_delegation(delegation_id)
+
     def recover_run(self, run_id: str) -> tuple[str, ...]:
         """Close invocations for which restart reconciliation found no result."""
         if self.invocations is None:

@@ -573,6 +573,7 @@ class ResearchOrchestrator:
                     failure_category=error.failure_category.value,
                     reason_code=error.result.reason_code or "AGENT_INVOCATION_FAILED",
                 )
+                self.collaboration.finalize_attempt_workspace(attempt.attempt_id)
                 return True
             self._store_execution_result(attempt.attempt_id, result)
         if result.status != "execution_complete":
@@ -581,7 +582,9 @@ class ResearchOrchestrator:
                 failure_category="AGENT_REPORTED_FAILURE",
                 reason_code=result.status,
             )
+            self.collaboration.finalize_attempt_workspace(attempt.attempt_id)
             return True
+        self.collaboration.finalize_attempt_workspace(attempt.attempt_id)
         self.transitions.transition_attempt(attempt.attempt_id, attempt.version, AttemptState.VERIFYING,
             event_type="VERIFICATION_STARTED", actor_type="controller", actor_id="orchestrator", correlation_id=attempt.attempt_id)
         refreshed = self._order(order.work_order_id)
@@ -811,6 +814,7 @@ class ResearchOrchestrator:
             current_attempt = self._attempt(attempt.attempt_id)
             self.transitions.transition_attempt(current_attempt.attempt_id, current_attempt.version, AttemptState.CANCELLED,
                 event_type="ATTEMPT_CANCELLED", actor_type="controller", actor_id="orchestrator", correlation_id=current_attempt.attempt_id)
+            self.collaboration.finalize_attempt_workspace(attempt.attempt_id)
         for order in self._active_orders(run_id):
             self._cancel_order(order)
         latest = self._run(run_id)
