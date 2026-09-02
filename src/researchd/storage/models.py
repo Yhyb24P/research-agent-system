@@ -410,6 +410,7 @@ class AgentInvocationRecord(Base):
     context_bundle_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     output_type: Mapped[str | None] = mapped_column(String(128))
     output_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    failure_category: Mapped[str | None] = mapped_column(String(64))
     reason_code: Mapped[str | None] = mapped_column(String(128))
     runtime_lease_id: Mapped[str | None] = mapped_column(String(128))
     external_invocation_id: Mapped[str | None] = mapped_column(String(256))

@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 from uuid import uuid4
-from researchd.collaboration.contracts import AgentInvocationRequest, AgentInvocationResult, Delegation, ExecuteInvocationInput, InvocationInput, PlanInvocationInput, ResearchCriticResult, ReviewInvocationInput, SpecialistInvocationInput
+from researchd.collaboration.contracts import AgentInvocationFailure, AgentInvocationRequest, AgentInvocationResult, Delegation, ExecuteInvocationInput, InvocationInput, PlanInvocationInput, ResearchCriticResult, ReviewInvocationInput, SpecialistInvocationInput
 from researchd.collaboration.delegation import DelegationService
 from researchd.collaboration.invocation import InvocationService
 from researchd.collaboration.selector import AgentSelector
@@ -13,7 +13,7 @@ from researchd.agents.cloud_lead import CloudLeadResult
 from researchd.models.cloud import CloudCostMetadata
 from researchd.agents.schemas import PlanProposal
 from researchd.domain.review import ReviewDecision
-from researchd.domain.enums import AgentAdapterKind, Capability, DelegationPurpose, InvocationStatus, NetworkMode
+from researchd.domain.enums import AgentAdapterKind, AgentFailureCategory, Capability, DelegationPurpose, InvocationStatus, NetworkMode
 from researchd.domain.enums import AgentTrustZone
 from researchd.domain.ids import AgentId, AgentRuntimeId, DelegationId, InvocationId
 from researchd.context.builder import CloudContextSelection
@@ -88,9 +88,27 @@ class CollaborationGateway:
         if adapter is None:
             raise ValueError("canonical adapter is unavailable")
         response = await adapter.invoke(self._canonical_request(tracking, typed_input))
-        if response.status is not InvocationStatus.SUCCEEDED or response.output is None:
-            raise ValueError(response.reason_code or "agent invocation failed")
-        output = output_type.model_validate(response.output)
+        if response.status is not InvocationStatus.SUCCEEDED:
+            self._finish_result(response)
+            raise AgentInvocationFailure(response)
+        if response.output is None:
+            failure = AgentInvocationResult(
+                invocation_id=tracking[1], status=InvocationStatus.FAILED,
+                failure_category=AgentFailureCategory.OUTPUT_INVALID,
+                reason_code=f"{typed_input.kind}_OUTPUT_REQUIRED",
+            )
+            self._finish_result(failure)
+            raise AgentInvocationFailure(failure)
+        try:
+            output = output_type.model_validate(response.output)
+        except Exception as error:
+            failure = AgentInvocationResult(
+                invocation_id=tracking[1], status=InvocationStatus.FAILED,
+                failure_category=AgentFailureCategory.OUTPUT_INVALID,
+                reason_code=f"{typed_input.kind}_OUTPUT_INVALID",
+            )
+            self._finish_result(failure)
+            raise AgentInvocationFailure(failure) from error
         return CloudLeadResult(
             output=output, interaction_id=str(tracking[1]),
             cost=CloudCostMetadata(attempts=1, prompt_tokens=0, completion_tokens=0, total_tokens=0, cost_usd=Decimal("0")),
@@ -295,14 +313,35 @@ class CollaborationGateway:
 
     def _finish(self, invocation_id: InvocationId | None, *, success: bool, output_type: str | None = None, output: dict[str, object] | None = None, reason: str | None = None, external_invocation_id: str | None = None) -> None:
         if invocation_id is not None:
-            assert self.invocations is not None
-            if external_invocation_id is None:
-                with self.invocations.sessions() as session:
-                    row = session.get(AgentInvocationRecord, str(invocation_id))
-                    if row is not None:
-                        external_invocation_id = row.external_invocation_id
             status = InvocationStatus.SUCCEEDED if success else (InvocationStatus.CANCELLED if reason == "CANCELLED" else InvocationStatus.FAILED)
-            self.invocations.complete(AgentInvocationResult(invocation_id=invocation_id, status=status, external_invocation_id=external_invocation_id, output_type=output_type, output=output, reason_code=reason))
+            self._finish_result(AgentInvocationResult(invocation_id=invocation_id, status=status, external_invocation_id=external_invocation_id, output_type=output_type, output=output, reason_code=reason))
+
+    def _finish_result(self, result: AgentInvocationResult) -> None:
+        assert self.invocations is not None
+        if result.external_invocation_id is None:
+            with self.invocations.sessions() as session:
+                row = session.get(AgentInvocationRecord, str(result.invocation_id))
+                if row is not None and row.external_invocation_id is not None:
+                    result = result.model_copy(update={
+                        "external_invocation_id": row.external_invocation_id,
+                    })
+        self.invocations.complete(result)
+
+    def _fail_unexpected(
+        self,
+        invocation_id: InvocationId | None,
+        error: Exception,
+    ) -> AgentInvocationFailure:
+        if invocation_id is None:
+            raise error
+        result = AgentInvocationResult(
+            invocation_id=invocation_id,
+            status=InvocationStatus.FAILED,
+            failure_category=AgentFailureCategory.INTERNAL_ADAPTER_ERROR,
+            reason_code=f"ADAPTER_{type(error).__name__.upper()}"[:128],
+        )
+        self._finish_result(result)
+        return AgentInvocationFailure(result)
 
     def _tracked_adapter(self, tracking: tuple[DelegationId, InvocationId] | None) -> AgentAdapter | None:
         if tracking is None or self.catalog is None or self.invocations is None:
@@ -328,9 +367,10 @@ class CollaborationGateway:
             else:
                 assert tracking is not None
                 result = await self._invoke_business(tracking, PlanInvocationInput(context=selection), PlanProposal)
-        except Exception as error:
-            self._finish(tracking[1] if tracking else None, success=False, reason=type(error).__name__)
+        except AgentInvocationFailure:
             raise
+        except Exception as error:
+            raise self._fail_unexpected(tracking[1] if tracking else None, error) from error
         if tracking is not None and self.cloud is not None:
             self.cloud.bind_invocation(tracking[1], result.interaction_id)
         self._finish(tracking[1] if tracking else None, success=True, output_type=type(result.output).__name__, output=result.output.model_dump(mode="json"))
@@ -350,9 +390,10 @@ class CollaborationGateway:
             else:
                 assert tracking is not None
                 result = await self._invoke_business(tracking, ReviewInvocationInput(context=selection), ReviewDecision)
-        except Exception as error:
-            self._finish(tracking[1] if tracking else None, success=False, reason=type(error).__name__)
+        except AgentInvocationFailure:
             raise
+        except Exception as error:
+            raise self._fail_unexpected(tracking[1] if tracking else None, error) from error
         if tracking is not None and self.cloud is not None:
             self.cloud.bind_invocation(tracking[1], result.interaction_id)
         self._finish(tracking[1] if tracking else None, success=True, output_type=type(result.output).__name__, output=result.output.model_dump(mode="json"))
@@ -375,12 +416,22 @@ class CollaborationGateway:
             if adapter is None:
                 raise ValueError("specialist Agent adapter is unavailable")
             response = await adapter.invoke(self._canonical_request(tracking, request))
-            if response.status is not InvocationStatus.SUCCEEDED or response.output is None:
-                raise ValueError(response.reason_code or "specialist Agent invocation failed")
+            if response.status is not InvocationStatus.SUCCEEDED:
+                self._finish_result(response)
+                raise AgentInvocationFailure(response)
+            if response.output is None:
+                failure = AgentInvocationResult(
+                    invocation_id=tracking[1], status=InvocationStatus.FAILED,
+                    failure_category=AgentFailureCategory.OUTPUT_INVALID,
+                    reason_code="SPECIALIST_OUTPUT_REQUIRED",
+                )
+                self._finish_result(failure)
+                raise AgentInvocationFailure(failure)
             result = ResearchCriticResult.model_validate(response.output)
-        except Exception as error:
-            self._finish(tracking[1], success=False, reason=type(error).__name__)
+        except AgentInvocationFailure:
             raise
+        except Exception as error:
+            raise self._fail_unexpected(tracking[1], error) from error
         self._finish(
             tracking[1],
             success=True,
@@ -406,12 +457,31 @@ class CollaborationGateway:
                     raise ValueError("canonical adapter is unavailable")
                 response = await adapter.invoke(self._canonical_request(tracking, typed_input))
                 external_invocation_id = response.external_invocation_id
-                if response.status is not InvocationStatus.SUCCEEDED or response.output is None:
-                    raise ValueError(response.reason_code or "agent invocation failed")
+                if response.status is not InvocationStatus.SUCCEEDED:
+                    if response.output is not None:
+                        try:
+                            failed_result = ExecutorResult.model_validate(response.output)
+                        except Exception:
+                            failed_result = None
+                        if failed_result is not None and failed_result.status != "execution_complete":
+                            self._finish_result(response)
+                            return failed_result
+                    self._finish_result(response)
+                    raise AgentInvocationFailure(response)
+                if response.output is None:
+                    failure = AgentInvocationResult(
+                        invocation_id=tracking[1], status=InvocationStatus.FAILED,
+                        external_invocation_id=external_invocation_id,
+                        failure_category=AgentFailureCategory.OUTPUT_INVALID,
+                        reason_code="EXECUTE_OUTPUT_REQUIRED",
+                    )
+                    self._finish_result(failure)
+                    raise AgentInvocationFailure(failure)
                 result = ExecutorResult.model_validate(response.output)
-        except Exception as error:
-            self._finish(tracking[1] if tracking else None, success=False, reason=type(error).__name__)
+        except AgentInvocationFailure:
             raise
+        except Exception as error:
+            raise self._fail_unexpected(tracking[1] if tracking else None, error) from error
         self._finish(tracking[1] if tracking else None, success=result.status == "execution_complete", output_type="ExecutorResult", output=result.model_dump(mode="json"), reason=None if result.status == "execution_complete" else result.status, external_invocation_id=external_invocation_id)
         return result
 

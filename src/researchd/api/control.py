@@ -354,6 +354,7 @@ class LocalControlAPI:
                     "work_order_id": item.work_order_id, "attempt_id": item.attempt_id,
                     "delegation_id": item.delegation_id, "runtime_id": item.runtime_id,
                     "purpose": item.purpose, "status": item.status,
+                    "failure_category": item.failure_category,
                     "reason_code": item.reason_code,
                     "created_at": item.created_at.isoformat(),
                     "completed_at": item.completed_at.isoformat() if item.completed_at else None,
@@ -392,7 +393,7 @@ class LocalControlAPI:
                 raise LookupError(delegation_id)
             payload = self._delegation_payload(row)
             invocations = session.scalars(select(AgentInvocationRecord).where(AgentInvocationRecord.delegation_id == delegation_id).order_by(AgentInvocationRecord.created_at)).all()
-            payload["invocations"] = [{"invocation_id": item.invocation_id, "status": item.status, "agent_id": item.agent_id, "runtime_id": item.runtime_id, "purpose": item.purpose} for item in invocations]
+            payload["invocations"] = [{"invocation_id": item.invocation_id, "status": item.status, "agent_id": item.agent_id, "runtime_id": item.runtime_id, "purpose": item.purpose, "failure_category": item.failure_category, "reason_code": item.reason_code} for item in invocations]
             return payload
 
     def _delegation_payload(self, row: DelegationRecord) -> dict[str, Any]:
@@ -490,7 +491,7 @@ class LocalControlAPI:
             items.extend({"kind": "plan", "entity_id": item.plan_id, "timestamp": item.created_at.isoformat(), "plan_id": item.plan_id, "run_id": item.run_id} for item in plans)
             items.extend({"kind": "work_order", "entity_id": item.work_order_id, "timestamp": item.created_at.isoformat(), "work_order_id": item.work_order_id, "state": item.state, "objective": item.objective} for item in orders)
             items.extend({"kind": "attempt", "entity_id": item.attempt_id, "timestamp": item.created_at.isoformat(), "attempt_id": item.attempt_id, "work_order_id": item.work_order_id, "delegation_id": item.delegation_id, "state": item.state} for item in attempts)
-            items.extend({"kind": "invocation", "entity_id": item.invocation_id, "timestamp": item.created_at.isoformat(), "invocation_id": item.invocation_id, "delegation_id": item.delegation_id, "workspace_grant_id": item.workspace_grant_id, "purpose": item.purpose, "agent_id": item.agent_id, "runtime_id": item.runtime_id, "status": item.status} for item in invocations)
+            items.extend({"kind": "invocation", "entity_id": item.invocation_id, "timestamp": item.created_at.isoformat(), "invocation_id": item.invocation_id, "delegation_id": item.delegation_id, "workspace_grant_id": item.workspace_grant_id, "purpose": item.purpose, "agent_id": item.agent_id, "runtime_id": item.runtime_id, "status": item.status, "failure_category": item.failure_category, "reason_code": item.reason_code} for item in invocations)
             items.extend({"kind": "observation", "entity_id": item.observation_id, "timestamp": item.created_at.isoformat(), "attempt_id": item.attempt_id, "name": item.name, "producer_type": item.producer_type, "producer_id": item.producer_id, "classification": item.classification} for item in observations)
             items.extend({"kind": "claim", "entity_id": item.claim_id, "timestamp": item.created_at.isoformat(), "attempt_id": item.attempt_id, "producer_type": item.producer_type, "producer_id": item.producer_id} for item in claims)
             items.extend({"kind": "verification", "entity_id": item.verification_id, "timestamp": item.created_at.isoformat(), "attempt_id": item.attempt_id, "work_order_id": item.work_order_id, "overall": item.overall, "verifier_version": item.verifier_version, "valid": item.valid} for item in verifications)
