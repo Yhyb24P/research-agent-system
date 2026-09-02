@@ -314,7 +314,7 @@ uv run research --config researchd.json
 只有 daemon 报告 READY 之后才进入 shell——non-ready daemon 会连同其失败的
 启动阶段一起呈现，绝不被绕过。shell 提供 `status`；`workspace list`/
 `workspace create`/`workspace use`；`agent list`/`agent use`/`agent remove`/
-`agent start`；`runtime list`/`runtime stop`；`run list`；`task create`/
+`agent start`；`runtime list`/`runtime stop`；`run list`/`run resume`；`work-order retry`；`task create`/
 `task cancel`；`msg`；`handoff list`/`handoff accept`/`handoff reject`；
 `events watch`；`approval approve <approval-id>`；remote 的 attach/renew/detach；以及
 `quit`。已 focus workspace 时，`task create <objective>` 使用当前 workspace；否则第一个
