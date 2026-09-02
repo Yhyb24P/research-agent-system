@@ -44,7 +44,7 @@ class VerificationDriver(Protocol):
 @dataclass(frozen=True)
 class OrchestrationLimits:
     max_iterations: int = 8
-    max_cloud_calls: int = 24
+    max_agent_turns: int = 24
     max_wall_seconds: int = 86_400
 
 
@@ -110,8 +110,8 @@ class ResearchOrchestrator:
             session.add(ResearchRunRecord(
                 run_id=identifier, workspace_id=workspace_id, objective=objective,
                 state=ResearchRunState.NEW.value, version=1, created_at=now, updated_at=now,
-                max_iterations=self.limits.max_iterations, max_cloud_calls=self.limits.max_cloud_calls,
-                iterations_used=0, cloud_calls_used=0, cancellation_requested=False,
+                max_iterations=self.limits.max_iterations, max_agent_turns=self.limits.max_agent_turns,
+                iterations_used=0, agent_turns_used=0, cancellation_requested=False,
             ))
             session.flush()
             session.add(AuditEventRecord(
@@ -157,7 +157,7 @@ class ResearchOrchestrator:
 
     async def _plan(self, run_id: str) -> bool:
         run = self._run(run_id)
-        if not self._consume_cloud_call(run_id, run):
+        if not self._consume_agent_turn(run_id, run):
             return False
         try:
             result = await self.collaboration.plan(CloudContextSelection(run_id=run_id))
@@ -171,10 +171,12 @@ class ResearchOrchestrator:
             )
             return False
         except (CloudProviderUnavailable, TimeoutError) as error:
-            self._transition_run(run_id, ResearchRunState.WAITING_EXTERNAL, "CLOUD_PLAN_WAITING", {"error": type(error).__name__})
+            category = "INVOCATION_TIMEOUT" if isinstance(error, TimeoutError) else "TRANSPORT_FAILED"
+            self._transition_run(run_id, ResearchRunState.WAITING_EXTERNAL, "AGENT_PLAN_WAITING", {"failure_category": category})
             return False
         except (CloudSchemaInvalid, CloudBudgetExceeded) as error:
-            self._transition_run(run_id, ResearchRunState.FAILED, "CLOUD_PLAN_FAILED", {"error": type(error).__name__})
+            category = "OUTPUT_INVALID" if isinstance(error, CloudSchemaInvalid) else "AGENT_BUDGET_EXCEEDED"
+            self._transition_run(run_id, ResearchRunState.FAILED, "AGENT_PLAN_FAILED", {"failure_category": category})
             return False
         self._persist_plan(run_id, result)
         self._transition_run(
@@ -657,7 +659,7 @@ class ResearchOrchestrator:
             self._transition_run(run_id, ResearchRunState.COMPLETED, "RUN_COMPLETED")
             return True
         attempt = self._latest_attempt(order.work_order_id)
-        if not self._consume_cloud_call(run_id, self._run(run_id)):
+        if not self._consume_agent_turn(run_id, self._run(run_id)):
             return False
         try:
             result = await self.collaboration.review(CloudContextSelection(
@@ -674,14 +676,16 @@ class ResearchOrchestrator:
             )
             return False
         except (CloudProviderUnavailable, TimeoutError) as error:
-            self._transition_run(run_id, ResearchRunState.WAITING_EXTERNAL, "CLOUD_REVIEW_WAITING", {"error": type(error).__name__})
+            category = "INVOCATION_TIMEOUT" if isinstance(error, TimeoutError) else "TRANSPORT_FAILED"
+            self._transition_run(run_id, ResearchRunState.WAITING_EXTERNAL, "AGENT_REVIEW_WAITING", {"failure_category": category})
             return False
         except (CloudSchemaInvalid, CloudBudgetExceeded) as error:
-            self._transition_run(run_id, ResearchRunState.FAILED, "CLOUD_REVIEW_FAILED", {"error": type(error).__name__})
+            category = "OUTPUT_INVALID" if isinstance(error, CloudSchemaInvalid) else "AGENT_BUDGET_EXCEEDED"
+            self._transition_run(run_id, ResearchRunState.FAILED, "AGENT_REVIEW_FAILED", {"failure_category": category})
             return False
         if str(result.output.work_order_id) != order.work_order_id:
             self._transition_run(run_id, ResearchRunState.FAILED, "REVIEW_SCOPE_MISMATCH")
-            raise OrchestrationError("cloud review references a different WorkOrder")
+            raise OrchestrationError("Agent review references a different WorkOrder")
         self._persist_review(run_id, order, attempt, result)
         decision = result.output.decision
         current = self._order(order.work_order_id)
@@ -919,14 +923,14 @@ class ResearchOrchestrator:
             run.version += 1
             run.updated_at = utc_now()
 
-    def _consume_cloud_call(self, run_id: str, run: ResearchRunRecord) -> bool:
-        if run.cloud_calls_used >= run.max_cloud_calls:
-            self._transition_run(run_id, ResearchRunState.FAILED, "MAX_CLOUD_CALLS_EXCEEDED")
+    def _consume_agent_turn(self, run_id: str, run: ResearchRunRecord) -> bool:
+        if run.agent_turns_used >= run.max_agent_turns:
+            self._transition_run(run_id, ResearchRunState.FAILED, "MAX_AGENT_TURNS_EXCEEDED")
             return False
         with self.sessions.begin() as session:
             current = session.get(ResearchRunRecord, run_id)
             assert current is not None
-            current.cloud_calls_used += 1
+            current.agent_turns_used += 1
             current.version += 1
             current.updated_at = utc_now()
         return True

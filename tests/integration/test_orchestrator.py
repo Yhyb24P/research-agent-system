@@ -236,7 +236,7 @@ def make_orchestrator(tmp_path: Path, *, cloud_responses: list[str], passed: boo
         policy=policy, verifier=FakeVerifier(sessions, passed=passed),
         workspace_capabilities=frozenset(), user_capabilities=frozenset(),
         maximum_budget=BudgetLimits(100, 100, 0, 100, 100),
-        limits=OrchestrationLimits(max_iterations=max_iterations, max_cloud_calls=8),
+        limits=OrchestrationLimits(max_iterations=max_iterations, max_agent_turns=8),
     )
     return sessions, orchestrator, executor, model
 

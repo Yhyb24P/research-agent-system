@@ -55,7 +55,7 @@ def test_upgrade_0024_to_0025_adds_resolution_columns(tmp_path: Path) -> None:
 
 
 def test_daemon_schema_gate_accepts_only_current_head(tmp_path: Path) -> None:
-    assert EXPECTED_SCHEMA_REVISION == "0027"
+    assert EXPECTED_SCHEMA_REVISION == "0028"
 
     head_db = tmp_path / "head.db"
     command.upgrade(_config(head_db), "head")
@@ -90,7 +90,7 @@ def test_backup_restore_round_trip_preserves_handoff_data(tmp_path: Path) -> Non
         database, artifact_root, snapshot,
         candidate_commit=CANDIDATE_COMMIT, candidate_tag=CANDIDATE_TAG,
     )
-    assert manifest.schema_revision == "0027"
+    assert manifest.schema_revision == "0028"
 
     restored_db = tmp_path / "restored.db"
     restored_artifacts = tmp_path / "restored-artifacts"

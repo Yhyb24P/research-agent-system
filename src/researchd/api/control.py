@@ -39,8 +39,8 @@ class LocalControlAPI:
                 "active_attempt_ids": [item.attempt_id for item in attempts],
                 "iterations_used": run.iterations_used,
                 "max_iterations": run.max_iterations,
-                "cloud_calls_used": run.cloud_calls_used,
-                "max_cloud_calls": run.max_cloud_calls,
+                "agent_turns_used": run.agent_turns_used,
+                "max_agent_turns": run.max_agent_turns,
                 "cancellation_requested": run.cancellation_requested,
             }
 
