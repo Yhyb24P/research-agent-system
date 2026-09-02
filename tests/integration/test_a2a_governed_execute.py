@@ -79,6 +79,7 @@ from researchd.storage.models import (
     AuditEventRecord,
     AttemptRecord,
     DelegationRecord,
+    ResearchRunRecord,
     RuntimeSessionRecord,
     WorkspaceGrantRecord,
     WorkspaceRecord,
@@ -792,14 +793,16 @@ def test_a2a_capability_result_rejection_fails_closed(gov: GovFixture) -> None:
     gov.advance_until_executing(run_id)
     attempt = gov.latest_attempt(run_id)
     gov.seed_grant_for(attempt.attempt_id)
-    with pytest.raises(ValueError, match="A2A_EXECUTOR_RESULT_INVALID"):
-        asyncio.run(gov.orchestrator.advance(run_id))
+    assert asyncio.run(gov.orchestrator.advance(run_id)) is True
     with gov.sessions() as session:
         invocation = session.scalar(select(AgentInvocationRecord).where(
             AgentInvocationRecord.run_id == run_id,
             AgentInvocationRecord.purpose == DelegationPurpose.EXECUTE.value,
         ))
         assert invocation is not None and invocation.status == "FAILED"
+        assert invocation.failure_category == "OUTPUT_INVALID"
         order = gov.latest_order(run_id)
-        assert order.state == WorkOrderState.EXECUTING.value
+        assert order.state == WorkOrderState.EXECUTION_FAILED.value
+        run = session.get(ResearchRunRecord, run_id)
+        assert run is not None and run.state == ResearchRunState.WAITING_EXTERNAL.value
     assert len(gov.v2_client.payloads) == 1
