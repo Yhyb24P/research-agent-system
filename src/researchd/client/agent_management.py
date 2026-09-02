@@ -41,15 +41,15 @@ from researchd.runtime_sessions.launch_profiles import RuntimeLaunchProfileServi
 
 PreviewRole = Literal["planner", "coder", "reviewer"]
 
-_ROLE_CONTRACTS: dict[PreviewRole, tuple[str, tuple[str, ...], int, int]] = {
-    "planner": ("planner", ("plan.propose", "evidence.request"), 19011, 300),
+_MANAGED_AGENT_TIMEOUT_SECONDS = 600
+_ROLE_CONTRACTS: dict[PreviewRole, tuple[str, tuple[str, ...], int]] = {
+    "planner": ("planner", ("plan.propose", "evidence.request"), 19011),
     "coder": (
         "executor",
         ("code.inspect", "code.modify", "test.execute", "artifact.publish"),
         19003,
-        600,
     ),
-    "reviewer": ("reviewer", ("evidence.review", "decision.propose"), 19012, 300),
+    "reviewer": ("reviewer", ("evidence.review", "decision.propose"), 19012),
 }
 
 
@@ -101,7 +101,7 @@ def build_aweswitch_definition(
     aweswitch_config: Path,
 ) -> AgentDefinition:
     """Generate a referentially closed definition containing no credentials."""
-    controller_role, skills, port, timeout_seconds = _ROLE_CONTRACTS[role]
+    controller_role, skills, port = _ROLE_CONTRACTS[role]
     agent_id = AgentId(f"agent_{role}")
     runtime_id = AgentRuntimeId(f"runtime_{role}_aweswitch")
     endpoint = f"http://127.0.0.1:{port}/invoke"
@@ -131,7 +131,7 @@ def build_aweswitch_definition(
             "--port",
             str(port),
             "--timeout",
-            str(timeout_seconds),
+            str(_MANAGED_AGENT_TIMEOUT_SECONDS),
         ),
         cwd=str(project_root),
     )
