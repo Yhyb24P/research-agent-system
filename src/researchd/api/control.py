@@ -505,6 +505,28 @@ class LocalControlAPI:
         await self.orchestrator.cancel(run_id)
         return self.run_status(run_id)
 
+    def resume_run(self, run_id: str) -> dict[str, Any]:
+        if self.orchestrator is None:
+            raise RuntimeError("controller is required for state-changing commands")
+        self.orchestrator.resume_external(run_id)
+        return self.run_status(run_id)
+
+    def retry_work_order(
+        self,
+        work_order_id: str,
+        *,
+        target_agent_id: str | None = None,
+    ) -> dict[str, Any]:
+        if self.orchestrator is None:
+            raise RuntimeError("controller is required for state-changing commands")
+        attempt_id = self.orchestrator.retry_attempt(
+            work_order_id,
+            preferred_agent_id=target_agent_id,
+        )
+        resource = self.work_order_status(work_order_id)
+        resource["attempt_id"] = attempt_id
+        return resource
+
     async def approve(self, work_order_id: str, grant_id: str) -> dict[str, Any]:
         if self.orchestrator is None:
             raise RuntimeError("controller is required for state-changing commands")

@@ -50,6 +50,16 @@ class _FamilyControlStub:
         self.calls.append(("cancel_run", run_id))
         return {"run_id": run_id}
 
+    def resume_run(self, run_id: str) -> dict[str, object]:
+        self.calls.append(("resume_run", run_id))
+        return {"run_id": run_id, "state": "PLANNING"}
+
+    def retry_work_order(
+        self, work_order_id: str, *, target_agent_id: str | None = None,
+    ) -> dict[str, object]:
+        self.calls.append(("retry_work_order", work_order_id, target_agent_id))
+        return {"run_id": "run_stub", "work_order_id": work_order_id, "state": "EXECUTING"}
+
     async def approve(self, work_order_id: str, grant_id: str) -> dict[str, object]:
         self.calls.append(("approve", work_order_id, grant_id))
         return {"work_order_id": work_order_id}

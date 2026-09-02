@@ -474,6 +474,8 @@ class ResearchOrchestrator:
         if WorkOrderState(order.state) is not WorkOrderState.EXECUTION_FAILED:
             raise OrchestrationError("only an execution-failed WorkOrder can be retried")
         run = self._run(order.run_id)
+        if ResearchRunState(run.state) is not ResearchRunState.WAITING_EXTERNAL:
+            raise OrchestrationError("retry requires a Run waiting on an external Agent")
         if run.iterations_used >= run.max_iterations:
             self._transition_run(order.run_id, ResearchRunState.FAILED, "MAX_ITERATIONS_EXCEEDED")
             raise OrchestrationError("maximum iterations exceeded")
@@ -497,11 +499,13 @@ class ResearchOrchestrator:
             if (
                 current_order.version != order.version
                 or WorkOrderState(current_order.state) is not WorkOrderState.EXECUTION_FAILED
+                or ResearchRunState(current_run.state) is not ResearchRunState.WAITING_EXTERNAL
             ):
                 raise OrchestrationError("execution-failed WorkOrder changed during retry")
             if current_run.iterations_used >= current_run.max_iterations:
                 raise OrchestrationError("maximum iterations exceeded")
             current_run.iterations_used += 1
+            current_run.state = ResearchRunState.ACTIVE.value
             current_run.version += 1
             current_run.updated_at = now
             current_order.state = WorkOrderState.EXECUTING.value
@@ -526,7 +530,34 @@ class ResearchOrchestrator:
                 run_id=order.run_id, entity_type="attempt", entity_id=attempt_id, actor_type="controller",
                 actor_id="orchestrator", timestamp=now, correlation_id=attempt_id,
                 causation_id=None, metadata_json={}))
+            session.add(AuditEventRecord(
+                event_id=f"evt_{uuid4().hex}", event_type="AGENT_EXECUTION_RESUMED",
+                run_id=order.run_id, entity_type="research_run", entity_id=order.run_id,
+                actor_type="controller", actor_id="orchestrator", timestamp=now,
+                correlation_id=attempt_id, causation_id=None,
+                metadata_json={"work_order_id": work_order_id},
+            ))
         return attempt_id
+
+    def resume_external(self, run_id: str) -> ResearchRunState:
+        """Durably resume a PLAN/REVIEW Agent wait; execution uses explicit retry."""
+        run = self._run(run_id)
+        if ResearchRunState(run.state) is not ResearchRunState.WAITING_EXTERNAL:
+            raise OrchestrationError("Run is not waiting on an external Agent")
+        with self.sessions() as session:
+            execution_failure = session.scalar(select(WorkOrderRecord.work_order_id).where(
+                WorkOrderRecord.run_id == run_id,
+                WorkOrderRecord.state == WorkOrderState.EXECUTION_FAILED.value,
+            ).limit(1))
+        if execution_failure is not None:
+            raise OrchestrationError("execution failure requires WorkOrder retry or Handoff")
+        target = (
+            ResearchRunState.REVIEWING
+            if self._has_reviewing_order(run_id)
+            else ResearchRunState.PLANNING
+        )
+        self._transition_run(run_id, target, "AGENT_EXTERNAL_RESUMED")
+        return target
 
     async def _execute_or_resume(self, order: WorkOrderRecord) -> bool:
         attempt = self._latest_attempt(order.work_order_id)

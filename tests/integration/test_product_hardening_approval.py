@@ -123,6 +123,18 @@ def test_approval_success_wakes_the_orchestration_driver(tmp_path: Path) -> None
     engine = create_sqlite_engine(tmp_path / "approval_wake.db")
     Base.metadata.create_all(engine)
     sessions = session_factory(engine)
+    now = datetime.now(UTC)
+    with sessions.begin() as session:
+        session.add(WorkspaceRecord(
+            workspace_id="ws_product", name="Approval wake", version=1,
+            created_at=now, updated_at=now,
+        ))
+    with sessions.begin() as session:
+        session.add(ResearchRunRecord(
+            run_id="run_product", workspace_id="ws_product",
+            objective="resume after approval", state=ResearchRunState.ACTIVE.value,
+            version=1, created_at=now, updated_at=now,
+        ))
     orchestrator = _WakeRecordingOrchestrator()
     driver = OrchestrationDriver(cast(OrchestrationTarget, orchestrator), sessions)
     control = _ApprovalControl()

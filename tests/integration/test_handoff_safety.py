@@ -160,6 +160,10 @@ class Fixture:
             order.state = WorkOrderState.EXECUTION_FAILED.value
             order.version += 1
             order.updated_at = now
+            run = _get(session, ResearchRunRecord, order.run_id)
+            run.state = ResearchRunState.WAITING_EXTERNAL.value
+            run.version += 1
+            run.updated_at = now
 
     def controller(self) -> ResearchOrchestrator:
         from researchd.collaboration.gateway import CollaborationGateway

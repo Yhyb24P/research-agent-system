@@ -208,4 +208,4 @@ def test_current_0020_database_upgrades_to_daemon_receipts(tmp_path: Path) -> No
     engine = create_sqlite_engine(database)
     assert "daemon_commands" in inspect(engine).get_table_names()
     with engine.connect() as connection:
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0026"
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0027"

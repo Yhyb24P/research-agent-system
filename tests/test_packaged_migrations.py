@@ -59,8 +59,8 @@ def test_migration_resources_are_packaged_with_the_distribution() -> None:
         if entry.name.endswith(".py") and entry.name != "__init__.py"
     )
     assert versions[0].startswith("0001")
-    assert versions[-1].startswith("0026")
-    assert len(versions) == 26
+    assert versions[-1].startswith("0027")
+    assert len(versions) == 27
 
 
 def test_researchd_cli_uses_packaged_migrations_not_the_checkout() -> None:

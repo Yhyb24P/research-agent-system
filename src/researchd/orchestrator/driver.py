@@ -91,6 +91,17 @@ class OrchestrationDriver:
             self._pending.add(run_id)
             self._condition.notify()
 
+    def wake_if_runnable(self, run_id: str) -> bool:
+        """Wake only after the committed Run state is authoritatively runnable."""
+        with self.sessions() as session:
+            state = session.scalar(select(ResearchRunRecord.state).where(
+                ResearchRunRecord.run_id == run_id,
+            ))
+        if state not in _RUNNABLE_STATES:
+            return False
+        self.wake(run_id)
+        return True
+
     def discover_runnable(self) -> None:
         """Rebuild pending work from durable controller state after restart."""
         try:
