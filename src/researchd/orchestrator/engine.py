@@ -570,6 +570,9 @@ class ResearchOrchestrator:
             try:
                 result = await self.collaboration.execute(order, attempt)
             except AgentInvocationFailure as error:
+                if self._execution_was_cancelled(order.run_id, attempt.attempt_id):
+                    self._record_late_execution_result(order.run_id, attempt.attempt_id)
+                    return False
                 self._close_execution_failure(
                     order, attempt,
                     failure_category=error.failure_category.value,
@@ -577,6 +580,9 @@ class ResearchOrchestrator:
                 )
                 self.collaboration.finalize_attempt_workspace(attempt.attempt_id)
                 return True
+            if self._execution_was_cancelled(order.run_id, attempt.attempt_id):
+                self._record_late_execution_result(order.run_id, attempt.attempt_id)
+                return False
             self._store_execution_result(attempt.attempt_id, result)
         if result.status != "execution_complete":
             self._close_execution_failure(
@@ -593,6 +599,38 @@ class ResearchOrchestrator:
         self.transitions.transition_work_order(refreshed.work_order_id, refreshed.version, WorkOrderState.VERIFYING,
             event_type="VERIFICATION_STARTED", actor_type="controller", actor_id="orchestrator", correlation_id=attempt.attempt_id)
         return True
+
+    def _execution_was_cancelled(self, run_id: str, attempt_id: str) -> bool:
+        with self.sessions() as session:
+            run = session.get(ResearchRunRecord, run_id)
+            attempt = session.get(AttemptRecord, attempt_id)
+            return bool(
+                run is not None
+                and attempt is not None
+                and (
+                    run.cancellation_requested
+                    or ResearchRunState(run.state) is ResearchRunState.CANCELLED
+                    or AttemptState(attempt.state) is AttemptState.CANCELLED
+                )
+            )
+
+    def _record_late_execution_result(self, run_id: str, attempt_id: str) -> None:
+        with self.sessions.begin() as session:
+            already_recorded = session.scalar(select(AuditEventRecord.event_id).where(
+                AuditEventRecord.run_id == run_id,
+                AuditEventRecord.entity_type == "attempt",
+                AuditEventRecord.entity_id == attempt_id,
+                AuditEventRecord.event_type == "EXECUTION_LATE_RESULT_IGNORED",
+            ).limit(1))
+            if already_recorded is None:
+                session.add(AuditEventRecord(
+                    event_id=f"evt_{uuid4().hex}",
+                    event_type="EXECUTION_LATE_RESULT_IGNORED",
+                    run_id=run_id, entity_type="attempt", entity_id=attempt_id,
+                    actor_type="controller", actor_id="orchestrator",
+                    timestamp=utc_now(), correlation_id=attempt_id,
+                    causation_id=None, metadata_json={"authority_reopened": False},
+                ))
 
     def _close_execution_failure(
         self,

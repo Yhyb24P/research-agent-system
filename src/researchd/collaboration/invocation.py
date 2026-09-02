@@ -188,10 +188,20 @@ class InvocationService:
         *,
         external_invocation_id: str | None = None,
         now: datetime | None = None,
-    ) -> None:
+    ) -> bool:
         reference = now or datetime.now(UTC)
         with self.sessions.begin() as session:
             row = session.get(AgentInvocationRecord, str(result.invocation_id))
+            if (
+                row is not None
+                and row.status == InvocationStatus.CANCELLED.value
+                and row.cancel_requested_at is not None
+            ):
+                session.add(self._audit(
+                    row, "AGENT_INVOCATION_LATE_RESULT_IGNORED", reference,
+                    {"incoming_status": result.status.value},
+                ))
+                return False
             if row is None or row.status != InvocationStatus.RUNNING.value:
                 raise StaleInvocationResult("invocation is not running")
             result_external_id = external_invocation_id or result.external_invocation_id
@@ -217,6 +227,7 @@ class InvocationService:
                 delegation.updated_at = reference
                 delegation.completed_at = reference
                 delegation.version += 1
+            return True
 
     def expire_deadlines(self, *, now: datetime | None = None) -> tuple[str, ...]:
         reference = now or datetime.now(UTC)
