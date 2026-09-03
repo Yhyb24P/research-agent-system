@@ -798,6 +798,15 @@ class ResearchOrchestrator:
             ))
 
     def _create_revision(self, order: WorkOrderRecord, reason: str, *, objective: str | None = None) -> bool:
+        # A REVISION_REQUIRED predecessor stays immutable and may be observed
+        # again after a wake/restart.  Its already-created child is the durable
+        # proof that the revision request was consumed.
+        with self.sessions() as session:
+            existing_child = session.scalar(select(WorkOrderRecord.work_order_id).where(
+                WorkOrderRecord.parent_work_order_id == order.work_order_id,
+            ).limit(1))
+        if existing_child is not None:
+            return False
         run = self._run(order.run_id)
         if run.iterations_used >= run.max_iterations:
             self._transition_run(order.run_id, ResearchRunState.FAILED, "MAX_ITERATIONS_EXCEEDED")
@@ -1013,10 +1022,16 @@ class ResearchOrchestrator:
     def _next_order(self, run_id: str) -> WorkOrderRecord | None:
         with self.sessions() as session:
             query = select(WorkOrderRecord).where(WorkOrderRecord.run_id == run_id, WorkOrderRecord.state.not_in((WorkOrderState.ACCEPTED.value, WorkOrderState.FAILED.value, WorkOrderState.CANCELLED.value))).order_by(WorkOrderRecord.created_at)
-            result = session.scalars(query).first()
-            if result is not None:
+            for result in session.scalars(query):
+                if result.state == WorkOrderState.REVISION_REQUIRED.value:
+                    child = session.scalar(select(WorkOrderRecord.work_order_id).where(
+                        WorkOrderRecord.parent_work_order_id == result.work_order_id,
+                    ).limit(1))
+                    if child is not None:
+                        continue
                 session.expunge(result)
-            return result
+                return result
+            return None
 
     def _review_order(self, run_id: str) -> WorkOrderRecord | None:
         with self.sessions() as session:
