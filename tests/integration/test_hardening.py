@@ -64,20 +64,20 @@ def _restore(snapshot: Path, database: Path, artifacts: Path) -> Any:
     )
 
 
-def test_metrics_snapshot_covers_cloud_and_workflow_records(tmp_path: Path) -> None:
+def test_metrics_snapshot_covers_agent_turns_and_workflow_records(tmp_path: Path) -> None:
     sessions, orchestrator, _, _ = make_orchestrator(tmp_path, cloud_responses=[_proposal(), _review()])
     run_id = orchestrator.create_run(workspace_id="ws_e2e", objective="metrics")
     asyncio.run(orchestrator.run(run_id, max_steps=30))
     metrics = collect_metrics(sessions, run_id=run_id)
     payload = metrics.as_dict()
-    assert payload["cloud_calls"] == 2
-    assert payload["cloud_statuses"] == {"COMPLETED": 2}
+    assert payload["agent_turns"] == 2
+    assert payload["agent_turn_statuses"] == {"COMPLETED": 2}
     assert payload["verifier_outcomes"] == {"pass": 1}
     assert payload["delegations"] == {"PLAN:COMPLETED": 1, "EXECUTE:COMPLETED": 1, "REVIEW:COMPLETED": 1}
     assert payload["invocations"] == {"SUCCEEDED": 3}
     assert payload["agent_invocation_failures"] == 0
     rendered = metrics.prometheus()
-    assert "research_cloud_calls_total 2" in rendered
+    assert "research_agent_turns_total 2" in rendered
     assert 'research_delegations_total{purpose="EXECUTE",state="COMPLETED"} 1' in rendered
     assert 'research_agent_invocations_total{status="SUCCEEDED"} 3' in rendered
     assert "research_agent_invocation_failures_total 0" in rendered
@@ -97,8 +97,8 @@ def test_short_mixed_workload_soak_keeps_runs_and_metrics_consistent(tmp_path: P
     snapshots = [asyncio.run(orchestrator.run(run_id, max_steps=30)) for run_id in run_ids]
     assert all(snapshot.state.value == "COMPLETED" for snapshot in snapshots)
     metrics = collect_metrics(sessions)
-    assert metrics.cloud_calls == 8
-    assert metrics.cloud_statuses == {"COMPLETED": 8}
+    assert metrics.agent_turns == 8
+    assert metrics.agent_turn_statuses == {"COMPLETED": 8}
     assert metrics.verifier_outcomes == {"pass": 4}
 
 
