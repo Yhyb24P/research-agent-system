@@ -465,6 +465,10 @@ class ResearchOrchestrator:
         delegation_id: str | None = None,
     ) -> str:
         """Retry an unchanged WorkOrder with a new immutable Attempt."""
+        if (attempt_id is None) != (delegation_id is None):
+            raise OrchestrationError(
+                "retry Attempt and Delegation identities must be supplied together"
+            )
         if attempt_id is not None:
             with self.sessions() as session:
                 existing = session.get(AttemptRecord, attempt_id)
@@ -481,7 +485,18 @@ class ResearchOrchestrator:
         if run.iterations_used >= run.max_iterations:
             self._transition_run(order.run_id, ResearchRunState.FAILED, "MAX_ITERATIONS_EXCEEDED")
             raise OrchestrationError("maximum iterations exceeded")
-        attempt_id = attempt_id or f"att_{uuid4().hex}"
+        if attempt_id is None:
+            # A command may be replayed after the controller provisioned the
+            # Delegation/workspace but before it committed the Attempt and
+            # workflow transitions.  Bind both identities to the durable
+            # pre-transition WorkOrder version so that replay recovers that
+            # authority instead of leaking a second live Delegation/grant.
+            retry_digest = hashlib.sha256(
+                f"{work_order_id}:retry:{order.version}".encode()
+            ).hexdigest()[:32]
+            attempt_id = f"att_retry_{retry_digest}"
+            delegation_id = f"del_retry_{retry_digest}"
+        assert delegation_id is not None
         prepared_delegation_id = self.collaboration.prepare_execution(
             order,
             preferred_agent_id=AgentId(preferred_agent_id) if preferred_agent_id else None,
