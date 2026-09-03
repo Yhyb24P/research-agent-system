@@ -19,7 +19,7 @@ from researchd.context.redaction import DeterministicRedactor
 from researchd.domain.enums import AgentAdapterKind, AgentTrustZone, Capability, DataClassification, VerificationOverall
 from researchd.domain.criteria import acceptance_fingerprint
 from researchd.domain.verification import CriterionEvaluation, VerificationResult
-from researchd.domain.ids import AgentId, AgentRuntimeId, VerificationId
+from researchd.domain.ids import AgentId, AgentRuntimeId, DelegationId, VerificationId
 from researchd.executor.contracts import ExecutorResult
 from researchd.models.cloud import CloudCallBudget, CloudModelRequest, CloudModelResponse, CloudPricing, CloudProviderConfiguration, CloudUsage
 from researchd.orchestrator.engine import OrchestrationError, OrchestrationLimits, ResearchOrchestrator
@@ -236,7 +236,7 @@ def make_orchestrator(tmp_path: Path, *, cloud_responses: list[str], passed: boo
         policy=policy, verifier=FakeVerifier(sessions, passed=passed),
         workspace_capabilities=frozenset(), user_capabilities=frozenset(),
         maximum_budget=BudgetLimits(100, 100, 0, 100, 100),
-        limits=OrchestrationLimits(max_iterations=max_iterations, max_cloud_calls=8),
+        limits=OrchestrationLimits(max_iterations=max_iterations, max_agent_turns=8),
     )
     return sessions, orchestrator, executor, model
 
@@ -417,6 +417,70 @@ def test_retry_unchanged_work_order_creates_new_attempt(tmp_path: Path) -> None:
         assert session.query(WorkOrderRecord).one().contract["objective"] == "fix the reproducible NaN smoke failure"
     snapshot = asyncio.run(orchestrator.run(run_id, max_steps=30))
     assert snapshot.state.value == "COMPLETED" and flaky.calls == 2
+
+
+def test_retry_reuses_durable_identity_after_prepare_crash(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sessions, orchestrator, _, _ = make_orchestrator(
+        tmp_path, cloud_responses=[_proposal(), _review()]
+    )
+    flaky = FlakyExecutor()
+    orchestrator.collaboration.executor = cast(LocalExecutorAgentAdapter, flaky)
+    run_id = orchestrator.create_run(
+        workspace_id="ws_e2e", objective="recover interrupted retry"
+    )
+    for _ in range(5):
+        asyncio.run(orchestrator.advance(run_id))
+    with sessions() as session:
+        order = session.scalar(
+            select(WorkOrderRecord).where(WorkOrderRecord.run_id == run_id)
+        )
+        assert order is not None and order.state == "EXECUTION_FAILED"
+
+    prepare = orchestrator.collaboration.prepare_execution
+    prepared_ids: list[str | None] = []
+
+    def crash_after_prepare(
+        work_order: WorkOrderRecord,
+        *,
+        preferred_agent_id: AgentId | None = None,
+        delegation_id: DelegationId | None = None,
+    ) -> str | None:
+        prepared = prepare(
+            work_order,
+            preferred_agent_id=preferred_agent_id,
+            delegation_id=delegation_id,
+        )
+        prepared_ids.append(prepared)
+        raise RuntimeError("simulated crash after durable Delegation preparation")
+
+    monkeypatch.setattr(
+        orchestrator.collaboration, "prepare_execution", crash_after_prepare
+    )
+    with pytest.raises(RuntimeError, match="simulated crash"):
+        orchestrator.retry_attempt(order.work_order_id)
+
+    monkeypatch.setattr(orchestrator.collaboration, "prepare_execution", prepare)
+    recovered_attempt_id = orchestrator.retry_attempt(order.work_order_id)
+
+    with sessions() as session:
+        attempts = session.scalars(
+            select(AttemptRecord).where(
+                AttemptRecord.work_order_id == order.work_order_id
+            )
+        ).all()
+        retry_attempt = session.get(AttemptRecord, recovered_attempt_id)
+        delegations = session.scalars(
+            select(DelegationRecord).where(
+                DelegationRecord.work_order_id == order.work_order_id
+            )
+        ).all()
+        assert retry_attempt is not None
+        assert retry_attempt.delegation_id == prepared_ids[0]
+        assert len(attempts) == 2
+        assert len(delegations) == 2
 
 
 def test_failed_agent_redelegation_creates_new_delegation_and_attempt(tmp_path: Path) -> None:

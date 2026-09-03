@@ -351,7 +351,7 @@ The shell is entered only after the daemon reports READY — a non-ready daemon 
 surfaced with its failed startup phase, never bypassed. The shell offers
 `status`; `workspace list` / `workspace create` / `workspace use`; `agent
 list` / `agent use` / `agent remove` / `agent start`; `runtime list` /
-`runtime stop`; `run list`; `task create` / `task cancel`; `msg`; `handoff
+`runtime stop`; `run list` / `run resume`; `work-order retry`; `task create` / `task cancel`; `msg`; `handoff
 list` / `handoff accept` / `handoff reject`; `events watch`; `approval approve
 <approval-id>`; remote attach/renew/detach; and `quit`. With a focused
 workspace, `task create <objective>` uses that workspace; otherwise the first

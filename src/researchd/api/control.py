@@ -39,8 +39,8 @@ class LocalControlAPI:
                 "active_attempt_ids": [item.attempt_id for item in attempts],
                 "iterations_used": run.iterations_used,
                 "max_iterations": run.max_iterations,
-                "cloud_calls_used": run.cloud_calls_used,
-                "max_cloud_calls": run.max_cloud_calls,
+                "agent_turns_used": run.agent_turns_used,
+                "max_agent_turns": run.max_agent_turns,
                 "cancellation_requested": run.cancellation_requested,
             }
 
@@ -226,6 +226,9 @@ class LocalControlAPI:
             "source_agent_id": row.source_agent_id,
             "proposed_target_agent_id": row.proposed_target_agent_id,
             "requested_mode": row.requested_mode, "status": row.status,
+            "decision_pending": (
+                row.status == "PROPOSED" and row.decision_actor_type is not None
+            ),
             "reason": row.reason,
             "continuation_objective": row.continuation_objective,
             "artifact_ids": row.artifact_ids_json,
@@ -354,6 +357,7 @@ class LocalControlAPI:
                     "work_order_id": item.work_order_id, "attempt_id": item.attempt_id,
                     "delegation_id": item.delegation_id, "runtime_id": item.runtime_id,
                     "purpose": item.purpose, "status": item.status,
+                    "failure_category": item.failure_category,
                     "reason_code": item.reason_code,
                     "created_at": item.created_at.isoformat(),
                     "completed_at": item.completed_at.isoformat() if item.completed_at else None,
@@ -392,7 +396,7 @@ class LocalControlAPI:
                 raise LookupError(delegation_id)
             payload = self._delegation_payload(row)
             invocations = session.scalars(select(AgentInvocationRecord).where(AgentInvocationRecord.delegation_id == delegation_id).order_by(AgentInvocationRecord.created_at)).all()
-            payload["invocations"] = [{"invocation_id": item.invocation_id, "status": item.status, "agent_id": item.agent_id, "runtime_id": item.runtime_id, "purpose": item.purpose} for item in invocations]
+            payload["invocations"] = [{"invocation_id": item.invocation_id, "status": item.status, "agent_id": item.agent_id, "runtime_id": item.runtime_id, "purpose": item.purpose, "failure_category": item.failure_category, "reason_code": item.reason_code} for item in invocations]
             return payload
 
     def _delegation_payload(self, row: DelegationRecord) -> dict[str, Any]:
@@ -490,7 +494,7 @@ class LocalControlAPI:
             items.extend({"kind": "plan", "entity_id": item.plan_id, "timestamp": item.created_at.isoformat(), "plan_id": item.plan_id, "run_id": item.run_id} for item in plans)
             items.extend({"kind": "work_order", "entity_id": item.work_order_id, "timestamp": item.created_at.isoformat(), "work_order_id": item.work_order_id, "state": item.state, "objective": item.objective} for item in orders)
             items.extend({"kind": "attempt", "entity_id": item.attempt_id, "timestamp": item.created_at.isoformat(), "attempt_id": item.attempt_id, "work_order_id": item.work_order_id, "delegation_id": item.delegation_id, "state": item.state} for item in attempts)
-            items.extend({"kind": "invocation", "entity_id": item.invocation_id, "timestamp": item.created_at.isoformat(), "invocation_id": item.invocation_id, "delegation_id": item.delegation_id, "workspace_grant_id": item.workspace_grant_id, "purpose": item.purpose, "agent_id": item.agent_id, "runtime_id": item.runtime_id, "status": item.status} for item in invocations)
+            items.extend({"kind": "invocation", "entity_id": item.invocation_id, "timestamp": item.created_at.isoformat(), "invocation_id": item.invocation_id, "delegation_id": item.delegation_id, "workspace_grant_id": item.workspace_grant_id, "purpose": item.purpose, "agent_id": item.agent_id, "runtime_id": item.runtime_id, "status": item.status, "failure_category": item.failure_category, "reason_code": item.reason_code} for item in invocations)
             items.extend({"kind": "observation", "entity_id": item.observation_id, "timestamp": item.created_at.isoformat(), "attempt_id": item.attempt_id, "name": item.name, "producer_type": item.producer_type, "producer_id": item.producer_id, "classification": item.classification} for item in observations)
             items.extend({"kind": "claim", "entity_id": item.claim_id, "timestamp": item.created_at.isoformat(), "attempt_id": item.attempt_id, "producer_type": item.producer_type, "producer_id": item.producer_id} for item in claims)
             items.extend({"kind": "verification", "entity_id": item.verification_id, "timestamp": item.created_at.isoformat(), "attempt_id": item.attempt_id, "work_order_id": item.work_order_id, "overall": item.overall, "verifier_version": item.verifier_version, "valid": item.valid} for item in verifications)
@@ -503,6 +507,28 @@ class LocalControlAPI:
             raise RuntimeError("controller is required for state-changing commands")
         await self.orchestrator.cancel(run_id)
         return self.run_status(run_id)
+
+    def resume_run(self, run_id: str) -> dict[str, Any]:
+        if self.orchestrator is None:
+            raise RuntimeError("controller is required for state-changing commands")
+        self.orchestrator.resume_external(run_id)
+        return self.run_status(run_id)
+
+    def retry_work_order(
+        self,
+        work_order_id: str,
+        *,
+        target_agent_id: str | None = None,
+    ) -> dict[str, Any]:
+        if self.orchestrator is None:
+            raise RuntimeError("controller is required for state-changing commands")
+        attempt_id = self.orchestrator.retry_attempt(
+            work_order_id,
+            preferred_agent_id=target_agent_id,
+        )
+        resource = self.work_order_status(work_order_id)
+        resource["attempt_id"] = attempt_id
+        return resource
 
     async def approve(self, work_order_id: str, grant_id: str) -> dict[str, Any]:
         if self.orchestrator is None:

@@ -1,7 +1,7 @@
 """PH01: regression contracts for the daemon-owned orchestration driver.
 
 The driver is a latency optimization over durable controller state: startup
-re-scans runnable Run states, one worker serializes advancement, and failures
+re-scans runnable Run states, bounded workers serialize each Run, and failures
 are recorded on the health projection instead of looping forever.
 """
 
@@ -123,14 +123,15 @@ def test_driver_restart_recovery_scans_durable_runnable_states(tmp_path: Path) -
         driver.stop()
 
 
-def test_driver_serializes_advancement_to_a_single_worker(tmp_path: Path) -> None:
+def test_driver_uses_a_bounded_worker_pool(tmp_path: Path) -> None:
     sessions = _seeded_sessions(tmp_path, runnable=True)
     orchestrator = _RecordingOrchestrator()
     driver = OrchestrationDriver(cast(OrchestrationTarget, orchestrator), sessions)
     driver.start()
     try:
         assert orchestrator.done.wait(timeout=5)
-        assert orchestrator.max_concurrent == 1
+        assert 1 <= orchestrator.max_concurrent <= 4
+        assert driver.health()["worker_count"] == 4
     finally:
         driver.stop()
 
@@ -180,6 +181,38 @@ def test_duplicate_wake_while_advancing_is_serialized_not_parallel(
         assert orchestrator.wait_calls(3)
         driver.stop()
         assert orchestrator.calls == ["run_new", "run_new", "run_planning"]
+    finally:
+        orchestrator.release.set()
+        driver.stop()
+
+
+def test_blocked_run_does_not_block_another_run(tmp_path: Path) -> None:
+    sessions = _seeded_sessions(tmp_path, runnable=False)
+
+    class _IndependentRuns:
+        def __init__(self) -> None:
+            self.blocked = threading.Event()
+            self.release = threading.Event()
+            self.fast_done = threading.Event()
+
+        async def advance(self, run_id: str) -> bool:
+            if run_id == "run_new":
+                self.blocked.set()
+                self.release.wait(timeout=5)
+            else:
+                self.fast_done.set()
+            return False
+
+    orchestrator = _IndependentRuns()
+    driver = OrchestrationDriver(
+        cast(OrchestrationTarget, orchestrator), sessions, max_workers=2,
+    )
+    driver.start()
+    try:
+        driver.wake("run_new")
+        assert orchestrator.blocked.wait(timeout=2)
+        driver.wake("run_planning")
+        assert orchestrator.fast_done.wait(timeout=2)
     finally:
         orchestrator.release.set()
         driver.stop()

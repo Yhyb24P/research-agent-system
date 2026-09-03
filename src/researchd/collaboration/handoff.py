@@ -1,11 +1,12 @@
 """Durable, non-authoritative handoff proposal contract and storage."""
 
 from datetime import UTC, datetime
-from typing import Literal, Protocol
+from typing import Any, Literal, Protocol, cast
 import hashlib
 
 from pydantic import Field, model_validator
-from sqlalchemy import select
+from sqlalchemy import select, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session, sessionmaker
 
 from researchd.domain.base import DomainModel
@@ -47,6 +48,7 @@ class HandoffProposal(DomainModel):
     artifact_ids: tuple[str, ...] = ()
     observation_ids: tuple[str, ...] = ()
     status: HandoffStatus
+    decision_pending: bool = False
     created_at: datetime
     resolution_entity_type: str | None = None
     resolution_entity_id: str | None = None
@@ -68,7 +70,10 @@ class HandoffResolutionService:
         self, proposal_id: str, *, actor_type: str, actor_id: str,
         reason: str, target_agent_id: str | None = None,
     ) -> HandoffProposal:
-        with self.sessions() as session:
+        if not actor_type or not actor_id or not reason:
+            raise ValueError("handoff decision actor and reason are required")
+        digest = hashlib.sha256(proposal_id.encode()).hexdigest()[:32]
+        with self.sessions.begin() as session:
             proposal = session.get(HandoffProposalRecord, proposal_id)
             if proposal is None:
                 raise LookupError(proposal_id)
@@ -82,20 +87,68 @@ class HandoffResolutionService:
             mode = HandoffMode(proposal.requested_mode)
             target = target_agent_id or proposal.proposed_target_agent_id
             objective = proposal.continuation_objective
-        digest = hashlib.sha256(proposal_id.encode()).hexdigest()[:32]
+            if mode is HandoffMode.CONTINUE:
+                if target is None:
+                    raise ValueError("CONTINUE handoff requires a target Agent")
+                reservation_type = "agent"
+                reservation_id = target
+            else:
+                if target is not None:
+                    raise ValueError("REVISE handoff cannot select an execution target Agent")
+                if objective is None:
+                    raise ValueError("REVISE handoff requires a continuation objective")
+                reservation_type = "revision_pending"
+                reservation_id = f"wo_handoff_{digest}"
+            if proposal.decision_actor_type is None:
+                claimed = cast("CursorResult[Any]", session.execute(
+                    update(HandoffProposalRecord)
+                    .where(
+                        HandoffProposalRecord.proposal_id == proposal_id,
+                        HandoffProposalRecord.status == HandoffStatus.PROPOSED.value,
+                        HandoffProposalRecord.decision_actor_type.is_(None),
+                    )
+                    .values(
+                        decision_actor_type=actor_type,
+                        decision_actor_id=actor_id,
+                        decision_reason=reason,
+                        resolution_entity_type=reservation_type,
+                        resolution_entity_id=reservation_id,
+                    )
+                ))
+                if claimed.rowcount != 1:
+                    raise ValueError("handoff proposal already has a different decision")
+                session.add(AuditEventRecord(
+                    event_id=f"evt_handoff_accept_reserved_{proposal_id}",
+                    event_type="HANDOFF_ACCEPT_RESERVED",
+                    run_id=proposal.run_id,
+                    entity_type="handoff_proposal",
+                    entity_id=proposal_id,
+                    actor_type=actor_type,
+                    actor_id=actor_id,
+                    timestamp=datetime.now(UTC),
+                    correlation_id=proposal.work_order_id,
+                    causation_id=proposal.source_invocation_id,
+                    metadata_json={
+                        "requested_mode": mode.value,
+                        "target_agent_id": target,
+                    },
+                ))
+            elif (
+                proposal.decision_actor_type != actor_type
+                or proposal.decision_actor_id != actor_id
+                or proposal.resolution_entity_type != reservation_type
+                or proposal.resolution_entity_id != reservation_id
+            ):
+                raise ValueError("handoff proposal already has a different decision")
         if mode is HandoffMode.CONTINUE:
-            if target is None:
-                raise ValueError("CONTINUE handoff requires a target Agent")
+            assert target is not None
             entity_type = "attempt"
             entity_id = self.controller.retry_attempt(
                 proposal.work_order_id, preferred_agent_id=target,
                 attempt_id=f"att_handoff_{digest}", delegation_id=f"del_handoff_{digest}",
             )
         else:
-            if target is not None:
-                raise ValueError("REVISE handoff cannot select an execution target Agent")
-            if objective is None:
-                raise ValueError("REVISE handoff requires a continuation objective")
+            assert objective is not None
             entity_type = "work_order"
             entity_id = self.controller.create_handoff_revision(
                 proposal.work_order_id, objective=objective, reason=proposal.reason,
@@ -124,10 +177,55 @@ class HandoffResolutionService:
                 if row.status != status.value or row.resolution_entity_id != entity_id:
                     raise ValueError("handoff proposal already has a different decision")
                 return HandoffProposalService._from_record(row)
-            row.status, row.decided_at = status.value, now
-            row.decision_actor_type, row.decision_actor_id = actor_type, actor_id
-            row.decision_reason = reason
-            row.resolution_entity_type, row.resolution_entity_id = entity_type, entity_id
+            if status is HandoffStatus.ACCEPTED:
+                if (
+                    row.decision_actor_type != actor_type
+                    or row.decision_actor_id != actor_id
+                    or row.resolution_entity_type
+                    not in {"agent", "revision_pending"}
+                ):
+                    raise ValueError("handoff proposal acceptance was not reserved")
+                pending_type = row.resolution_entity_type
+                pending_id = row.resolution_entity_id
+                decided = cast("CursorResult[Any]", session.execute(
+                    update(HandoffProposalRecord)
+                    .where(
+                        HandoffProposalRecord.proposal_id == proposal_id,
+                        HandoffProposalRecord.status == HandoffStatus.PROPOSED.value,
+                        HandoffProposalRecord.decision_actor_type == actor_type,
+                        HandoffProposalRecord.decision_actor_id == actor_id,
+                        HandoffProposalRecord.resolution_entity_type == pending_type,
+                        HandoffProposalRecord.resolution_entity_id == pending_id,
+                    )
+                    .values(
+                        status=status.value,
+                        decided_at=now,
+                        resolution_entity_type=entity_type,
+                        resolution_entity_id=entity_id,
+                    )
+                ))
+            elif row.decision_actor_type is not None:
+                raise ValueError("handoff proposal acceptance is already in progress")
+            else:
+                decided = cast("CursorResult[Any]", session.execute(
+                    update(HandoffProposalRecord)
+                    .where(
+                        HandoffProposalRecord.proposal_id == proposal_id,
+                        HandoffProposalRecord.status == HandoffStatus.PROPOSED.value,
+                        HandoffProposalRecord.decision_actor_type.is_(None),
+                    )
+                    .values(
+                        status=status.value,
+                        decided_at=now,
+                        decision_actor_type=actor_type,
+                        decision_actor_id=actor_id,
+                        decision_reason=reason,
+                        resolution_entity_type=entity_type,
+                        resolution_entity_id=entity_id,
+                    )
+                ))
+            if decided.rowcount != 1:
+                raise ValueError("handoff proposal already has a different decision")
             session.add(AuditEventRecord(
                 event_id=f"evt_handoff_decision_{proposal_id}", event_type=f"HANDOFF_{status.value}",
                 run_id=row.run_id, entity_type="handoff_proposal", entity_id=proposal_id,
@@ -136,6 +234,7 @@ class HandoffResolutionService:
                 metadata_json={"resolution_entity_type": entity_type, "resolution_entity_id": entity_id},
             ))
             session.flush()
+            session.refresh(row)
             return HandoffProposalService._from_record(row)
 
     @staticmethod
@@ -253,6 +352,10 @@ class HandoffProposalService:
             continuation_objective=row.continuation_objective,
             artifact_ids=tuple(row.artifact_ids_json), observation_ids=tuple(row.observation_ids_json),
             status=HandoffStatus(row.status), created_at=row.created_at,
+            decision_pending=(
+                row.status == HandoffStatus.PROPOSED.value
+                and row.decision_actor_type is not None
+            ),
             resolution_entity_type=row.resolution_entity_type,
             resolution_entity_id=row.resolution_entity_id,
         )

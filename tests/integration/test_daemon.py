@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
+from pydantic import ValidationError
 from sqlalchemy import text
 
 from researchd.agents.cloud_lead import CloudLeadAdapter
@@ -17,9 +18,13 @@ from researchd.context.redaction import DeterministicRedactor
 from researchd.daemon.composition import DaemonApplication, DaemonConfig, compose_daemon
 from researchd.daemon.contracts import (
     DaemonCommandResult,
+    ExternalRunResumeRequest,
+    ExternalWorkOrderRetryRequest,
     HumanDecisionCommand,
     RunCancelCommand,
+    RunResumeCommand,
     WorkOrderApproveCommand,
+    WorkOrderRetryCommand,
 )
 from researchd.daemon.dispatcher import DaemonCommandDispatcher
 from researchd.daemon.runtime import DaemonNotReady, DaemonState, ResearchDaemon
@@ -185,6 +190,16 @@ class _ControlStub:
         self.calls.append(("cancel", run_id))
         return {"run_id": run_id, "state": "CANCELLATION_REQUESTED"}
 
+    def resume_run(self, run_id: str) -> dict[str, object]:
+        self.calls.append(("resume", run_id))
+        return {"run_id": run_id, "state": "PLANNING"}
+
+    def retry_work_order(
+        self, work_order_id: str, *, target_agent_id: str | None = None,
+    ) -> dict[str, object]:
+        self.calls.append(("retry", work_order_id, target_agent_id or ""))
+        return {"run_id": "run_1", "work_order_id": work_order_id, "state": "EXECUTING"}
+
     async def approve(self, work_order_id: str, grant_id: str) -> dict[str, object]:
         self.calls.append(("approve", work_order_id, grant_id))
         return {"work_order_id": work_order_id, "state": "APPROVED"}
@@ -314,6 +329,40 @@ def test_dispatcher_wraps_control_mutations_in_versioned_envelope(tmp_path: Path
         ("approve", "wo_1", "grant_1"),
         ("human", "wo_1", "revise", "narrow the task"),
     ]
+
+
+def test_retry_and_resume_commands_expose_only_human_intent(tmp_path: Path) -> None:
+    with pytest.raises(ValidationError):
+        ExternalWorkOrderRetryRequest.model_validate({
+            "command_id": "cmd_retry_forged",
+            "target_agent_id": "agent_backup",
+            "attempt_id": "att_forged",
+            "delegation_id": "del_forged",
+            "runtime_id": "runtime_forged",
+            "actor_type": "SYSTEM",
+            "launch_spec": {"argv": ["/bin/sh"]},
+        })
+    retry_request = ExternalWorkOrderRetryRequest.model_validate({
+        "command_id": "cmd_retry_clean",
+        "target_agent_id": "agent_backup",
+    })
+    resume_request = ExternalRunResumeRequest.model_validate({
+        "command_id": "cmd_resume_clean",
+    })
+    assert retry_request.target_agent_id == "agent_backup"
+
+    control = _ControlStub()
+    dispatcher = DaemonCommandDispatcher(_supervisor(tmp_path), control)
+    retry = dispatcher(WorkOrderRetryCommand(
+        command_id=retry_request.command_id, actor_type="HUMAN", actor_id="operator",
+        work_order_id="wo_1", target_agent_id=retry_request.target_agent_id,
+    ))
+    resume = dispatcher(RunResumeCommand(
+        command_id=resume_request.command_id, actor_type="HUMAN", actor_id="operator",
+        run_id="run_1",
+    ))
+    assert isinstance(retry, DaemonCommandResult) and retry.command_type == "WorkOrderRetry"
+    assert isinstance(resume, DaemonCommandResult) and resume.command_type == "RunResume"
 
 
 def test_dispatcher_rejects_unknown_command_models(tmp_path: Path) -> None:

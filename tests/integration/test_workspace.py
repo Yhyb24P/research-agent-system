@@ -7,6 +7,7 @@ import subprocess
 import tarfile
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from researchd.adapters.a2a import A2AAdapter, EXECUTOR_RESULT_MEDIA_TYPE
@@ -33,11 +34,14 @@ from researchd.domain.ids import AgentId, AgentRuntimeId, DelegationId
 from researchd.storage.db import create_sqlite_engine, session_factory
 from researchd.storage.models import (
     AttemptRecord,
+    AuditEventRecord,
+    DelegationRecord,
     ResearchRunRecord,
     WorkOrderRecord,
     WorkspaceGrantRecord,
     WorkspaceRecord,
     WorkspaceReconciliationRecord,
+    WorkspaceTransportRecord,
 )
 from researchd.verifier.contracts import VerificationInputs
 from researchd.verifier.engine import VerifierEngine
@@ -83,9 +87,9 @@ def _database(tmp_path: Path) -> tuple[sessionmaker[Session], ArtifactService]:
             objective="remote workspace",
             state="ACTIVE",
             max_iterations=8,
-            max_cloud_calls=8,
+            max_agent_turns=8,
             iterations_used=0,
-            cloud_calls_used=0,
+            agent_turns_used=0,
             cancellation_requested=False,
             version=1,
             created_at=now,
@@ -296,6 +300,53 @@ def test_git_workspace_delegation_reconciles_to_artifact_then_verifier(tmp_path:
     assert "workspace_grant" in {item["kind"] for item in control.timeline("run_workspace")}
     status, resource = ControlResourceRouter(control).get("/api/workspace-grants?run=run_workspace")
     assert status == 200 and isinstance(resource, list) and resource[0]["workspace_grant_id"] == "wsg_git"
+
+
+def test_terminal_delegation_finalizes_evidence_before_cleanup(tmp_path: Path) -> None:
+    sessions, artifacts = _database(tmp_path)
+    source = tmp_path / "finalize-source"
+    _git_repository(source)
+    service = WorkspaceDelegationService(
+        sessions, artifacts, (GitWorktreeTransport(tmp_path / "finalize-worktrees"),),
+    )
+    service.create(WorkspaceGrant(
+        workspace_grant_id="wsg_finalize", delegation_id="del_workspace",
+        source_workspace_id="ws_workspace", access_mode=WorkspaceAccessMode.READ_WRITE,
+        allowed_paths=("src",), classification_ceiling=DataClassification.PROJECT_PRIVATE,
+        transport_kind=WorkspaceTransportKind.GIT_WORKTREE,
+    ))
+    provisioned = service.provision("wsg_finalize", source)
+    remote = Path(provisioned.remote_workspace_handle)
+    (remote / "src" / "allowed.txt").write_text("partial Agent result\n")
+
+    with pytest.raises(WorkspaceDelegationError, match="terminal Delegation"):
+        service.finalize_delegation("del_workspace")
+    with sessions.begin() as session:
+        delegation = session.get(DelegationRecord, "del_workspace")
+        assert delegation is not None
+        delegation.state = "FAILED"
+        delegation.completed_at = datetime.now(UTC)
+        delegation.version += 1
+
+    artifact_id = service.finalize_delegation("del_workspace")
+    assert artifact_id is not None
+    assert not remote.exists()
+    with sessions() as session:
+        grant = session.get(WorkspaceGrantRecord, "wsg_finalize")
+        transport = session.query(WorkspaceTransportRecord).filter_by(
+            workspace_grant_id="wsg_finalize",
+        ).one()
+        reconciliation = session.query(WorkspaceReconciliationRecord).filter_by(
+            workspace_grant_id="wsg_finalize",
+        ).one()
+        events = set(session.scalars(select(AuditEventRecord.event_type).where(
+            AuditEventRecord.entity_id == "wsg_finalize",
+        )))
+        assert grant is not None and grant.state == "COMPLETED"
+        assert grant.cleanup_state == "CLEANED"
+        assert transport.state == "CLOSED"
+        assert reconciliation.result_artifact_id == artifact_id
+        assert {"WORKSPACE_RECONCILED", "WORKSPACE_CLEANED"} <= events
 
 
 def test_archive_transport_is_bounded_and_rejects_returned_path_traversal(tmp_path: Path) -> None:

@@ -33,6 +33,7 @@ def main() -> int:
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--sbom", type=Path, required=True)
     parser.add_argument("--e2e", type=Path, required=True)
+    parser.add_argument("--failure-e2e", type=Path, required=True)
     parser.add_argument("--workflow-run-identity", required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
@@ -44,6 +45,9 @@ def main() -> int:
     e2e = json.loads(args.e2e.read_text(encoding="utf-8"))
     if e2e.get("result") != "PASS":
         raise SystemExit("product E2E did not report PASS")
+    failure_e2e = json.loads(args.failure_e2e.read_text(encoding="utf-8"))
+    if failure_e2e.get("result") != "PASS":
+        raise SystemExit("product failure-recovery E2E did not report PASS")
     manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
     source = manifest.get("source", {})
     if source.get("commit") != args.checked_out_commit:
@@ -64,6 +68,9 @@ def main() -> int:
         "release_manifest_sha256": digest(args.manifest),
         "sbom_sha256": digest(args.sbom),
         "product_e2e_result": e2e["result"],
+        "product_e2e_sha256": digest(args.e2e),
+        "product_failure_e2e_result": failure_e2e["result"],
+        "product_failure_e2e_sha256": digest(args.failure_e2e),
         "workflow_run_identity": args.workflow_run_identity,
         "qualification_claim": (
             "SOFTWARE_CANDIDATE_GATE_ONLY" if args.mode == "exact" else "PREFLIGHT_ONLY"

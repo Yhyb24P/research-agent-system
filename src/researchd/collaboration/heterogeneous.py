@@ -416,19 +416,18 @@ class HttpxAgentClient:
         *,
         readiness_timeout_seconds: float = 5.0,
         readiness_poll_seconds: float = 0.05,
+        read_timeout_seconds: float = 610.0,
     ) -> None:
-        if readiness_timeout_seconds <= 0 or readiness_poll_seconds <= 0:
+        if readiness_timeout_seconds <= 0 or readiness_poll_seconds <= 0 or read_timeout_seconds <= 0:
             raise ValueError("managed Agent readiness bounds must be positive")
         self.readiness_timeout_seconds = readiness_timeout_seconds
         self.readiness_poll_seconds = readiness_poll_seconds
+        self.read_timeout_seconds = read_timeout_seconds
 
     async def invoke(self, endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
-        read_timeout = self._read_timeout_seconds(payload)
         async with httpx.AsyncClient(
-            # Connection and write failures remain short.  The read boundary is
-            # purpose-aware and stays ten seconds beyond the corresponding
-            # trusted bridge limit, so the bridge owns turn termination.
-            timeout=httpx.Timeout(connect=5.0, read=read_timeout, write=10.0, pool=5.0),
+            # Generic adapter safety bound; it does not encode an Agent role.
+            timeout=httpx.Timeout(connect=5.0, read=self.read_timeout_seconds, write=10.0, pool=5.0),
             follow_redirects=False,
             trust_env=False,
         ) as client:
@@ -439,11 +438,6 @@ class HttpxAgentClient:
         if not isinstance(decoded, dict):
             raise ValueError("Agent endpoint returned non-object JSON")
         return decoded
-
-    @staticmethod
-    def _read_timeout_seconds(payload: dict[str, Any]) -> float:
-        purpose = payload.get("purpose")
-        return 610.0 if purpose == DelegationPurpose.EXECUTE.value else 310.0
 
     async def _wait_until_ready(
         self,
