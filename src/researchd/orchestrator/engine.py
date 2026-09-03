@@ -828,6 +828,7 @@ class ResearchOrchestrator:
         if existing is not None:
             if existing.parent_work_order_id != work_order_id or existing.objective != objective:
                 raise OrchestrationError("handoff revision identity conflict")
+            self._resume_handoff_revision(existing.run_id)
             return existing.work_order_id
         order = self._order(work_order_id)
         state = WorkOrderState(order.state)
@@ -849,7 +850,22 @@ class ResearchOrchestrator:
                 session, order.run_id, proposal, parent=work_order_id,
                 reason=reason, work_order_id=revision_work_order_id,
             )
+        self._resume_handoff_revision(order.run_id)
         return revision_work_order_id
+
+    def _resume_handoff_revision(self, run_id: str) -> None:
+        """Make a durable Handoff revision runnable, including crash replay."""
+        run = self._run(run_id)
+        state = ResearchRunState(run.state)
+        if state is ResearchRunState.WAITING_EXTERNAL:
+            self._transition_run(
+                run_id,
+                ResearchRunState.ACTIVE,
+                "HANDOFF_REVISION_RESUMED",
+            )
+            return
+        if state is not ResearchRunState.ACTIVE:
+            raise OrchestrationError("handoff revision cannot resume this Run state")
 
     async def cancel(self, run_id: str) -> RunSnapshot:
         run = self._run(run_id)

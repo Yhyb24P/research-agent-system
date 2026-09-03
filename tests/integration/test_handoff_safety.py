@@ -319,6 +319,7 @@ def test_continue_accept_replay_is_idempotent_and_conflicting_target_is_rejected
 def test_revise_accept_creates_a_parented_work_order(fixture: Fixture) -> None:
     with fixture.sessions.begin() as session:
         _get(session, WorkOrderRecord, "wo_exec").state = WorkOrderState.VERIFICATION_FAILED.value
+        _get(session, ResearchRunRecord, "run_h").state = ResearchRunState.WAITING_EXTERNAL.value
     proposal_id = fixture.broker.submit_handoff(
         InvocationId("inv_exec"),
         fixture.action(
@@ -342,6 +343,39 @@ def test_revise_accept_creates_a_parented_work_order(fixture: Fixture) -> None:
         assert revision.parent_work_order_id == "wo_exec"
         assert revision.objective == "retry with a different strategy"
         assert _get(session, WorkOrderRecord, "wo_exec").state == WorkOrderState.REVISION_REQUIRED.value
+        assert _get(session, ResearchRunRecord, "run_h").state == ResearchRunState.ACTIVE.value
+
+
+def test_handoff_revision_replay_resumes_existing_child(fixture: Fixture) -> None:
+    """A crash after child creation cannot strand its Run before the wake."""
+    controller = fixture.controller()
+    with fixture.sessions.begin() as session:
+        _get(session, WorkOrderRecord, "wo_exec").state = WorkOrderState.VERIFICATION_FAILED.value
+        _get(session, ResearchRunRecord, "run_h").state = ResearchRunState.WAITING_EXTERNAL.value
+
+    revision_id = controller.create_handoff_revision(
+        "wo_exec",
+        objective="recover the revision",
+        reason="handoff crash recovery",
+        revision_work_order_id="wo_handoff_replay",
+    )
+    with fixture.sessions.begin() as session:
+        # Crash injection: the child commit survived while the subsequent Run
+        # transition did not.  Replaying the controller command must heal it.
+        _get(session, ResearchRunRecord, "run_h").state = ResearchRunState.WAITING_EXTERNAL.value
+
+    assert controller.create_handoff_revision(
+        "wo_exec",
+        objective="recover the revision",
+        reason="handoff crash recovery",
+        revision_work_order_id="wo_handoff_replay",
+    ) == revision_id
+    with fixture.sessions() as session:
+        assert _get(session, ResearchRunRecord, "run_h").state == ResearchRunState.ACTIVE.value
+        children = session.scalars(select(WorkOrderRecord).where(
+            WorkOrderRecord.parent_work_order_id == "wo_exec",
+        )).all()
+        assert [row.work_order_id for row in children] == ["wo_handoff_replay"]
 
 
 def test_revise_cannot_select_an_execution_target(fixture: Fixture) -> None:
