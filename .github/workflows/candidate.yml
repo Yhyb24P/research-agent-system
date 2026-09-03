@@ -167,6 +167,7 @@ jobs:
             --manifest "${RUNNER_TEMP}/candidate-evidence/release-manifest.json" \
             --sbom "${RUNNER_TEMP}/candidate-evidence/sbom.json" \
             --e2e "${RUNNER_TEMP}/candidate-evidence/product-e2e.json" \
+            --failure-e2e "${RUNNER_TEMP}/candidate-evidence/product-failure-e2e.json" \
             --workflow-run-identity "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
             --output "${RUNNER_TEMP}/candidate-evidence/candidate-evidence.json"
           sha256sum "${RUNNER_TEMP}/candidate-evidence/"*.json >> "${RUNNER_TEMP}/candidate-evidence/artifact-sha256.txt"
