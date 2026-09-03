@@ -488,3 +488,59 @@ def test_retry_crash_leaves_no_executing_order_without_attempt(fixture: Fixture)
         assert len(attempts) == 1
         assert _get(session, WorkOrderRecord, "wo_exec").state == WorkOrderState.EXECUTING.value
         assert resolved.resolution_entity_id == attempts[0].attempt_id
+
+
+def test_accept_effect_cannot_be_concurrently_rejected_before_decision_commit(
+    fixture: Fixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    proposal_id = fixture.proposal()
+    fixture.terminalize_source()
+    service = HandoffResolutionService(fixture.sessions, fixture.controller())
+    decide = service._decide
+
+    def crash_before_decision(*args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError("simulated crash before Handoff decision commit")
+
+    monkeypatch.setattr(service, "_decide", crash_before_decision)
+    with pytest.raises(RuntimeError, match="decision commit"):
+        service.accept(
+            proposal_id,
+            actor_type="HUMAN",
+            actor_id="operator",
+            reason="accept and continue",
+            target_agent_id="agent_b",
+        )
+
+    with fixture.sessions() as session:
+        proposal = _get(session, HandoffProposalRecord, proposal_id)
+        assert proposal.status == HandoffStatus.PROPOSED.value
+        assert proposal.decision_actor_type == "HUMAN"
+        assert proposal.resolution_entity_type == "agent"
+        assert proposal.resolution_entity_id == "agent_b"
+        assert len(session.scalars(select(AttemptRecord).where(
+            AttemptRecord.attempt_id.like("att_handoff_%"),
+        )).all()) == 1
+
+    monkeypatch.setattr(service, "_decide", decide)
+    with pytest.raises(ValueError, match="acceptance is already in progress"):
+        service.reject(
+            proposal_id,
+            actor_type="HUMAN",
+            actor_id="operator",
+            reason="reject after effect",
+        )
+
+    resolved = service.accept(
+        proposal_id,
+        actor_type="HUMAN",
+        actor_id="operator",
+        reason="resume accepted decision",
+        target_agent_id="agent_b",
+    )
+    assert resolved.status is HandoffStatus.ACCEPTED
+    assert resolved.resolution_entity_type == "attempt"
+    with fixture.sessions() as session:
+        assert len(session.scalars(select(AttemptRecord).where(
+            AttemptRecord.attempt_id.like("att_handoff_%"),
+        )).all()) == 1
