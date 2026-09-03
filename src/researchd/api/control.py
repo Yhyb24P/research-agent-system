@@ -226,6 +226,9 @@ class LocalControlAPI:
             "source_agent_id": row.source_agent_id,
             "proposed_target_agent_id": row.proposed_target_agent_id,
             "requested_mode": row.requested_mode, "status": row.status,
+            "decision_pending": (
+                row.status == "PROPOSED" and row.decision_actor_type is not None
+            ),
             "reason": row.reason,
             "continuation_objective": row.continuation_objective,
             "artifact_ids": row.artifact_ids_json,

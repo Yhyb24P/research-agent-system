@@ -518,6 +518,10 @@ def test_accept_effect_cannot_be_concurrently_rejected_before_decision_commit(
         assert proposal.decision_actor_type == "HUMAN"
         assert proposal.resolution_entity_type == "agent"
         assert proposal.resolution_entity_id == "agent_b"
+        assert session.scalar(select(AuditEventRecord.event_type).where(
+            AuditEventRecord.event_type == "HANDOFF_ACCEPT_RESERVED",
+            AuditEventRecord.entity_id == proposal_id,
+        )) == "HANDOFF_ACCEPT_RESERVED"
         assert len(session.scalars(select(AttemptRecord).where(
             AttemptRecord.attempt_id.like("att_handoff_%"),
         )).all()) == 1

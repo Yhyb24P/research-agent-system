@@ -48,6 +48,7 @@ class HandoffProposal(DomainModel):
     artifact_ids: tuple[str, ...] = ()
     observation_ids: tuple[str, ...] = ()
     status: HandoffStatus
+    decision_pending: bool = False
     created_at: datetime
     resolution_entity_type: str | None = None
     resolution_entity_id: str | None = None
@@ -116,6 +117,22 @@ class HandoffResolutionService:
                 ))
                 if claimed.rowcount != 1:
                     raise ValueError("handoff proposal already has a different decision")
+                session.add(AuditEventRecord(
+                    event_id=f"evt_handoff_accept_reserved_{proposal_id}",
+                    event_type="HANDOFF_ACCEPT_RESERVED",
+                    run_id=proposal.run_id,
+                    entity_type="handoff_proposal",
+                    entity_id=proposal_id,
+                    actor_type=actor_type,
+                    actor_id=actor_id,
+                    timestamp=datetime.now(UTC),
+                    correlation_id=proposal.work_order_id,
+                    causation_id=proposal.source_invocation_id,
+                    metadata_json={
+                        "requested_mode": mode.value,
+                        "target_agent_id": target,
+                    },
+                ))
             elif (
                 proposal.decision_actor_type != actor_type
                 or proposal.decision_actor_id != actor_id
@@ -335,6 +352,10 @@ class HandoffProposalService:
             continuation_objective=row.continuation_objective,
             artifact_ids=tuple(row.artifact_ids_json), observation_ids=tuple(row.observation_ids_json),
             status=HandoffStatus(row.status), created_at=row.created_at,
+            decision_pending=(
+                row.status == HandoffStatus.PROPOSED.value
+                and row.decision_actor_type is not None
+            ),
             resolution_entity_type=row.resolution_entity_type,
             resolution_entity_id=row.resolution_entity_id,
         )
