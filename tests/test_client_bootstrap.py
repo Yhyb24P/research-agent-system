@@ -116,3 +116,89 @@ def test_doctor_accepts_initialized_owner_only_state(tmp_path: Path) -> None:
     assert report["config_valid"] is True
     assert report["control_credential_owner_only"] is True
     assert report["daemon"]["reachable"] is False
+
+
+def test_explicit_setup_isolates_state_inside_the_deployment_root(tmp_path: Path) -> None:
+    project = _git_project(tmp_path / "project")
+    home = tmp_path / "home"
+    deployment = tmp_path / "deployment"
+
+    result = run_setup(
+        project=project,
+        config_path=deployment / "researchd.json",
+        assume_yes=True,
+        environ={},
+        home=home,
+        cwd=project,
+        initialize_workspace_fn=lambda path: None,
+        print_fn=lambda message: None,
+    )
+
+    assert result is not None
+    assert result.config_path == deployment / "researchd.json"
+    payload = json.loads(result.config_path.read_text(encoding="utf-8"))
+    assert payload["database"] == str(deployment / "data" / "researchd.db")
+    assert payload["state_root"] == str(deployment / "state")
+    assert (deployment / "data" / "researchd.db").is_file()
+    assert (deployment / "state" / "control.token").is_file()
+    # An isolated deployment profile must never fall back to the caller's
+    # global XDG directories.
+    assert not (home / ".local/share/research-agent-system").exists()
+    assert not (home / ".local/state/research-agent-system").exists()
+
+
+def test_explicit_setup_layout_matches_the_deployment_convention(tmp_path: Path) -> None:
+    project = _git_project(tmp_path / "project")
+    home = tmp_path / "home"
+    deployment = tmp_path / "deployment"
+
+    def fake_run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(argv, 0)
+
+    result = run_setup(
+        project=project,
+        config_path=deployment / "researchd.json",
+        assume_yes=True,
+        environ={},
+        home=home,
+        cwd=project,
+        run_fn=fake_run,
+        initialize_workspace_fn=lambda path: None,
+        print_fn=lambda message: None,
+    )
+
+    assert result is not None
+    payload = json.loads(result.config_path.read_text(encoding="utf-8"))
+    # Deployment convention (DQ01 layout): researchd.json + data/ + artifacts/
+    # + state/ as siblings under the deployment root.
+    assert payload["artifact_root"] == str(deployment / "artifacts")
+
+
+def test_default_setup_still_uses_trusted_xdg_paths(tmp_path: Path) -> None:
+    project = _git_project(tmp_path / "project")
+    home = tmp_path / "home"
+
+    def fake_run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(argv, 0)
+
+    result = run_setup(
+        project=project,
+        assume_yes=True,
+        environ={},
+        home=home,
+        cwd=project,
+        run_fn=fake_run,
+        initialize_workspace_fn=lambda path: None,
+        print_fn=lambda message: None,
+    )
+
+    assert result is not None
+    assert result.config_path == home / ".config/research-agent-system/config.json"
+    payload = json.loads(result.config_path.read_text(encoding="utf-8"))
+    assert payload["database"] == str(
+        home / ".local/share/research-agent-system/researchd.db"
+    )
+    assert payload["artifact_root"] == str(
+        home / ".local/share/research-agent-system/artifacts"
+    )
+    assert payload["state_root"] == str(home / ".local/state/research-agent-system")
