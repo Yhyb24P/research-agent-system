@@ -1,5 +1,6 @@
 """PX02-03: research lifecycle (init / status / interactive entry)."""
 
+import functools
 import json
 import os
 import socket
@@ -7,6 +8,7 @@ import subprocess
 import sys
 import threading
 import time
+from datetime import UTC, datetime
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -18,6 +20,7 @@ from researchd.api.control import LocalControlAPI
 from researchd.api.web import make_handler
 from researchd.client import lifecycle
 from researchd.client.cli import main
+from researchd.client.transport import ResearchClient, load_owner_token
 from researchd.daemon.command_service import DurableDaemonCommandService
 from researchd.daemon.composition import DaemonConfig
 from researchd.daemon.contracts import DaemonCommandResult, WorkspaceCreateCommand
@@ -25,6 +28,7 @@ from researchd.daemon.runtime import ResearchDaemon
 from researchd.daemon.startup import StartupBarrier, StartupPhase
 from researchd.domain.base import DomainModel
 from researchd.storage.db import create_sqlite_engine, session_factory
+from researchd.storage.models import AgentRecord
 from tests.integration.test_storage import migrate
 
 TOKEN = "f" * 64
@@ -299,3 +303,263 @@ def test_interactive_entry_spawns_daemon_without_owning_its_lifecycle(
         for process in spawned:
             process.terminate()
             process.wait(timeout=5)
+
+
+def _terminate_live(processes: list[subprocess.Popen[bytes]]) -> None:
+    for process in processes:
+        if process.poll() is None:
+            process.terminate()
+            process.wait(timeout=5)
+
+
+def _failed_health_server(tmp_path: Path, port: int) -> ThreadingHTTPServer:
+    """A health endpoint that answers 503 with a FAILED startup report."""
+    database = tmp_path / "failed_startup.db"
+    migrate(database)
+    sessions = session_factory(create_sqlite_engine(database))
+    api = LocalControlAPI(sessions)
+    durable = DurableDaemonCommandService(sessions, _WorkspaceDispatcher())
+
+    def _explode() -> None:
+        raise RuntimeError("phase exploded")
+
+    barrier = StartupBarrier({phase: _explode for phase in StartupPhase})
+    daemon = ResearchDaemon(barrier, durable)
+    assert daemon.start().ready is False
+    handler = make_handler(api, daemon, control_token=TOKEN)
+    server = ThreadingHTTPServer(("127.0.0.1", port), handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
+
+
+def test_daemon_restart_first_start_reaches_ready(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    port = _free_port()
+    config = _config_file(tmp_path, port)
+    assert main(["--config", str(config), "init"]) == 0
+    assert (tmp_path / "state" / "control.token").exists()
+    assert not (tmp_path / "state" / "daemon.identity.json").exists()
+
+    spawned: list[subprocess.Popen[bytes]] = []
+    real_spawn = lifecycle.spawn_daemon
+
+    def capture_spawn(
+        config_model: DaemonConfig,
+        config_path: Path,
+    ) -> subprocess.Popen[bytes]:
+        process = real_spawn(config_model, config_path)
+        spawned.append(process)
+        return process
+
+    monkeypatch.setattr(lifecycle, "spawn_daemon", capture_spawn)
+    try:
+        assert main(["--config", str(config), "daemon", "restart"]) == 0
+        # First start without identity or daemon: log created, READY reached.
+        assert (tmp_path / "state" / "daemon.log").exists()
+        config_model = lifecycle.load_client_config(config)
+        health = lifecycle.probe_health(config_model)
+        assert health is not None and health.get("ready") is True
+        assert (tmp_path / "state" / "daemon.identity.json").exists()
+    finally:
+        _terminate_live(spawned)
+
+
+def test_daemon_restart_preserves_credentials_database_and_registrations(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    port = _free_port()
+    config = _config_file(tmp_path, port)
+    assert main(["--config", str(config), "init"]) == 0
+
+    # Seed an Agent registration record directly (no aweswitch profile needed).
+    database = tmp_path / "researchd.db"
+    sessions = session_factory(create_sqlite_engine(database))
+    now = datetime.now(UTC)
+    with sessions.begin() as session:
+        session.add(AgentRecord(
+            agent_id="agent_restart_check",
+            display_name="Restart check",
+            trust_zone="LOCAL",
+            version=1,
+            created_at=now,
+            updated_at=now,
+        ))
+
+    spawned: list[subprocess.Popen[bytes]] = []
+    real_spawn = lifecycle.spawn_daemon
+
+    def capture_spawn(
+        config_model: DaemonConfig,
+        config_path: Path,
+    ) -> subprocess.Popen[bytes]:
+        process = real_spawn(config_model, config_path)
+        spawned.append(process)
+        return process
+
+    monkeypatch.setattr(lifecycle, "spawn_daemon", capture_spawn)
+    try:
+        assert main(["--config", str(config), "daemon", "restart"]) == 0
+        config_model = lifecycle.load_client_config(config)
+        token = load_owner_token(config_model.state_root)
+        client = ResearchClient(lifecycle.base_url_for(config_model), token)
+        try:
+            envelope = client.post_command(
+                "/api/workspaces",
+                {"workspace_id": "ws_restart_check", "name": "Restart check"},
+            )
+            assert envelope["status"] == "ACCEPTED"
+        finally:
+            client.close()
+
+        token_path = tmp_path / "state" / "control.token"
+        token_before = token_path.stat()
+        database_before = database.stat()
+        old_identity = json.loads(
+            (tmp_path / "state" / "daemon.identity.json").read_text(encoding="utf-8")
+        )
+        old_pid = old_identity["pid"]
+
+        assert main(["--config", str(config), "daemon", "restart"]) == 0
+
+        # The old strong-identity process is gone; a new one took over.
+        with pytest.raises(ProcessLookupError):
+            os.kill(old_pid, 0)
+        new_identity = json.loads(
+            (tmp_path / "state" / "daemon.identity.json").read_text(encoding="utf-8")
+        )
+        assert new_identity["pid"] != old_pid
+
+        # The database and control credential are not recreated.
+        assert token_path.stat().st_mtime_ns == token_before.st_mtime_ns
+        assert token_path.stat().st_ino == token_before.st_ino
+        assert database.stat().st_ino == database_before.st_ino
+
+        # Agent/Workspace registration records survive the restart.
+        client = ResearchClient(lifecycle.base_url_for(config_model), token)
+        try:
+            workspaces = client.get("/api/workspaces")
+            assert any(
+                item["workspace_id"] == "ws_restart_check" for item in workspaces
+            )
+            agents = client.get("/api/agents")
+            assert any(item["agent_id"] == "agent_restart_check" for item in agents)
+        finally:
+            client.close()
+    finally:
+        _terminate_live(spawned)
+
+
+def test_restart_refuses_second_instance_when_reachable_daemon_does_not_stop(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    server, port = _server(tmp_path, ready=True)
+    try:
+        config = _config_file(tmp_path, port)
+        spawned: list[Path] = []
+
+        def refuse_spawn(
+            config_model: DaemonConfig,
+            config_path: Path,
+        ) -> subprocess.Popen[bytes]:
+            spawned.append(config_path)
+            return subprocess.Popen([sys.executable, "-c", "pass"])
+
+        monkeypatch.setattr(lifecycle, "spawn_daemon", refuse_spawn)
+        lines: list[str] = []
+        code = lifecycle.restart_daemon(config, print_fn=lines.append)
+
+        assert code == 1
+        assert any("did not stop" in line for line in lines)
+        assert spawned == []
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_restart_fail_closed_on_spawn_oserror(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _config_file(tmp_path, _free_port())
+
+    def broken_spawn(
+        config_model: DaemonConfig,
+        config_path: Path,
+    ) -> subprocess.Popen[bytes]:
+        raise OSError("spawn refused")
+
+    monkeypatch.setattr(lifecycle, "spawn_daemon", broken_spawn)
+    lines: list[str] = []
+    code = lifecycle.restart_daemon(config, print_fn=lines.append)
+
+    assert code == 1
+    joined = "\n".join(lines)
+    assert "researchd restart failed" in joined
+    assert "spawn refused" in joined
+    # Safe diagnostics: no control credential and no fixed spawn argv.
+    assert TOKEN not in joined
+    assert "researchd.daemon.cli" not in joined
+
+
+def test_restart_fail_closed_on_failed_startup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    port = _free_port()
+    config = _config_file(tmp_path, port)
+    servers: list[ThreadingHTTPServer] = []
+
+    def fake_spawn(
+        config_model: DaemonConfig,
+        config_path: Path,
+    ) -> subprocess.Popen[bytes]:
+        servers.append(_failed_health_server(tmp_path, port))
+        return subprocess.Popen([sys.executable, "-c", "pass"])
+
+    monkeypatch.setattr(lifecycle, "spawn_daemon", fake_spawn)
+    try:
+        lines: list[str] = []
+        code = lifecycle.restart_daemon(config, print_fn=lines.append)
+
+        assert code == 1
+        joined = "\n".join(lines)
+        assert "state=FAILED" in joined
+        assert "MIGRATION_CHECK" in joined
+        assert TOKEN not in joined
+        assert "researchd.daemon.cli" not in joined
+    finally:
+        for server in servers:
+            server.shutdown()
+            server.server_close()
+
+
+def test_restart_fail_closed_on_ready_timeout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _config_file(tmp_path, _free_port())
+
+    def idle_spawn(
+        config_model: DaemonConfig,
+        config_path: Path,
+    ) -> subprocess.Popen[bytes]:
+        return subprocess.Popen([sys.executable, "-c", "pass"])
+
+    monkeypatch.setattr(lifecycle, "spawn_daemon", idle_spawn)
+    real_wait = lifecycle.wait_for_ready
+    monkeypatch.setattr(
+        lifecycle, "wait_for_ready", functools.partial(real_wait, timeout=1.0)
+    )
+
+    lines: list[str] = []
+    code = lifecycle.restart_daemon(config, print_fn=lines.append)
+
+    assert code == 1
+    joined = "\n".join(lines)
+    assert "did not become reachable" in joined
+    assert TOKEN not in joined
+    assert "researchd.daemon.cli" not in joined

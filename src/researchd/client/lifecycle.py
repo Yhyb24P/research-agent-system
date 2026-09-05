@@ -165,10 +165,44 @@ def stop_daemon(config_path: Path, *, timeout: float = 10.0) -> int:
     os.kill(pid, signal.SIGTERM)
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if probe_health(config) is None:
+        # The HTTP listener closes before the daemon finishes stopping its
+        # workers and releases its strong process identity.  Starting a
+        # successor at that earlier point races the still-live owner and must
+        # fail closed.  Wait for both reachability and ownership to end.
+        released = not identity_path(config.state_root).exists()
+        if probe_health(config) is None and (released or not is_live(identity)):
+            # A client process may itself have spawned this daemon earlier in
+            # its lifetime.  Reap that child when possible so a terminated
+            # owner does not linger as a zombie; unrelated clients simply get
+            # ChildProcessError and leave reaping to the real parent.
+            try:
+                os.waitpid(pid, os.WNOHANG)
+            except ChildProcessError:
+                pass
             return 0
         time.sleep(0.1)
     return 1
+
+
+def restart_daemon(
+    config_path: Path,
+    *,
+    print_fn: Callable[[str], None] = print,
+) -> int:
+    """Reach a fresh READY daemon whether or not one is currently running."""
+    config = load_client_config(config_path)
+    reachable = probe_health(config) is not None
+    stopped = stop_daemon(config_path)
+    if reachable and stopped != 0:
+        print_fn("researchd restart failed: the running daemon did not stop")
+        return 1
+    try:
+        spawn_daemon(config, config_path)
+        wait_for_ready(config)
+    except (DaemonNotReadyError, OSError, TimeoutError) as error:
+        print_fn(f"researchd restart failed: {error}")
+        return 1
+    return 0
 
 
 def open_browser(
@@ -278,6 +312,7 @@ __all__ = [
     "researchd_argv",
     "run_init",
     "run_status",
+    "restart_daemon",
     "stop_daemon",
     "spawn_daemon",
     "wait_for_ready",
