@@ -160,9 +160,20 @@ uv run research agent add reviewer
 ```
 
 When a single supported aweswitch profile is present, `agent add` selects it;
-otherwise pass `--profile aweswitch:<profile>`. The initial bridge supports
-Qwen profiles and validates every response against the managed Agent JSON
-contract. In the TUI, use `/task <objective>`, `/msg @agent <text>`, and
+otherwise pass `--profile aweswitch:<profile>`. The managed bridge supports
+Qwen and Codex profiles and validates every response against the same managed
+Agent JSON contract. To install a Codex-backed coder explicitly, use:
+
+```bash
+uv run research agent add coder --profile aweswitch:<codex-profile>
+```
+
+Start the Chinese TUI with `uv run research tui --language zh-CN`. Its fixed
+bottom command composer accepts `/shell <installed-agent>`; for example,
+`/shell codex` resolves a unique installed Codex-backed Agent and asks the
+daemon to start its trusted launch profile. It is not a host shell and never
+accepts caller-supplied argv, cwd, credentials, or runtime-session identity.
+The TUI also supports `/task <objective>`, `/msg @agent <text>`,
 `/attach <file> [--to @agent]`, and `/approve <approval-id>`. Attachment bytes
 are bounded, classified, content-addressed and associated with the focused Run;
 Agents receive only policy-admitted Artifact context, never the host path.
@@ -402,8 +413,9 @@ redacted from these presentation projections.
 
 Install the optional `tui` extra and run `research --config researchd.json tui`
 for the projection-only workspace with Collab, Agents, Tasks, Approvals and
-System tabs. Refresh and layout state stay client-local; the TUI has no direct
-database or business-logic path.
+System tabs. Add `--language zh-CN` for the Chinese interface. Refresh and
+layout state stay client-local; the TUI has no direct database or
+business-logic path.
 
 The same daemon can be observed through independent terminal clients:
 

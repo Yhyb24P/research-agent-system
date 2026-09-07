@@ -269,6 +269,19 @@ def resolve_agent_reference(
         for item in agents
         if str(item.get("display_name", "")).strip().lower() == normalized
     ]
+    if not matches:
+        matches = [
+            item
+            for item in agents
+            if any(
+                normalized in {
+                    str(runtime.get("model_provider", "")).strip().lower(),
+                    str(runtime.get("model_name", "")).strip().lower(),
+                }
+                for runtime in item.get("runtimes", [])
+                if isinstance(runtime, dict)
+            )
+        ]
     if len(matches) == 1:
         return matches[0]
     if len(matches) > 1:

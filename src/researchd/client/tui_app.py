@@ -25,6 +25,54 @@ from researchd.client.transport import ResearchClient, TransportError
 
 _TERMINAL_RUN_STATES = frozenset({"COMPLETED", "FAILED", "CANCELLED"})
 
+_ZH_CN = {
+    "title": "Research 开发者预览",
+    "subtitle": "多 Agent 协作工作区",
+    "collab": "协作",
+    "agents": "Agent",
+    "tasks": "任务",
+    "approvals": "审批",
+    "system": "系统",
+    "loading": "加载中…",
+    "command_hint": "命令：/shell <Agent> · /task <目标> · /msg @agent <消息> · /approve <ID> · /help",
+    "input_hint": "输入 /help 或 research 命令",
+    "workspace": "工作区",
+    "run": "任务运行",
+    "daemon": "守护进程",
+    "auto": "自动",
+    "none": "无",
+    "all": "全部",
+    "focused_run": "当前任务运行",
+    "no_runs": "暂无持久化 ResearchRun。使用 /task <目标> 开始。",
+    "no_work_orders": "无工作单",
+    "collaboration": "协作",
+    "messages": "消息：",
+    "detached_views": "独立视图：",
+    "handoffs": "移交：",
+    "from": "来自",
+    "redacted": "已脱敏",
+    "enabled": "已启用",
+    "disabled": "已禁用",
+    "no_runtimes": "无 runtime",
+    "no_agents": "尚未安装 Agent。使用 /agent add coder 开始。",
+    "agent_console": "Agent 控制台",
+    "detached": "独立终端",
+    "runtime_sessions": "Runtime 会话：",
+    "invocations": "调用：",
+    "approval_use": "使用：approval approve <approval-id>",
+    "work_order": "工作单",
+    "ready": "就绪",
+    "last_offset": "最近事件偏移",
+    "projection_error": "控制面投影错误",
+    "no_focused_run": "当前没有任务运行；请先创建任务。",
+    "live_projection": "TUI 已提供实时投影，无需使用 events watch。",
+    "catalog_config": "管理 Agent 目录需要受信配置路径。",
+}
+
+
+def _text(language: str, key: str, english: str) -> str:
+    return _ZH_CN.get(key, english) if language == "zh-CN" else english
+
 
 @dataclass
 class TuiProjectionState:
@@ -81,6 +129,23 @@ class ResearchWorkspace(App[None]):
     TITLE = "Research Developer Preview"
     SUB_TITLE = "Agent collaboration workspace"
 
+    DEFAULT_CSS = """
+    #workspace-tabs {
+        height: 1fr;
+        min-height: 8;
+    }
+    #command-output {
+        height: 5;
+        overflow-y: auto;
+        padding: 0 1;
+        border-top: solid $panel;
+    }
+    #command-input {
+        height: 3;
+        dock: bottom;
+    }
+    """
+
     BINDINGS = [
         ("r", "refresh", "Refresh"),
         ("[", "previous_run", "Previous run"),
@@ -93,10 +158,16 @@ class ResearchWorkspace(App[None]):
         client: ResearchClient,
         *,
         config_path: Path | None = None,
+        language: str = "en",
     ) -> None:
         super().__init__()
+        if language not in {"en", "zh-CN"}:
+            raise ValueError("unsupported TUI language")
         self.client = client
         self.config_path = config_path
+        self.language = language
+        self.title = _text(language, "title", self.TITLE)
+        self.sub_title = _text(language, "subtitle", self.SUB_TITLE)
         self.state = TuiProjectionState()
         self._runs: list[dict[str, Any]] = []
         self._agent_views: dict[str, str] = {}
@@ -107,20 +178,20 @@ class ResearchWorkspace(App[None]):
         yield Header()
         with TabbedContent(id="workspace-tabs"):
             for title, pane_id in (
-                ("Collab", "collab"),
-                ("Agents", "agents"),
-                ("Tasks", "tasks"),
-                ("Approvals", "approvals"),
-                ("System", "system"),
+                (_text(self.language, "collab", "Collab"), "collab"),
+                (_text(self.language, "agents", "Agents"), "agents"),
+                (_text(self.language, "tasks", "Tasks"), "tasks"),
+                (_text(self.language, "approvals", "Approvals"), "approvals"),
+                (_text(self.language, "system", "System"), "system"),
             ):
                 with TabPane(title, id=f"tab-{pane_id}"):
                     with VerticalScroll():
-                        yield Static("Loading…", id=f"view-{pane_id}")
+                        yield Static(_text(self.language, "loading", "Loading…"), id=f"view-{pane_id}")
         yield Static(
-            "Commands: /task <objective> · /msg @agent <text> · /attach <file> · /approve <id> · /help",
+            _text(self.language, "command_hint", "Commands: /shell <agent> · /task <objective> · /msg @agent <text> · /approve <id> · /help"),
             id="command-output",
         )
-        yield Input(placeholder="Type /help or a research command", id="command-input")
+        yield Input(placeholder=_text(self.language, "input_hint", "Type /help or a research command"), id="command-input")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -145,7 +216,7 @@ class ResearchWorkspace(App[None]):
             return
         if line == "/help":
             self._capture_command_output(
-                "/task <objective> | /msg @agent <text> | /attach <file> | /approve <id> | "
+                "/shell <agent> | /task <objective> | /msg @agent <text> | /attach <file> | /approve <id> | "
                 "/agent use <id> | /workspace use <id> | /run list"
             )
             return
@@ -159,7 +230,7 @@ class ResearchWorkspace(App[None]):
             self.exit()
             return
         if translated.startswith("events watch"):
-            self._capture_command_output("Use the live projections instead of events watch in the TUI.")
+            self._capture_command_output(_text(self.language, "live_projection", "Use the live projections instead of events watch in the TUI."))
             return
         self._capture_command_output(f"> {line}")
         self.execute_command(translated)
@@ -170,12 +241,22 @@ class ResearchWorkspace(App[None]):
         body = line[1:].strip()
         if body.startswith("task "):
             return f"task create {shlex.quote(body[5:].strip())}"
+        if body == "shell" or body.startswith("shell "):
+            try:
+                tokens = shlex.split(body)
+            except ValueError as error:
+                self._capture_command_output(f"parse error: {error}")
+                return None
+            if len(tokens) != 2:
+                self._capture_command_output("usage: /shell <installed-agent>")
+                return None
+            return f"agent start {shlex.quote(tokens[1])}"
         if body.startswith("approve "):
             return f"approval approve {shlex.quote(body[8:].strip())}"
         if body.startswith("msg "):
             run_id = self.state.focused_run_id
             if run_id is None:
-                self._capture_command_output("No focused run; create a task first.")
+                self._capture_command_output(_text(self.language, "no_focused_run", "No focused run; create a task first."))
                 return None
             try:
                 tokens = shlex.split(body)
@@ -204,7 +285,7 @@ class ResearchWorkspace(App[None]):
     @work(thread=True, exclusive=True, group="agent-management")
     def manage_agent(self, line: str) -> None:
         if self.config_path is None:
-            self._capture_command_output("Agent catalog management needs a trusted config path.")
+            self._capture_command_output(_text(self.language, "catalog_config", "Agent catalog management needs a trusted config path."))
             return
         try:
             tokens = shlex.split(line[1:])
@@ -322,24 +403,24 @@ class ResearchWorkspace(App[None]):
         self._runs = list(snapshot["runs"])
         self._shell.state.current_run = snapshot["active_run"]
         self.sub_title = (
-            f"workspace: {self._shell.state.current_workspace or 'auto'} · "
-            f"run: {snapshot['active_run'] or 'none'} · "
-            f"daemon: {snapshot['health'].get('state', 'unknown')}"
+            f"{_text(self.language, 'workspace', 'workspace')}: {self._shell.state.current_workspace or _text(self.language, 'auto', 'auto')} · "
+            f"{_text(self.language, 'run', 'run')}: {snapshot['active_run'] or _text(self.language, 'none', 'none')} · "
+            f"{_text(self.language, 'daemon', 'daemon')}: {snapshot['health'].get('state', 'unknown')}"
         )
         self._reconcile_agent_panes(list(snapshot["agents"]))
         active_run = snapshot["active_run"]
         focused = active_run or "none"
         payloads: dict[str, str] = {
-            "collab": _render_collaboration(focused, snapshot["messages"], snapshot["handoffs"]),
-            "agents": _render_agents(snapshot["agents"]),
-            "tasks": _render_tasks(self._runs, active_run),
-            "approvals": _render_approvals(snapshot["approvals"], active_run),
-            "system": _render_system(snapshot["health"], self.state.last_seen_stream_offset),
+            "collab": _render_collaboration(focused, snapshot["messages"], snapshot["handoffs"], language=self.language),
+            "agents": _render_agents(snapshot["agents"], language=self.language),
+            "tasks": _render_tasks(self._runs, active_run, language=self.language),
+            "approvals": _render_approvals(snapshot["approvals"], active_run, language=self.language),
+            "system": _render_system(snapshot["health"], self.state.last_seen_stream_offset, language=self.language),
         }
         for agent_id, console in snapshot["agent_consoles"].items():
             pane_id = self._agent_views.get(agent_id)
             if pane_id is not None:
-                payloads[pane_id] = _render_agent_console(console, active_run)
+                payloads[pane_id] = _render_agent_console(console, active_run, language=self.language)
         # Dynamic panes mount after ``add_pane`` completes. Deferring rendering
         # one refresh cycle means a newly registered Agent receives this same
         # snapshot instead of waiting for an unrelated later event.
@@ -368,21 +449,21 @@ class ResearchWorkspace(App[None]):
             self._agent_views[agent_id] = pane_id
             tabs.add_pane(TabPane(
                 f"Agent: {agent['display_name']}",
-                VerticalScroll(Static("Loading…", id=f"view-{pane_id}")),
+                VerticalScroll(Static(_text(self.language, "loading", "Loading…"), id=f"view-{pane_id}")),
                 id=f"tab-{pane_id}",
             ))
 
     def _show_error(self, message: str) -> None:
-        self.query_one("#view-system", Static).update(f"Control-plane projection error\n{message}")
+        self.query_one("#view-system", Static).update(f"{_text(self.language, 'projection_error', 'Control-plane projection error')}\n{message}")
 
 
-def _render_tasks(runs: list[dict[str, Any]], active_run: str | None) -> str:
+def _render_tasks(runs: list[dict[str, Any]], active_run: str | None, *, language: str = "en") -> str:
     if not runs:
-        return "Tasks\nNo durable ResearchRuns. Use /task <objective> to begin."
-    lines = ["Tasks", f"Focused run: {active_run or 'none'}"]
+        return f"{_text(language, 'tasks', 'Tasks')}\n{_text(language, 'no_runs', 'No durable ResearchRuns. Use /task <objective> to begin.')}"
+    lines = [_text(language, "tasks", "Tasks"), f"{_text(language, 'focused_run', 'Focused run')}: {active_run or _text(language, 'none', 'none')}"]
     for run in runs:
         marker = "▶" if run["run_id"] == active_run else " "
-        orders = ", ".join(f"{item['work_order_id']}: {item['state']}" for item in run["work_orders"]) or "no work orders"
+        orders = ", ".join(f"{item['work_order_id']}: {item['state']}" for item in run["work_orders"]) or _text(language, "no_work_orders", "no work orders")
         lines.extend((f"{marker} {run['run_id']}  {run['state']}", f"  {orders}"))
     return "\n".join(lines)
 
@@ -391,61 +472,63 @@ def _render_collaboration(
     active_run: str,
     messages: list[dict[str, Any]],
     handoffs: list[dict[str, Any]],
+    *,
+    language: str = "en",
 ) -> str:
-    lines = ["Collaboration", f"Focused run: {active_run}", "Messages:"]
+    lines = [_text(language, "collaboration", "Collaboration"), f"{_text(language, 'focused_run', 'Focused run')}: {active_run}", _text(language, "messages", "Messages:")]
     if active_run != "none":
         lines.extend((
-            "Detached views:",
+            _text(language, "detached_views", "Detached views:"),
             f"  research console collab --run {active_run}",
             f"  research console system",
         ))
     lines.extend(
-        f"- {item['purpose']} from {item['sender_actor_id']}: {item['body'] if not item['body_redacted'] else '[redacted]'}"
+        f"- {item['purpose']} {_text(language, 'from', 'from')} {item['sender_actor_id']}: {item['body'] if not item['body_redacted'] else '[' + _text(language, 'redacted', 'redacted') + ']'}"
         for item in messages
     )
     if not messages:
-        lines.append("- none")
-    lines.append("Handoffs:")
+        lines.append(f"- {_text(language, 'none', 'none')}")
+    lines.append(_text(language, "handoffs", "Handoffs:"))
     lines.extend(
         f"- {item['proposal_id']}  {item['status']}  {item['requested_mode']}"
         for item in handoffs
     )
     if not handoffs:
-        lines.append("- none")
+        lines.append(f"- {_text(language, 'none', 'none')}")
     return "\n".join(lines)
 
 
-def _render_agents(agents: list[dict[str, Any]]) -> str:
-    lines = ["Agents"]
+def _render_agents(agents: list[dict[str, Any]], *, language: str = "en") -> str:
+    lines = [_text(language, "agents", "Agents")]
     for agent in agents:
         runtimes = ", ".join(
-            f"{runtime['runtime_id']} ({runtime['adapter_kind']}, {'enabled' if runtime['enabled'] else 'disabled'})"
+            f"{runtime['runtime_id']} ({runtime['adapter_kind']}, {_text(language, 'enabled', 'enabled') if runtime['enabled'] else _text(language, 'disabled', 'disabled')})"
             for runtime in agent["runtimes"]
-        ) or "no runtimes"
+        ) or _text(language, "no_runtimes", "no runtimes")
         lines.extend((
-            f"- {agent['display_name']} [{agent['agent_id']}] {'enabled' if agent['enabled'] else 'disabled'}",
+            f"- {agent['display_name']} [{agent['agent_id']}] {_text(language, 'enabled', 'enabled') if agent['enabled'] else _text(language, 'disabled', 'disabled')}",
             f"  {runtimes}",
         ))
     return (
         "\n".join(lines)
         if len(lines) > 1
-        else "Agents\nNo installed Agents. Use /agent add coder to begin."
+        else f"{_text(language, 'agents', 'Agents')}\n{_text(language, 'no_agents', 'No installed Agents. Use /agent add coder to begin.')}"
     )
 
 
-def _render_agent_console(console: dict[str, Any], active_run: str | None) -> str:
+def _render_agent_console(console: dict[str, Any], active_run: str | None, *, language: str = "en") -> str:
     agent = console["agent"]
-    lines = [f"Agent console: {agent['display_name']}", f"Focused run: {active_run or 'all'}"]
+    lines = [f"{_text(language, 'agent_console', 'Agent console')}: {agent['display_name']}", f"{_text(language, 'focused_run', 'Focused run')}: {active_run or _text(language, 'all', 'all')}"]
     command = f"research console agent {agent['agent_id']}"
     if active_run is not None:
         command += f" --run {active_run}"
-    lines.append(f"Detached: {command}")
-    lines.append("Runtime sessions:")
+    lines.append(f"{_text(language, 'detached', 'Detached')}: {command}")
+    lines.append(_text(language, "runtime_sessions", "Runtime sessions:"))
     lines.extend(
         f"- {item['runtime_id']}: {item['supervisor_state']}"
         for item in console["runtime_sessions"]
     )
-    lines.append("Invocations:")
+    lines.append(_text(language, "invocations", "Invocations:"))
     lines.extend(
         f"- {item['invocation_id']}: {item['purpose']} / {item['status']}"
         for item in console["invocations"]
@@ -453,27 +536,27 @@ def _render_agent_console(console: dict[str, Any], active_run: str | None) -> st
     return "\n".join(lines)
 
 
-def _render_approvals(approvals: list[dict[str, Any]], active_run: str | None) -> str:
+def _render_approvals(approvals: list[dict[str, Any]], active_run: str | None, *, language: str = "en") -> str:
     scoped = [item for item in approvals if active_run is None or item["run_id"] == active_run]
-    lines = ["Approvals", "Use: approval approve <approval-id>"]
+    lines = [_text(language, "approvals", "Approvals"), _text(language, "approval_use", "Use: approval approve <approval-id>")]
     lines.extend(
-        f"- {item['approval_id']}  {item['status']}  WorkOrder: {item['work_order_id']}"
+        f"- {item['approval_id']}  {item['status']}  {_text(language, 'work_order', 'WorkOrder')}: {item['work_order_id']}"
         for item in scoped
     )
-    return "\n".join(lines) if scoped else "\n".join(lines + ["- none"])
+    return "\n".join(lines) if scoped else "\n".join(lines + [f"- {_text(language, 'none', 'none')}"])
 
 
-def _render_system(health: dict[str, Any], last_offset: int) -> str:
+def _render_system(health: dict[str, Any], last_offset: int, *, language: str = "en") -> str:
     return "\n".join((
-        "System",
-        f"Daemon: {health.get('state', 'unknown')}",
-        f"Ready: {health.get('ready', False)}",
-        f"Last observed event offset: {last_offset}",
+        _text(language, "system", "System"),
+        f"{_text(language, 'daemon', 'Daemon')}: {health.get('state', 'unknown')}",
+        f"{_text(language, 'ready', 'Ready')}: {health.get('ready', False)}",
+        f"{_text(language, 'last_offset', 'Last observed event offset')}: {last_offset}",
     ))
 
 
-def run_tui(client: ResearchClient, *, config_path: Path | None = None) -> None:
-    ResearchWorkspace(client, config_path=config_path).run()
+def run_tui(client: ResearchClient, *, config_path: Path | None = None, language: str = "en") -> None:
+    ResearchWorkspace(client, config_path=config_path, language=language).run()
 
 
 __all__ = ["ResearchWorkspace", "TuiProjectionState", "run_tui"]

@@ -6,7 +6,7 @@ from researchd.client.lifecycle import DaemonNotReadyError, base_url_for, load_c
 from researchd.client.transport import ResearchClient, load_owner_token
 
 
-def tui_entry(config_path: Path) -> int:
+def tui_entry(config_path: Path, *, language: str = "en") -> int:
     try:
         from researchd.client.tui_app import run_tui
     except ImportError:
@@ -24,7 +24,7 @@ def tui_entry(config_path: Path) -> int:
             return 1
     client = ResearchClient(base_url_for(config), load_owner_token(config.state_root))
     try:
-        run_tui(client, config_path=config_path)
+        run_tui(client, config_path=config_path, language=language)
     finally:
         client.close()
     return 0

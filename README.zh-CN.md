@@ -145,9 +145,19 @@ uv run research agent add reviewer
 ```
 
 如果本机仅发现一个受支持的 aweswitch profile，`agent add` 会自动选择；否则显式传入
-`--profile aweswitch:<profile>`。首个 bridge 支持 Qwen profile，并会按 managed Agent
-JSON 合同校验每次响应。TUI 中可使用 `/task <目标>`、`/msg @agent <消息>` 和
-`/attach <文件> [--to @agent]`、`/approve <approval-id>`。附件内容有大小上限和明确
+`--profile aweswitch:<profile>`。managed bridge 支持 Qwen 与 Codex profile，并会按
+同一 managed Agent JSON 合同校验每次响应。显式安装 Codex-backed coder：
+
+```bash
+uv run research agent add coder --profile aweswitch:<codex-profile>
+```
+
+使用 `uv run research tui --language zh-CN` 打开中文界面。界面底部输入框固定不随内容
+滚动，可输入 `/shell <已安装 Agent>`；例如 `/shell codex` 会唯一解析已安装的
+Codex-backed Agent，并请求 daemon 使用受信启动目录启动它。该命令不是宿主 shell，
+不接受用户提交的 argv、cwd、凭据或 runtime session 身份。TUI 还支持
+`/task <目标>`、`/msg @agent <消息>`、`/attach <文件> [--to @agent]` 和
+`/approve <approval-id>`。附件内容有大小上限和明确
 分类，经内容寻址后关联到当前 Run；Agent 只能取得策略允许的 Artifact 上下文，绝不会
 收到宿主绝对路径。关闭 TUI 或独立 console 不会停止 daemon 或 Agent runtime。
 
@@ -353,8 +363,9 @@ Delegation、Invocation 或前序消息。这些关联只提供沟通上下文�
 reply/delegation/invocation 关联。展示投影会遮蔽 `LOCAL_ONLY` 与 `SECRET` 正文。
 
 安装可选 `tui` extra 后，可运行 `research --config researchd.json tui` 打开
-包含 Collab、Agents、Tasks、Approvals、System 的只读投影工作区。刷新与布局
-状态仅存在于 client；TUI 不直连数据库，也不承载业务逻辑。
+包含 Collab、Agents、Tasks、Approvals、System 的只读投影工作区；追加
+`--language zh-CN` 可切换为中文界面。刷新与布局状态仅存在于 client；TUI 不直连
+数据库，也不承载业务逻辑。
 
 同一个 daemon 也可由相互独立的终端 client 观察：
 
