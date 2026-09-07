@@ -41,6 +41,8 @@ from researchd.runtime_sessions.launch_profiles import RuntimeLaunchProfileServi
 
 PreviewRole = Literal["planner", "coder", "reviewer"]
 
+_PROVIDER_EXECUTABLES = {"codex": "codex", "qwen": "qwen"}
+
 _MANAGED_AGENT_TIMEOUT_SECONDS = 600
 _ROLE_CONTRACTS: dict[PreviewRole, tuple[str, tuple[str, ...], int]] = {
     "planner": ("planner", ("plan.propose", "evidence.request"), 19011),
@@ -72,7 +74,7 @@ def discover_aweswitch_profiles(config_path: Path) -> list[dict[str, object]]:
             result.append({
                 "profile": name,
                 "provider": provider,
-                "managed_bridge_supported": provider == "qwen",
+                "managed_bridge_supported": provider in _PROVIDER_EXECUTABLES,
             })
     return result
 
@@ -97,7 +99,8 @@ def build_aweswitch_definition(
     profile: str,
     project_root: Path,
     aweswitch: Path,
-    qwen: Path,
+    agent_cli: Path,
+    provider: str,
     aweswitch_config: Path,
 ) -> AgentDefinition:
     """Generate a referentially closed definition containing no credentials."""
@@ -120,8 +123,8 @@ def build_aweswitch_definition(
             profile,
             "--aweswitch",
             str(aweswitch),
-            "--qwen",
-            str(qwen),
+            "--agent-cli",
+            str(agent_cli),
             "--config",
             str(aweswitch_config),
             "--cwd",
@@ -149,7 +152,7 @@ def build_aweswitch_definition(
             constraints=("invocation_required", "controller_owned_delegation"),
             labels={
                 "cli_alias": role,
-                "profile_provider": "aweswitch",
+                "profile_provider": provider,
                 "profile_ref": f"aweswitch:{profile}",
             },
         ),
@@ -160,7 +163,7 @@ def build_aweswitch_definition(
             runtime_name=f"{role.title()} aweswitch bridge",
             endpoint_ref=endpoint,
             framework="research-agent-json-v1",
-            model_provider="aweswitch",
+            model_provider=provider,
             model_name=profile,
             protocols=("research-agent-json-v1",),
             metadata={"health_endpoint": f"http://127.0.0.1:{port}/health"},
@@ -243,20 +246,19 @@ def add_aweswitch_agent(
         print_fn("aweswitch is not installed")
         return 1
     aweswitch = Path(executable_name).resolve(strict=True)
-    qwen_name = shutil.which("qwen")
-    if qwen_name is None:
-        print_fn("qwen is not installed")
-        return 1
-    qwen = Path(qwen_name).absolute()
     profile_config = default_aweswitch_config().resolve(strict=True)
     try:
-        load_profile_metadata(profile_config, profile)
+        provider, _ = load_profile_metadata(profile_config, profile)
+        executable_name = shutil.which(_PROVIDER_EXECUTABLES[provider])
+        if executable_name is None:
+            raise ValueError(f"{provider} Agent CLI is not installed")
         definition = build_aweswitch_definition(
             role,
             profile=profile,
             project_root=_project_root(config_path),
             aweswitch=aweswitch,
-            qwen=qwen,
+            agent_cli=Path(executable_name).absolute(),
+            provider=provider,
             aweswitch_config=profile_config,
         )
     except (AweswitchProfileError, OSError, ValueError) as error:
@@ -307,12 +309,12 @@ def install_aweswitch_agents_for_setup(
     if executable_name is None:
         raise ValueError("aweswitch is not installed")
     aweswitch = Path(executable_name).resolve(strict=True)
-    qwen_name = shutil.which("qwen")
-    if qwen_name is None:
-        raise ValueError("qwen is not installed")
-    qwen = Path(qwen_name).absolute()
     profile_config = default_aweswitch_config().resolve(strict=True)
-    load_profile_metadata(profile_config, profile)
+    provider, _ = load_profile_metadata(profile_config, profile)
+    agent_cli_name = shutil.which(_PROVIDER_EXECUTABLES[provider])
+    if agent_cli_name is None:
+        raise ValueError(f"{provider} Agent CLI is not installed")
+    agent_cli = Path(agent_cli_name).absolute()
     project_root = _project_root(config_path)
     config = load_client_config(config_path)
     config.state_root.mkdir(parents=True, exist_ok=True)
@@ -322,7 +324,8 @@ def install_aweswitch_agents_for_setup(
             profile=profile,
             project_root=project_root,
             aweswitch=aweswitch,
-            qwen=qwen,
+            agent_cli=agent_cli,
+            provider=provider,
             aweswitch_config=profile_config,
         )
         descriptor, name = tempfile.mkstemp(
