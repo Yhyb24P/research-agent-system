@@ -23,6 +23,17 @@ launcher authority model and does not upgrade the rc.82 qualification claim.
 Agent 接入、交互终端视图和 schema `0026` 的 Run 级 Artifact 入口；它不改变
 launcher 权威模型，也不提升 rc.82 的 qualification 声明。
 
+**Product-position correction (2026-09-08):** this document freezes launcher
+and safety-kernel foundations only. It does not prove a complete Agent
+Collaboration Fabric. At `8cf27dc`, CollaborationMessage is durable storage and
+projection; recipient inbox, delivery state, message-aware context,
+message-driven Agent turns, and reply loops remain the CM00-CM08 mainline.
+
+**产品定位纠正（2026-09-08）：** 本文只冻结 launcher 与可信安全内核基础，不能证明
+Agent 协作通信网络已经闭环。在 `8cf27dc`，CollaborationMessage 仍只是持久记录与
+投影；收件箱、投递状态、消息上下文、消息驱动 Agent turn 和回复闭环属于
+CM00-CM08 现役主线。
+
 This decision belongs to the post-V1 productization line. It is not part of
 the immutable V1 qualification candidate and must not be used as evidence for
 rc.80.
@@ -32,11 +43,11 @@ rc.80 的资格证据。
 
 ## 1. Frozen authority boundary / 冻结的权威边界
 
-The launcher consumes the existing Agent Collaboration Plane. It does not
+The launcher consumes the existing collaboration foundations. It does not
 create another Agent profile, registry, scheduler, policy engine, verifier,
 or workflow state machine.
 
-Launcher 只消费已有 Agent Collaboration Plane，不新建平行的 Agent Profile、
+Launcher 只消费已有协作基础设施，不新建平行的 Agent Profile、
 Registry、scheduler、Policy、Verifier 或工作流状态机。
 
 ```text

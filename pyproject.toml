@@ -1,7 +1,7 @@
 [project]
 name = "research-agent-system"
 version = "1.0.0rc83.dev0"
-description = "Agent collaboration plane and trusted control plane for research workflows"
+description = "Governed Agent communication and collaboration fabric for research workflows"
 license = "Apache-2.0"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"

@@ -9,45 +9,39 @@
 > release; see
 > [docs/qualification/CANDIDATE_RELEASE_CONTRACT.md](docs/qualification/CANDIDATE_RELEASE_CONTRACT.md).
 
-Research Agent System is an **Agent Collaboration Plane + Trusted Control
-Plane** for durable, policy-controlled research workflows. The integration
-identity is an Agent. Frameworks, providers, protocols, and execution
-locations are implementation details of an `AgentRuntime`.
+Research Agent System is a governed **Agent communication and collaboration
+fabric** for research workflows. Agent-to-Agent communication is the primary
+product plane. A trusted safety kernel governs identity, policy,
+classification, capability, approval, audit, and limits. The integration
+identity is an Agent; frameworks, providers, protocols, and execution locations
+are implementation details of an `AgentRuntime`.
 
-Agents may propose, execute, review, and perform specialist analysis. They do
-not own workflow state, grant themselves capabilities, approve their own
-actions, or verify their own results. Those authorities remain in the trusted
-control plane.
+Agents communicate, exchange bounded context, and may propose, execute, review,
+or perform specialist analysis. Workflow authority remains in the trusted
+safety kernel. A message can inform an Agent, but it cannot grant a capability,
+approve an action, verify a result, or select a workflow transition.
 
 ## Architecture
 
 ```text
-Human / Browser / researchctl
-          │ typed commands + read-only AG-UI projection
-          ▼
-Local Control API ───────────────► Trusted Control Plane
-                                      │
-                         ResearchRun / WorkOrder / Attempt
-                         Policy / Approval / Audit / Verifier
-                                      │
-                                      ▼
-                            CollaborationGateway
-                                      │
-                     Delegation / AgentInvocation / Context
-                         ┌────────────┼────────────┐
-                         ▼            ▼            ▼
-                    internal/HTTP   A2A v1     LangGraph
-                         │            │        specialist Agent
-                         └────────────┴────────────┘
-                                      │
-                         Workspace Grant / Lease
-                         Git or Archive transport
-                                      │
-                                      ▼
-                         Artifact reconciliation
-                                      │
-                                      ▼
-                              Independent Verifier
+               Trusted safety kernel
+ Identity / Policy / Classification / Capability / Approval / Audit
+                          │ governs
+                          ▼
+┌──────────────────────────────────────────────────────────────┐
+│                Agent Collaboration Fabric                    │
+│ Conversation / Message / Reply / Inbox / Delivery / Context │
+│ Artifact / Handoff Proposal / Presence / Runtime routing     │
+└──────────────┬──────────────────┬──────────────────┬──────────┘
+               ▼                  ▼                  ▼
+            Agent A            Agent B            Agent C
+               ▲                  │                  │
+               └──────────────────┴──────────────────┘
+
+                 optional governed workflow binding
+                               │
+                               ▼
+                  ResearchRun / WorkOrder / Attempt
 ```
 
 SQLite records are authoritative. A2A tasks, AG-UI events, workspace transport
@@ -399,7 +393,7 @@ credential-free loopback turn protocol. It proposes typed actions only;
 `researchd` executes granted actions through `CapabilityBroker` and constructs
 the authoritative `ExecutorResult`.
 
-Collaboration messages use a closed purpose vocabulary (`DISCUSSION`,
+Collaboration messages currently use a closed purpose vocabulary (`DISCUSSION`,
 `STATUS`, `QUESTION`, `DIRECTIVE`, `NOTICE`) and may durably reference one
 WorkOrder, Delegation, Invocation, or prior message in the same run. These
 links remain communication context and never confer workflow authority.
@@ -410,6 +404,12 @@ Native collaboration reads are available by message ID and at
 `GET /api/runs/<run_id>/messages`; the run timeline carries the same durable
 reply/delegation/invocation links. `LOCAL_ONLY` and `SECRET` bodies are
 redacted from these presentation projections.
+
+Developer Preview limitation: `/msg @agent <text>` currently records and
+projects the message. It does not yet place the message in a recipient inbox,
+add it to the target Agent context, wake that Agent, or produce an automatic
+reply. Durable delivery and reply turns are the active Agent Communication Core
+mainline.
 
 Install the optional `tui` extra and run `research --config researchd.json tui`
 for the projection-only workspace with Collab, Agents, Tasks, Approvals and

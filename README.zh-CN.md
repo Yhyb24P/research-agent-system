@@ -8,42 +8,36 @@
 > 不变，但生产级资格认证仍在进行中。本版本不是 Production Go 发布；详见
 > [docs/qualification/CANDIDATE_RELEASE_CONTRACT.md](docs/qualification/CANDIDATE_RELEASE_CONTRACT.md)。
 
-Research Agent System 是面向持久化、受策略约束研究流程的 **Agent 协作面 +
-可信控制面**。系统接入的实体是 Agent；框架、provider、协议和运行位置都是
+Research Agent System 是面向研究流程的、受治理的 **Agent 通信与协作网络**。
+Agent 之间的通信是产品主平面；可信安全内核负责身份、策略、分类、能力、审批、审计
+与限额。系统接入的实体是 Agent；框架、provider、协议和运行位置都是
 `AgentRuntime` 的实现细节。
 
-Agent 可以提出计划、执行工作单、审查结果和完成 specialist 分析，但不能拥有工作流
-状态、给自己授予能力、批准自己的操作或验证自己的结果。这些权力始终属于可信控制面。
+Agent 可以通信、交换受限上下文、提出计划、执行工作单、审查结果和完成 specialist
+分析。工作流权威仍属于可信安全内核。消息可以向 Agent 传递信息，但不能授予能力、
+批准操作、验证结果或直接选择工作流状态迁移。
 
 ## 架构
 
 ```text
-Human / Browser / researchctl
-          │ 类型化命令 + 只读 AG-UI 投影
-          ▼
-Local Control API ───────────────► 可信控制面
-                                      │
-                         ResearchRun / WorkOrder / Attempt
-                         Policy / Approval / Audit / Verifier
-                                      │
-                                      ▼
-                            CollaborationGateway
-                                      │
-                     Delegation / AgentInvocation / Context
-                         ┌────────────┼────────────┐
-                         ▼            ▼            ▼
-                    internal/HTTP   A2A v1     LangGraph
-                         │            │        specialist Agent
-                         └────────────┴────────────┘
-                                      │
-                         Workspace Grant / Lease
-                         Git 或 Archive transport
-                                      │
-                                      ▼
-                         Artifact reconciliation
-                                      │
-                                      ▼
-                               独立 Verifier
+                    可信安全内核
+ 身份 / 策略 / 分类 / 能力 / 审批 / 审计 / 限额
+                         │ 治理
+                         ▼
+┌────────────────────────────────────────────────────────┐
+│                  Agent 协作通信网络                     │
+│ 会话 / 消息 / 回复 / 收件箱 / 投递 / 上下文            │
+│ Artifact / HandoffProposal / Presence / Runtime 路由   │
+└──────────────┬────────────────┬────────────────┬────────┘
+               ▼                ▼                ▼
+            Agent A          Agent B          Agent C
+               ▲                │                │
+               └────────────────┴────────────────┘
+
+                   可选的受治理工作流绑定
+                              │
+                              ▼
+                 ResearchRun / WorkOrder / Attempt
 ```
 
 SQLite 记录是唯一权威状态。A2A Task、AG-UI Event、workspace transport handle 和
@@ -353,7 +347,7 @@ invocation 仅调用 Registry 持有的 loopback endpoint，绝不二次执行�
 它只能提出类型化 action；`researchd` 经 `CapabilityBroker` 执行已授权 action，
 并由控制面构造权威 `ExecutorResult`。
 
-CollaborationMessage 使用封闭 purpose 集合（`DISCUSSION`、`STATUS`、
+CollaborationMessage 当前使用封闭 purpose 集合（`DISCUSSION`、`STATUS`、
 `QUESTION`、`DIRECTIVE`、`NOTICE`），并可持久关联同一 run 内的 WorkOrder、
 Delegation、Invocation 或前序消息。这些关联只提供沟通上下文，不授予工作流权威。
 认证后的 `msg` 命令可用 `--reply-to`、`--delegation` 或 `--invocation`
@@ -361,6 +355,10 @@ Delegation、Invocation 或前序消息。这些关联只提供沟通上下文�
 原生 collaboration read model 支持按 message ID 查询及
 `GET /api/runs/<run_id>/messages` 列表，run timeline 同步携带持久的
 reply/delegation/invocation 关联。展示投影会遮蔽 `LOCAL_ONLY` 与 `SECRET` 正文。
+
+开发者预览限制：`/msg @agent <消息>` 当前只会记录并展示消息；它尚不会把消息放入
+收件 Agent 的 inbox、加入目标 Agent context、唤醒该 Agent 或自动产生回复。持久投递
+与回复 turn 是当前 Agent Communication Core 主线。
 
 安装可选 `tui` extra 后，可运行 `research --config researchd.json tui` 打开
 包含 Collab、Agents、Tasks、Approvals、System 的只读投影工作区；追加
