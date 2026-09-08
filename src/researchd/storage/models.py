@@ -31,9 +31,9 @@ class ResearchRunRecord(Base, VersionedTimestamps):
     objective: Mapped[str] = mapped_column(Text, nullable=False)
     state: Mapped[str] = mapped_column(String(32), nullable=False)
     max_iterations: Mapped[int] = mapped_column(Integer, nullable=False, default=8)
-    max_cloud_calls: Mapped[int] = mapped_column(Integer, nullable=False, default=24)
+    max_agent_turns: Mapped[int] = mapped_column(Integer, nullable=False, default=24)
     iterations_used: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    cloud_calls_used: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    agent_turns_used: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     cancellation_requested: Mapped[bool] = mapped_column(nullable=False, default=False)
 
 
@@ -410,6 +410,7 @@ class AgentInvocationRecord(Base):
     context_bundle_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     output_type: Mapped[str | None] = mapped_column(String(128))
     output_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    failure_category: Mapped[str | None] = mapped_column(String(64))
     reason_code: Mapped[str | None] = mapped_column(String(128))
     runtime_lease_id: Mapped[str | None] = mapped_column(String(128))
     external_invocation_id: Mapped[str | None] = mapped_column(String(256))

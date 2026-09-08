@@ -113,7 +113,7 @@ def test_bridge_validates_outer_cli_json_as_managed_response(
     )
     bridge = AweswitchManagedBridge(
         aweswitch=executable,
-        qwen=Path("/bin/true"),
+        agent_cli=Path("/bin/true"),
         config_path=config,
         profile="qw",
         cwd=tmp_path,
@@ -143,7 +143,7 @@ def test_bridge_rejects_unstructured_cli_output(
     executable = _executable(tmp_path / "aweswitch", "printf '%s' 'not-json'\n")
     bridge = AweswitchManagedBridge(
         aweswitch=executable,
-        qwen=Path("/bin/true"),
+        agent_cli=Path("/bin/true"),
         config_path=config,
         profile="qw",
         cwd=tmp_path,
@@ -183,7 +183,7 @@ def test_bridge_rejects_noncanonical_terminal_event(
     )
     bridge = AweswitchManagedBridge(
         aweswitch=executable,
-        qwen=Path("/bin/true"),
+        agent_cli=Path("/bin/true"),
         config_path=config,
         profile="qw",
         cwd=tmp_path,
@@ -202,8 +202,8 @@ def test_bridge_rejects_noncanonical_terminal_event(
 def test_profile_loader_rejects_unsupported_provider(tmp_path: Path) -> None:
     config = tmp_path / "aweswitch.json"
     config.write_text(json.dumps({
-        "profiles": {"codex": {"cx": {"env": {}}}},
+        "profiles": {"unsupported": {"ux": {"env": {}}}},
     }), encoding="utf-8")
 
     with pytest.raises(AweswitchProfileError, match="does not yet support"):
-        load_profile_metadata(config, "cx", environ=os.environ)
+        load_profile_metadata(config, "ux", environ=os.environ)

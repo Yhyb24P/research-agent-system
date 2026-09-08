@@ -567,7 +567,7 @@ class AttachedGovFixture:
             workspace_capabilities=frozenset({Capability.WORKSPACE_WRITE}),
             user_capabilities=frozenset({Capability.WORKSPACE_WRITE}),
             maximum_budget=BudgetLimits(100, 100, 0, 100, 100),
-            limits=OrchestrationLimits(max_iterations=8, max_cloud_calls=8),
+            limits=OrchestrationLimits(max_iterations=8, max_agent_turns=8),
         )
 
     def create_run(self) -> str:

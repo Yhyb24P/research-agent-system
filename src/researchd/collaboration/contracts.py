@@ -3,7 +3,7 @@ from typing import Annotated, Literal
 from pydantic import Field, PositiveInt, model_validator
 
 from researchd.domain.base import DomainModel
-from researchd.domain.enums import AgentAdapterKind, AgentTrustZone, CollaborationPurpose, DataClassification, DelegationPurpose, DelegationState, InvocationStatus
+from researchd.domain.enums import AgentAdapterKind, AgentFailureCategory, AgentTrustZone, CollaborationPurpose, DataClassification, DelegationPurpose, DelegationState, InvocationStatus
 from researchd.domain.ids import AgentId, AgentRuntimeId, DelegationId, InvocationId, MessageId
 from researchd.context.builder import CloudContextSelection
 from researchd.context.agent_context import AgentContextBundle
@@ -151,7 +151,53 @@ class AgentInvocationResult(DomainModel):
     external_invocation_id: str | None = Field(default=None, max_length=256)
     output_type: str | None = None
     output: dict[str, object] | None = None
-    reason_code: str | None = None
+    failure_category: AgentFailureCategory | None = None
+    reason_code: str | None = Field(default=None, max_length=128)
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_failure_category(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+        status = value.get("status")
+        if isinstance(status, InvocationStatus):
+            status = status.value
+        if status == InvocationStatus.SUCCEEDED.value:
+            return value
+        reason = value.get("reason_code")
+        if not isinstance(reason, str) or not reason:
+            raise ValueError("terminal non-success invocation requires a bounded reason")
+        if value.get("failure_category") is None:
+            value = {**value, "failure_category": classify_agent_failure(reason)}
+        return value
+
+
+def classify_agent_failure(reason: str) -> AgentFailureCategory:
+    normalized = reason.upper()
+    if "CANCEL" in normalized:
+        return AgentFailureCategory.CANCELLED
+    if "RECONCILIATION" in normalized:
+        return AgentFailureCategory.RECONCILIATION_REQUIRED
+    if "TIMEOUT" in normalized or "TIMED_OUT" in normalized:
+        return AgentFailureCategory.INVOCATION_TIMEOUT
+    if "UNAVAILABLE" in normalized or "NOT_REGISTERED" in normalized:
+        return AgentFailureCategory.RUNTIME_UNAVAILABLE
+    if any(token in normalized for token in ("HTTPSTATUS", "CONNECT", "TRANSPORT")):
+        return AgentFailureCategory.TRANSPORT_FAILED
+    if any(token in normalized for token in ("INVALID", "MALFORMED", "TOO_LARGE", "VALUEERROR")):
+        return AgentFailureCategory.OUTPUT_INVALID
+    return AgentFailureCategory.AGENT_REPORTED_FAILURE
+
+
+class AgentInvocationFailure(RuntimeError):
+    """Typed control-plane signal for an already-attributed Agent failure."""
+
+    def __init__(self, result: AgentInvocationResult) -> None:
+        if result.status is InvocationStatus.SUCCEEDED or result.failure_category is None:
+            raise ValueError("AgentInvocationFailure requires a failed invocation result")
+        self.result = result
+        self.failure_category = result.failure_category
+        super().__init__(result.reason_code)
 
 
 class HumanDirective(DomainModel):

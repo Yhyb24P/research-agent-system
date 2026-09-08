@@ -19,8 +19,10 @@ from researchd.daemon.contracts import (
     ResearchTaskCreateCommand,
     RestorePlanCommand,
     RunCancelCommand,
+    RunResumeCommand,
     WorkOrderApproveCommand,
     WorkOrderRejectCommand,
+    WorkOrderRetryCommand,
     WorkspaceCreateCommand,
 )
 from researchd.domain.base import DomainModel
@@ -81,6 +83,20 @@ class DaemonCommandDispatcher:
             return self._accepted(command.command_id, "RemoteAgentRenew", self._remote_attachments().renew(command.runtime_id))
         if isinstance(command, RunCancelCommand):
             return self._cancel(command)
+        if isinstance(command, RunResumeCommand):
+            resource = self._control().resume_run(command.run_id)
+            self._wake_if_runnable(command.run_id)
+            return self._accepted(command.command_id, "RunResume", resource)
+        if isinstance(command, WorkOrderRetryCommand):
+            resource = self._control().retry_work_order(
+                command.work_order_id,
+                target_agent_id=command.target_agent_id,
+            )
+            run_id = resource.get("run_id")
+            if not isinstance(run_id, str):
+                raise RuntimeError("WorkOrderRetry did not return a run ID")
+            self._wake_if_runnable(run_id)
+            return self._accepted(command.command_id, "WorkOrderRetry", resource)
         if isinstance(command, WorkOrderApproveCommand):
             return self._approve(command)
         if isinstance(command, ApprovalApproveCommand):
@@ -92,6 +108,9 @@ class DaemonCommandDispatcher:
                 action=command.action,
                 objective=command.objective,
             )
+            run_id = resource.get("run_id")
+            if isinstance(run_id, str):
+                self._wake_if_runnable(run_id)
             return self._accepted(command.command_id, "HumanDecision", resource)
         if isinstance(command, HandoffDecisionCommand):
             handoffs = self._handoffs()
@@ -106,6 +125,10 @@ class DaemonCommandDispatcher:
                     command.proposal_id, actor_type=command.actor_type,
                     actor_id=command.actor_id, reason=command.reason,
                 )
+            handoff_payload = handoff_resource.model_dump(mode="json")
+            handoff_run_id = handoff_payload.get("run_id")
+            if isinstance(handoff_run_id, str):
+                self._wake_if_runnable(handoff_run_id)
             return self._accepted(command.command_id, "HandoffDecision", handoff_resource)
         if isinstance(command, WorkspaceCreateCommand):
             control = self._control()
@@ -121,8 +144,7 @@ class DaemonCommandDispatcher:
             run_id = resource.get("run_id")
             if not isinstance(run_id, str):
                 raise RuntimeError("ResearchTaskCreate did not return a run ID")
-            if self.orchestration_driver is not None:
-                self.orchestration_driver.wake(run_id)
+            self._wake_if_runnable(run_id)
             return self._accepted(command.command_id, "ResearchTaskCreate", resource)
         if isinstance(command, WorkOrderRejectCommand):
             control = self._control()
@@ -190,9 +212,14 @@ class DaemonCommandDispatcher:
             granted_by=command.actor_id,
         )
         run_id = resource.get("run_id")
-        if isinstance(run_id, str) and self.orchestration_driver is not None:
-            self.orchestration_driver.wake(run_id)
+        if isinstance(run_id, str):
+            self._wake_if_runnable(run_id)
         return self._accepted(command.command_id, "ApprovalApprove", resource)
+
+    def _wake_if_runnable(self, run_id: str) -> None:
+        if self.orchestration_driver is None:
+            return
+        self.orchestration_driver.wake_if_runnable(run_id)
 
     def _control(self) -> "ControlMutationAuthority":
         if self.control is None:
@@ -236,6 +263,10 @@ class DaemonCommandDispatcher:
 
 class ControlMutationAuthority(Protocol):
     async def cancel_run(self, run_id: str) -> dict[str, object]: ...
+    def resume_run(self, run_id: str) -> dict[str, object]: ...
+    def retry_work_order(
+        self, work_order_id: str, *, target_agent_id: str | None = None,
+    ) -> dict[str, object]: ...
     async def approve(self, work_order_id: str, grant_id: str) -> dict[str, object]: ...
     async def approve_request(self, approval_id: str, *, granted_by: str) -> dict[str, object]: ...
     def resolve_human(
@@ -318,6 +349,7 @@ class OrchestrationWakeAuthority(Protocol):
     """Wake-only hook; advancement authority remains in the orchestrator."""
 
     def wake(self, run_id: str) -> None: ...
+    def wake_if_runnable(self, run_id: str) -> bool: ...
 
 
 __all__ = [

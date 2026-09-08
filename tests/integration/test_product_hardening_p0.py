@@ -5,8 +5,11 @@ driver is a daemon service; it does not own workflow state or transition rows.
 """
 
 import threading
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
+
+from sqlalchemy.orm import Session, sessionmaker
 
 from researchd.daemon.contracts import DaemonCommandResult, ResearchTaskCreateCommand
 from researchd.daemon.dispatcher import ControlMutationAuthority, DaemonCommandDispatcher
@@ -14,7 +17,7 @@ from researchd.daemon.runtime import ResearchDaemon
 from researchd.daemon.startup import StartupBarrier, StartupPhase
 from researchd.domain.base import DomainModel
 from researchd.storage.db import create_sqlite_engine, session_factory
-from researchd.storage.models import Base
+from researchd.storage.models import Base, ResearchRunRecord, WorkspaceRecord
 from researchd.supervisor.runtime import RuntimeSupervisor
 
 
@@ -34,6 +37,9 @@ class _RecordingOrchestrator:
 
 
 class _TaskControl:
+    def __init__(self, sessions: sessionmaker[Session]) -> None:
+        self.sessions = sessions
+
     def create_research_task(
         self,
         workspace_id: str,
@@ -44,6 +50,26 @@ class _TaskControl:
         assert workspace_id == "ws_product"
         assert objective == "advance without a private caller"
         assert run_id == "run_product"
+        assert run_id is not None
+        now = datetime.now(UTC)
+        with self.sessions.begin() as session:
+            session.add(WorkspaceRecord(
+                workspace_id=workspace_id,
+                name="Product workspace",
+                version=1,
+                created_at=now,
+                updated_at=now,
+            ))
+            session.flush()
+            session.add(ResearchRunRecord(
+                run_id=run_id,
+                workspace_id=workspace_id,
+                objective=objective,
+                state="NEW",
+                version=1,
+                created_at=now,
+                updated_at=now,
+            ))
         return {"run_id": run_id, "workspace_id": workspace_id, "state": "NEW"}
 
 
@@ -60,7 +86,7 @@ def test_task_create_wakes_daemon_owned_orchestration_driver(tmp_path: Path) -> 
     driver = OrchestrationDriver(cast(OrchestrationTarget, orchestrator), sessions)
     dispatcher = DaemonCommandDispatcher(
         cast(RuntimeSupervisor, object()),
-        cast(ControlMutationAuthority, _TaskControl()),
+        cast(ControlMutationAuthority, _TaskControl(sessions)),
         orchestration_driver=driver,
     )
     daemon = ResearchDaemon(_barrier(), dispatcher, orchestration_driver=driver)

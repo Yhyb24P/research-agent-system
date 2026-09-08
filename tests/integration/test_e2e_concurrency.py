@@ -226,7 +226,7 @@ class E2EFixture:
             workspace_capabilities=frozenset({Capability.WORKSPACE_WRITE}),
             user_capabilities=frozenset({Capability.WORKSPACE_WRITE}),
             maximum_budget=BudgetLimits(100, 100, 0, 100, 100),
-            limits=OrchestrationLimits(max_iterations=8, max_cloud_calls=8),
+            limits=OrchestrationLimits(max_iterations=8, max_agent_turns=8),
         )
 
     def create_run(self) -> str:
@@ -338,6 +338,133 @@ def test_managed_multi_role_closed_loop_completes(e2e: E2EFixture) -> None:
         } <= names
 
 
+def test_execute_agent_failure_closes_all_authoritative_scopes(
+    e2e: E2EFixture,
+) -> None:
+    fixture = e2e
+    run_id = fixture.create_run()
+    fixture.advance_until_executing(run_id)
+    attempt = fixture.latest_attempt(run_id)
+    fixture.seed_grant_for(attempt.attempt_id)
+    fixture.client.queue_executions(attempt.attempt_id, [
+        {"output": {"note": "Agent cannot complete this execution"}},
+    ])
+
+    assert asyncio.run(fixture.orchestrator.advance(run_id)) is True
+    assert asyncio.run(fixture.orchestrator.advance(run_id)) is False
+
+    with fixture.sessions() as session:
+        invocation = session.scalar(select(AgentInvocationRecord).where(
+            AgentInvocationRecord.attempt_id == attempt.attempt_id,
+        ))
+        delegation = session.get(DelegationRecord, attempt.delegation_id)
+        current_attempt = session.get(AttemptRecord, attempt.attempt_id)
+        order = session.get(WorkOrderRecord, attempt.work_order_id)
+        run = session.get(ResearchRunRecord, run_id)
+        assert invocation is not None
+        assert invocation.status == "FAILED"
+        assert invocation.failure_category == "RUNTIME_UNAVAILABLE"
+        assert invocation.reason_code == "model_unavailable"
+        assert delegation is not None and delegation.state == "FAILED"
+        assert current_attempt is not None and current_attempt.state == "FAILED"
+        assert order is not None and order.state == "EXECUTION_FAILED"
+        assert run is not None and run.state == "WAITING_EXTERNAL"
+        assert session.scalar(select(WorkOrderRecord).where(
+            WorkOrderRecord.parent_work_order_id == order.work_order_id,
+        )) is None
+        event = session.scalar(select(AuditEventRecord).where(
+            AuditEventRecord.event_type == "AGENT_INVOCATION_RECONCILED",
+            AuditEventRecord.entity_id == invocation.invocation_id,
+        ))
+        assert event is not None
+        assert event.metadata_json["failure_category"] == "RUNTIME_UNAVAILABLE"
+        assert event.metadata_json["reason_code"] == "model_unavailable"
+
+
+def test_plan_agent_failure_waits_for_explicit_external_resume(
+    e2e: E2EFixture,
+) -> None:
+    fixture = e2e
+    run_id = fixture.create_run()
+    with fixture.sessions.begin() as session:
+        runtime = session.get(RuntimeSessionRecord, "rs_agent_planner")
+        assert runtime is not None
+        runtime.supervisor_state = "STOPPED"
+
+    assert asyncio.run(fixture.orchestrator.advance(run_id)) is False
+    assert asyncio.run(fixture.orchestrator.advance(run_id)) is False
+
+    with fixture.sessions() as session:
+        run = session.get(ResearchRunRecord, run_id)
+        invocation = session.scalar(select(AgentInvocationRecord).where(
+            AgentInvocationRecord.run_id == run_id,
+            AgentInvocationRecord.purpose == "PLAN",
+        ))
+        delegation = session.get(DelegationRecord, invocation.delegation_id) if invocation else None
+        assert run is not None and run.state == "WAITING_EXTERNAL"
+        assert invocation is not None and invocation.status == "FAILED"
+        assert invocation.failure_category == "RUNTIME_UNAVAILABLE"
+        assert invocation.reason_code == "PROCESS_RUNTIME_UNAVAILABLE"
+        assert delegation is not None and delegation.state == "FAILED"
+    with fixture.sessions.begin() as session:
+        runtime = session.get(RuntimeSessionRecord, "rs_agent_planner")
+        assert runtime is not None
+        runtime.supervisor_state = "HEALTHY"
+    assert fixture.orchestrator.resume_external(run_id) is ResearchRunState.PLANNING
+    assert asyncio.run(fixture.orchestrator.advance(run_id)) is True
+    assert fixture.orchestrator.snapshot(run_id).state is ResearchRunState.ACTIVE
+
+
+def test_review_agent_failure_preserves_reviewing_work_order(
+    e2e: E2EFixture,
+) -> None:
+    fixture = e2e
+    run_id = fixture.create_run()
+    fixture.advance_until_executing(run_id)
+    attempt = fixture.latest_attempt(run_id)
+    fixture.seed_grant_for(attempt.attempt_id)
+    fixture.client.queue_executions(attempt.attempt_id, [
+        {"execution": {"final_claim": "execution complete"}},
+    ])
+    for _ in range(10):
+        snapshot = fixture.orchestrator.snapshot(run_id)
+        if snapshot.state is ResearchRunState.REVIEWING:
+            break
+        assert asyncio.run(fixture.orchestrator.advance(run_id)) is True
+    else:
+        raise AssertionError("run did not reach REVIEWING")
+    with fixture.sessions.begin() as session:
+        runtime = session.get(RuntimeSessionRecord, "rs_agent_reviewer")
+        assert runtime is not None
+        runtime.supervisor_state = "STOPPED"
+
+    assert asyncio.run(fixture.orchestrator.advance(run_id)) is False
+    assert asyncio.run(fixture.orchestrator.advance(run_id)) is False
+
+    with fixture.sessions() as session:
+        run = session.get(ResearchRunRecord, run_id)
+        order = session.scalar(select(WorkOrderRecord).where(
+            WorkOrderRecord.run_id == run_id,
+        ))
+        invocation = session.scalar(select(AgentInvocationRecord).where(
+            AgentInvocationRecord.run_id == run_id,
+            AgentInvocationRecord.purpose == "REVIEW",
+        ))
+        delegation = session.get(DelegationRecord, invocation.delegation_id) if invocation else None
+        assert run is not None and run.state == "WAITING_EXTERNAL"
+        assert order is not None and order.state == "REVIEWING"
+        assert invocation is not None and invocation.status == "FAILED"
+        assert invocation.failure_category == "RUNTIME_UNAVAILABLE"
+        assert invocation.reason_code == "PROCESS_RUNTIME_UNAVAILABLE"
+        assert delegation is not None and delegation.state == "FAILED"
+    with fixture.sessions.begin() as session:
+        runtime = session.get(RuntimeSessionRecord, "rs_agent_reviewer")
+        assert runtime is not None
+        runtime.supervisor_state = "HEALTHY"
+    assert fixture.orchestrator.resume_external(run_id) is ResearchRunState.REVIEWING
+    assert asyncio.run(fixture.orchestrator.advance(run_id)) is True
+
+
 def test_coder_handoff_accept_continues_with_target_agent(e2e: E2EFixture) -> None:
     fixture = e2e
     run_id = fixture.create_run()
@@ -354,22 +481,14 @@ def test_coder_handoff_accept_continues_with_target_agent(e2e: E2EFixture) -> No
         }]}, "agent_actions": [_handoff_action()]},
         {"output": {"note": "stuck; handing off"}},
     ])
-    with pytest.raises(ValueError, match="model_unavailable"):
-        asyncio.run(fixture.orchestrator.advance(run_id))
-
-    # Reconcile the crashed execution the way the controller would: the
-    # invocation/delegation are already terminal via the invocation service.
-    now = datetime.now(UTC)
-    with fixture.sessions.begin() as session:
-        row = session.get(AttemptRecord, attempt.attempt_id)
-        assert row is not None
-        row.state = AttemptState.FAILED.value
-        row.terminal_at = now
-        order = session.get(WorkOrderRecord, row.work_order_id)
-        assert order is not None
-        order.state = WorkOrderState.EXECUTION_FAILED.value
-        order.version += 1
-        order.updated_at = now
+    assert asyncio.run(fixture.orchestrator.advance(run_id)) is True
+    with fixture.sessions() as session:
+        failed_attempt = session.get(AttemptRecord, attempt.attempt_id)
+        failed_order = session.get(WorkOrderRecord, attempt.work_order_id)
+        run = session.get(ResearchRunRecord, run_id)
+        assert failed_attempt is not None and failed_attempt.state == "FAILED"
+        assert failed_order is not None and failed_order.state == "EXECUTION_FAILED"
+        assert run is not None and run.state == "WAITING_EXTERNAL"
     with fixture.sessions() as session:
         proposal = session.scalar(select(HandoffProposalRecord).where(
             HandoffProposalRecord.run_id == run_id,

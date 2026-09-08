@@ -26,6 +26,12 @@ def is_live(identity: dict[str, object]) -> bool:
     if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
         return False
     try:
+        # A zombie retains a /proc entry until its parent reaps it, but it no
+        # longer executes or owns daemon authority.  Treating it as live makes
+        # a strongly identified restart impossible while offering no safety.
+        fields = Path(f"/proc/{pid}/stat").read_text(encoding="ascii").split()
+        if len(fields) > 2 and fields[2] == "Z":
+            return False
         return current_identity(pid) == {
             "pid": pid,
             "start_ticks": identity.get("start_ticks"),

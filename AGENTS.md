@@ -2,14 +2,22 @@
 
 ## Positioning
 
-`research-agent-system` is an Agent Collaboration Plane plus Trusted Control
-Plane. Agent is the integration identity; runtime implementation details and
-protocols are subordinate to `AgentRuntime`.
+`research-agent-system` is a governed Agent communication and collaboration
+fabric. Agent-to-Agent communication is the primary product plane. The trusted
+control plane is its supporting safety kernel for identity, policy,
+classification, capability, approval, audit, and limits. Agent is the
+integration identity; runtime implementation details and protocols are
+subordinate to `AgentRuntime`.
 
 ## Required invariants
 
 - Planning, execution, and review enter `ResearchOrchestrator` through
   `CollaborationGateway`, `Delegation`, and `AgentInvocation`.
+- Messages must be durably delivered into bounded recipient context; storing or
+  projecting a message alone is not delivery.
+- `Message`, `Task`, `HandoffProposal`, and `WorkOrder` remain distinct. Message
+  delivery never grants workflow authority or causes an implicit state
+  transition.
 - Agent skills are descriptive and never grant trusted `Capability` values.
 - Verification, policy, orchestration, and job management remain trusted
   system actors and cannot be registered as ordinary Agents.
@@ -76,11 +84,14 @@ approval, daily bootstrap/workspace controls, strong daemon identity, and
 packaged explicit migrations. Do not reintroduce grant-bearing public approval
 routes, arbitrary runtime launch input, or legacy command compatibility.
 
-The active `preview/developer-ux` track is a Developer Preview derived from
-the immutable rc.82 source candidate. It adds trusted global setup, managed
-aweswitch-backed planner/coder/reviewer onboarding, an interactive TUI,
-continuous detached projections, schema `0026` Run-scoped Artifact ingress,
-and an immutable-manifest installer. It is not a Production Go claim. Keep
-raw host paths, expanded profile secrets, and file bytes out of Agent identity,
-audit metadata, and command authority; downstream Agents receive only
-policy-admitted Artifact context.
+The `preview/agent-control-closure` track at `8cf27dc` is a verified
+infrastructure-hardening baseline for Agent collaboration. It does not complete
+the communication product: CollaborationMessage currently provides durable
+storage and projections, but no inbox/delivery lifecycle, recipient consumption,
+message-aware context, message-driven turn, or reply loop. The current mainline
+is CM00-CM08 Agent Communication Core. Keep PR #13 described as foundation
+hardening, not collaboration-product completion.
+
+Keep raw host paths, expanded profile secrets, and file bytes out of Agent
+identity, audit metadata, and command authority. Message delivery must apply the
+same trust-zone and classification policy as targeted Artifact context.

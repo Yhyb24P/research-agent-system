@@ -34,10 +34,10 @@ class OrchestrationTarget(Protocol):
 
 
 class OrchestrationDriver:
-    """Single daemon service that wakes durable runnable ResearchRuns.
+    """Bounded daemon service that wakes durable runnable ResearchRuns.
 
-    One worker serializes advancement, which guarantees at most one active
-    advancement loop for a run in this daemon.  No runnable queue is durable:
+    Workers may advance different Runs concurrently while per-Run ownership
+    guarantees at most one active loop for each Run. No runnable queue is durable:
     a daemon restart scans ``research_runs`` again after the recovery barrier.
     """
 
@@ -47,49 +47,72 @@ class OrchestrationDriver:
         sessions: sessionmaker[Session],
         *,
         max_steps_per_wake: int = 100,
+        max_workers: int = 4,
     ) -> None:
         if max_steps_per_wake < 1:
             raise ValueError("max_steps_per_wake must be positive")
+        if max_workers < 1 or max_workers > 32:
+            raise ValueError("max_workers must be between 1 and 32")
         self.orchestrator = orchestrator
         self.sessions = sessions
         self.max_steps_per_wake = max_steps_per_wake
+        self.max_workers = max_workers
         self._condition = threading.Condition()
         self._pending: set[str] = set()
+        self._active: set[str] = set()
+        self._rewake: set[str] = set()
         self._stopped = True
-        self._thread: threading.Thread | None = None
+        self._threads: list[threading.Thread] = []
         self._last_error: str | None = None
         self._last_error_run_id: str | None = None
 
     def start(self) -> None:
         """Start after the daemon startup barrier and discover durable work."""
         with self._condition:
-            if self._thread is not None and self._thread.is_alive():
+            if any(thread.is_alive() for thread in self._threads):
                 return
             self._stopped = False
-            self._thread = threading.Thread(
+            self._threads = [threading.Thread(
                 target=self._run,
-                name="researchd-orchestration-driver",
+                name=f"researchd-orchestration-driver-{index + 1}",
                 daemon=True,
-            )
-            self._thread.start()
+            ) for index in range(self.max_workers)]
+            for thread in self._threads:
+                thread.start()
         self.discover_runnable()
 
     def stop(self) -> None:
         with self._condition:
             self._stopped = True
             self._pending.clear()
+            self._rewake.clear()
             self._condition.notify_all()
-            thread = self._thread
-        if thread is not None and thread is not threading.current_thread():
-            thread.join(timeout=5)
+            threads = tuple(self._threads)
+        for thread in threads:
+            if thread is not threading.current_thread():
+                thread.join(timeout=5)
 
     def wake(self, run_id: str) -> None:
         """Request a future advancement after a durable controller write."""
         with self._condition:
             if self._stopped:
                 return
+            if run_id in self._active:
+                self._rewake.add(run_id)
+                return
             self._pending.add(run_id)
             self._condition.notify()
+
+    def wake_if_runnable(self, run_id: str) -> bool:
+        """Wake only after the committed Run state is authoritatively runnable."""
+        with self.sessions() as session:
+            state = session.scalar(select(ResearchRunRecord.state).where(
+                ResearchRunRecord.run_id == run_id,
+            ))
+        if state not in _RUNNABLE_STATES:
+            return False
+        self.wake(run_id)
+        return True
 
     def discover_runnable(self) -> None:
         """Rebuild pending work from durable controller state after restart."""
@@ -108,10 +131,12 @@ class OrchestrationDriver:
 
     def health(self) -> dict[str, object]:
         with self._condition:
-            thread = self._thread
+            running_workers = sum(thread.is_alive() for thread in self._threads)
             return {
-                "running": bool(thread is not None and thread.is_alive() and not self._stopped),
+                "running": bool(running_workers and not self._stopped),
+                "worker_count": running_workers,
                 "pending_run_count": len(self._pending),
+                "active_run_count": len(self._active),
                 "last_error": self._last_error,
                 "last_error_run_id": self._last_error_run_id,
             }
@@ -124,7 +149,16 @@ class OrchestrationDriver:
                 if self._stopped:
                     return
                 run_id = self._pending.pop()
-            self._drive(run_id)
+                self._active.add(run_id)
+            try:
+                self._drive(run_id)
+            finally:
+                with self._condition:
+                    self._active.discard(run_id)
+                    if run_id in self._rewake and not self._stopped:
+                        self._rewake.discard(run_id)
+                        self._pending.add(run_id)
+                        self._condition.notify()
 
     def _drive(self, run_id: str) -> None:
         try:

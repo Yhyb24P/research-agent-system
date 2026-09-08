@@ -50,8 +50,8 @@ def _database(path: Path) -> sessionmaker[Session]:
         session.add(ResearchRunRecord(
             run_id="run_specialist", workspace_id="ws_specialist",
             objective="critique evidence coverage", state="ACTIVE",
-            max_iterations=8, max_cloud_calls=24, iterations_used=0,
-            cloud_calls_used=0, cancellation_requested=False,
+            max_iterations=8, max_agent_turns=24, iterations_used=0,
+            agent_turns_used=0, cancellation_requested=False,
             version=1, created_at=now, updated_at=now,
         ))
     return sessions

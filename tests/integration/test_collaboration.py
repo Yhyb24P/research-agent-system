@@ -314,6 +314,53 @@ def test_gateway_cancellation_preserves_cancelled_terminal_state(database: tuple
         assert invocation is not None and invocation.status == InvocationStatus.CANCELLED.value
 
 
+def test_late_agent_result_after_cancel_is_audited_and_ignored(
+    database: tuple[Path, sessionmaker[Session]],
+) -> None:
+    _, sessions = database
+    registry = AgentRegistryService(sessions)
+    registry.register_profile(profile())
+    registry.register_runtime(AgentRuntime(
+        runtime_id=AgentRuntimeId("runtime_late"), agent_id=AgentId("agent_executor"),
+        adapter_kind=AgentAdapterKind.HTTP, runtime_name="Late Agent",
+    ))
+    registry.acquire_runtime("runtime_late", owner_id="late-result-test")
+    delegations = DelegationService(sessions)
+    delegations.create(Delegation(
+        delegation_id=DelegationId("del_late"), run_id="run_test",
+        purpose=DelegationPurpose.EXECUTE, idempotency_key="late-result",
+    ))
+    delegations.assign(
+        "del_late", agent_id="agent_executor", runtime_id="runtime_late",
+    )
+    invocations = InvocationService(sessions)
+    request = AgentInvocationRequest(
+        invocation_id=InvocationId("inv_late"), delegation_id=DelegationId("del_late"),
+        run_id="run_test", agent_id=AgentId("agent_executor"),
+        runtime_id=AgentRuntimeId("runtime_late"), purpose=DelegationPurpose.EXECUTE,
+        input_sha256="e" * 64, typed_input=typed_execute(),
+    )
+    invocations.start(request)
+    invocations.mark_dispatched("inv_late")
+    assert invocations.request_cancel("inv_late") is False
+    assert invocations.complete(AgentInvocationResult(
+        invocation_id=InvocationId("inv_late"), status=InvocationStatus.CANCELLED,
+        reason_code="CANCELLED",
+    )) is True
+    assert invocations.complete(AgentInvocationResult(
+        invocation_id=InvocationId("inv_late"), status=InvocationStatus.SUCCEEDED,
+        output_type="ExecutorResult", output={"late": True},
+    )) is False
+    with sessions() as session:
+        invocation = session.get(AgentInvocationRecord, "inv_late")
+        assert invocation is not None and invocation.status == "CANCELLED"
+        assert invocation.output_json is None
+        events = tuple(session.scalars(select(AuditEventRecord.event_type).where(
+            AuditEventRecord.entity_id == "inv_late",
+        )))
+        assert events.count("AGENT_INVOCATION_LATE_RESULT_IGNORED") == 1
+
+
 def test_gateway_catalog_routes_plan_to_generic_http_agent(database: tuple[Path, sessionmaker[Session]]) -> None:
     _, sessions = database
     registry = AgentRegistryService(sessions)

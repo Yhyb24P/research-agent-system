@@ -169,6 +169,7 @@ class InvocationService:
             session.add(self._audit(row, "AGENT_INVOCATION_CANCEL_REQUESTED", reference))
             if row.dispatched_at is None:
                 row.status = InvocationStatus.CANCELLED.value
+                row.failure_category = "CANCELLED"
                 row.reason_code = "CANCELLED_BEFORE_DISPATCH"
                 row.completed_at = reference
                 delegation = session.get(DelegationRecord, row.delegation_id)
@@ -187,10 +188,20 @@ class InvocationService:
         *,
         external_invocation_id: str | None = None,
         now: datetime | None = None,
-    ) -> None:
+    ) -> bool:
         reference = now or datetime.now(UTC)
         with self.sessions.begin() as session:
             row = session.get(AgentInvocationRecord, str(result.invocation_id))
+            if (
+                row is not None
+                and row.status == InvocationStatus.CANCELLED.value
+                and row.cancel_requested_at is not None
+            ):
+                session.add(self._audit(
+                    row, "AGENT_INVOCATION_LATE_RESULT_IGNORED", reference,
+                    {"incoming_status": result.status.value},
+                ))
+                return False
             if row is None or row.status != InvocationStatus.RUNNING.value:
                 raise StaleInvocationResult("invocation is not running")
             result_external_id = external_invocation_id or result.external_invocation_id
@@ -200,10 +211,15 @@ class InvocationService:
             elif result_external_id is not None:
                 raise StaleInvocationResult("result arrived before external identity binding")
             row.status, row.output_type, row.output_json = result.status.value, result.output_type, result.output
+            row.failure_category = (
+                result.failure_category.value if result.failure_category is not None else None
+            )
             row.reason_code, row.completed_at = result.reason_code, reference
             row.last_reconciled_at = reference
             session.add(self._audit(row, "AGENT_INVOCATION_RECONCILED", reference, {
                 "status": result.status.value,
+                "failure_category": row.failure_category,
+                "reason_code": row.reason_code,
             }))
             delegation = session.get(DelegationRecord, row.delegation_id)
             if delegation is not None:
@@ -211,6 +227,7 @@ class InvocationService:
                 delegation.updated_at = reference
                 delegation.completed_at = reference
                 delegation.version += 1
+            return True
 
     def expire_deadlines(self, *, now: datetime | None = None) -> tuple[str, ...]:
         reference = now or datetime.now(UTC)
@@ -223,6 +240,7 @@ class InvocationService:
             ).all()
             for row in rows:
                 row.status = InvocationStatus.FAILED.value
+                row.failure_category = "INVOCATION_TIMEOUT"
                 row.reason_code = "INVOCATION_TIMEOUT"
                 row.completed_at = reference
                 row.last_reconciled_at = reference
@@ -247,6 +265,7 @@ class InvocationService:
             ).all()
             for row in rows:
                 if row.external_invocation_id is not None:
+                    row.failure_category = "RECONCILIATION_REQUIRED"
                     row.reason_code = "RECONCILIATION_REQUIRED"
                     row.reconciliation_requested_at = row.reconciliation_requested_at or now
                     session.add(self._audit(
@@ -255,6 +274,7 @@ class InvocationService:
                     recovered.append(row.invocation_id)
                     continue
                 row.status = InvocationStatus.FAILED.value
+                row.failure_category = "INTERNAL_ADAPTER_ERROR"
                 row.reason_code = "CONTROLLER_RESTARTED_BEFORE_EXTERNAL_BIND"
                 row.completed_at = now
                 session.add(self._audit(

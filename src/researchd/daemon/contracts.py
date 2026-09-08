@@ -25,6 +25,16 @@ class ExternalRunCancelRequest(ExternalCommandRequest):
     pass
 
 
+class ExternalRunResumeRequest(ExternalCommandRequest):
+    pass
+
+
+class ExternalWorkOrderRetryRequest(ExternalCommandRequest):
+    target_agent_id: str | None = Field(
+        default=None, pattern=r"^agent_[A-Za-z0-9][A-Za-z0-9_-]*$"
+    )
+
+
 class ExternalWorkOrderApproveRequest(ExternalCommandRequest):
     grant_id: str = Field(min_length=1, max_length=128)
 
@@ -158,6 +168,17 @@ class ExternalRestorePlanRequest(ExternalCommandRequest):
 
 class RunCancelCommand(DaemonCommand):
     run_id: str = Field(min_length=1, max_length=128)
+
+
+class RunResumeCommand(DaemonCommand):
+    run_id: str = Field(min_length=1, max_length=128)
+
+
+class WorkOrderRetryCommand(DaemonCommand):
+    work_order_id: str = Field(min_length=1, max_length=128)
+    target_agent_id: str | None = Field(
+        default=None, pattern=r"^agent_[A-Za-z0-9][A-Za-z0-9_-]*$"
+    )
 
 
 class WorkOrderApproveCommand(DaemonCommand):
@@ -316,8 +337,10 @@ __all__ = [
     "ExternalResearchTaskCreateRequest",
     "ExternalRestorePlanRequest",
     "ExternalRunCancelRequest",
+    "ExternalRunResumeRequest",
     "ExternalWorkOrderApproveRequest",
     "ExternalWorkOrderRejectRequest",
+    "ExternalWorkOrderRetryRequest",
     "ExternalWorkspaceCreateRequest",
     "HumanDecisionCommand",
     "HandoffDecisionCommand",
@@ -328,6 +351,8 @@ __all__ = [
     "ResearchTaskCreateCommand",
     "RestorePlanCommand",
     "RunCancelCommand",
+    "RunResumeCommand",
+    "WorkOrderRetryCommand",
     "WorkOrderApproveCommand",
     "WorkOrderRejectCommand",
     "WorkspaceCreateCommand",

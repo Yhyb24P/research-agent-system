@@ -135,7 +135,7 @@ def _orchestrator_for_restored_state(
         workspace_capabilities=frozenset(),
         user_capabilities=frozenset(),
         maximum_budget=BudgetLimits(100, 100, 0, 100, 100),
-        limits=OrchestrationLimits(max_iterations=8, max_cloud_calls=8),
+        limits=OrchestrationLimits(max_iterations=8, max_agent_turns=8),
     )
     return sessions, orchestrator
 

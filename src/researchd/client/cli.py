@@ -22,7 +22,14 @@ from researchd.client.agent_management import (
 from researchd.client.bootstrap import run_doctor, run_setup
 from researchd.client.config_discovery import resolve_config_path
 from researchd.bridge.aweswitch_agent import default_aweswitch_config
-from researchd.client.lifecycle import interactive_entry, open_browser, run_init, run_status, stop_daemon
+from researchd.client.lifecycle import (
+    interactive_entry,
+    open_browser,
+    restart_daemon,
+    run_init,
+    run_status,
+    stop_daemon,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -63,7 +70,13 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("status", help="report daemon reachability and readiness")
     daemon = subparsers.add_parser("daemon", help="inspect or control the local daemon")
     daemon.add_argument("action", choices=("status", "stop", "restart"))
-    subparsers.add_parser("tui", help="open the optional collaboration workspace")
+    tui = subparsers.add_parser("tui", help="open the optional collaboration workspace")
+    tui.add_argument(
+        "--language",
+        choices=("en", "zh-CN"),
+        default="en",
+        help="interface language (default: en)",
+    )
     subparsers.add_parser("browser", help="open the local Browser Control Tower")
     console = subparsers.add_parser("console", help="open a detached projection console")
     console.add_argument("kind", choices=("collab", "agent", "system"))
@@ -151,14 +164,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "daemon":
         if args.action == "status":
             return run_status(config)
-        stopped = stop_daemon(config)
-        if stopped != 0 or args.action == "stop":
-            return stopped
-        return interactive_entry(config, input_fn=lambda: "quit")
+        if args.action == "stop":
+            return stop_daemon(config)
+        return restart_daemon(config)
     if args.command == "tui":
         from researchd.client.tui import tui_entry
 
-        return tui_entry(config)
+        return tui_entry(config, language=args.language)
     if args.command == "browser":
         return open_browser(config)
     if args.command == "console":

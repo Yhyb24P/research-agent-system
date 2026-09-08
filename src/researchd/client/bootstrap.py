@@ -63,13 +63,14 @@ def setup_payload(
     *,
     data_root: Path,
     state_root: Path,
+    artifact_root: Path | None = None,
     port: int = 8788,
 ) -> dict[str, Any]:
     """Build the strict, credential-free daemon config for one local project."""
     project = project_root.resolve(strict=True)
     return {
         "database": str(data_root / "researchd.db"),
-        "artifact_root": str(data_root / "artifacts"),
+        "artifact_root": str(artifact_root or data_root / "artifacts"),
         "state_root": str(state_root),
         "repositories": {"project": str(project)},
         "workspace_sources": {
@@ -149,8 +150,18 @@ def run_setup(
             print_fn("setup cancelled")
             return None
 
-    data_root = default_data_root(base_home).resolve()
-    state_root = default_state_root(base_home).resolve()
+    if config_path is None:
+        data_root = default_data_root(base_home).resolve()
+        state_root = default_state_root(base_home).resolve()
+        artifact_root = data_root / "artifacts"
+    else:
+        # An explicit config denotes an isolated deployment profile.  Keep its
+        # mutable state beside that config instead of silently falling back to
+        # the caller's global XDG directories.
+        deployment_root = target_config.parent
+        data_root = (deployment_root / "data").resolve()
+        state_root = (deployment_root / "state").resolve()
+        artifact_root = (deployment_root / "artifacts").resolve()
     database = data_root / "researchd.db"
     if database.exists() or control_token_path(state_root).exists():
         print_fn(
@@ -163,6 +174,7 @@ def run_setup(
         detected,
         data_root=data_root,
         state_root=state_root,
+        artifact_root=artifact_root,
         port=port,
     )
     write_new_config(target_config, payload)

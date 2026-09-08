@@ -9,45 +9,39 @@
 > release; see
 > [docs/qualification/CANDIDATE_RELEASE_CONTRACT.md](docs/qualification/CANDIDATE_RELEASE_CONTRACT.md).
 
-Research Agent System is an **Agent Collaboration Plane + Trusted Control
-Plane** for durable, policy-controlled research workflows. The integration
-identity is an Agent. Frameworks, providers, protocols, and execution
-locations are implementation details of an `AgentRuntime`.
+Research Agent System is a governed **Agent communication and collaboration
+fabric** for research workflows. Agent-to-Agent communication is the primary
+product plane. A trusted safety kernel governs identity, policy,
+classification, capability, approval, audit, and limits. The integration
+identity is an Agent; frameworks, providers, protocols, and execution locations
+are implementation details of an `AgentRuntime`.
 
-Agents may propose, execute, review, and perform specialist analysis. They do
-not own workflow state, grant themselves capabilities, approve their own
-actions, or verify their own results. Those authorities remain in the trusted
-control plane.
+Agents communicate, exchange bounded context, and may propose, execute, review,
+or perform specialist analysis. Workflow authority remains in the trusted
+safety kernel. A message can inform an Agent, but it cannot grant a capability,
+approve an action, verify a result, or select a workflow transition.
 
 ## Architecture
 
 ```text
-Human / Browser / researchctl
-          │ typed commands + read-only AG-UI projection
-          ▼
-Local Control API ───────────────► Trusted Control Plane
-                                      │
-                         ResearchRun / WorkOrder / Attempt
-                         Policy / Approval / Audit / Verifier
-                                      │
-                                      ▼
-                            CollaborationGateway
-                                      │
-                     Delegation / AgentInvocation / Context
-                         ┌────────────┼────────────┐
-                         ▼            ▼            ▼
-                    internal/HTTP   A2A v1     LangGraph
-                         │            │        specialist Agent
-                         └────────────┴────────────┘
-                                      │
-                         Workspace Grant / Lease
-                         Git or Archive transport
-                                      │
-                                      ▼
-                         Artifact reconciliation
-                                      │
-                                      ▼
-                              Independent Verifier
+               Trusted safety kernel
+ Identity / Policy / Classification / Capability / Approval / Audit
+                          │ governs
+                          ▼
+┌──────────────────────────────────────────────────────────────┐
+│                Agent Collaboration Fabric                    │
+│ Conversation / Message / Reply / Inbox / Delivery / Context │
+│ Artifact / Handoff Proposal / Presence / Runtime routing     │
+└──────────────┬──────────────────┬──────────────────┬──────────┘
+               ▼                  ▼                  ▼
+            Agent A            Agent B            Agent C
+               ▲                  │                  │
+               └──────────────────┴──────────────────┘
+
+                 optional governed workflow binding
+                               │
+                               ▼
+                  ResearchRun / WorkOrder / Attempt
 ```
 
 SQLite records are authoritative. A2A tasks, AG-UI events, workspace transport
@@ -160,9 +154,20 @@ uv run research agent add reviewer
 ```
 
 When a single supported aweswitch profile is present, `agent add` selects it;
-otherwise pass `--profile aweswitch:<profile>`. The initial bridge supports
-Qwen profiles and validates every response against the managed Agent JSON
-contract. In the TUI, use `/task <objective>`, `/msg @agent <text>`, and
+otherwise pass `--profile aweswitch:<profile>`. The managed bridge supports
+Qwen and Codex profiles and validates every response against the same managed
+Agent JSON contract. To install a Codex-backed coder explicitly, use:
+
+```bash
+uv run research agent add coder --profile aweswitch:<codex-profile>
+```
+
+Start the Chinese TUI with `uv run research tui --language zh-CN`. Its fixed
+bottom command composer accepts `/shell <installed-agent>`; for example,
+`/shell codex` resolves a unique installed Codex-backed Agent and asks the
+daemon to start its trusted launch profile. It is not a host shell and never
+accepts caller-supplied argv, cwd, credentials, or runtime-session identity.
+The TUI also supports `/task <objective>`, `/msg @agent <text>`,
 `/attach <file> [--to @agent]`, and `/approve <approval-id>`. Attachment bytes
 are bounded, classified, content-addressed and associated with the focused Run;
 Agents receive only policy-admitted Artifact context, never the host path.
@@ -351,7 +356,7 @@ The shell is entered only after the daemon reports READY — a non-ready daemon 
 surfaced with its failed startup phase, never bypassed. The shell offers
 `status`; `workspace list` / `workspace create` / `workspace use`; `agent
 list` / `agent use` / `agent remove` / `agent start`; `runtime list` /
-`runtime stop`; `run list`; `task create` / `task cancel`; `msg`; `handoff
+`runtime stop`; `run list` / `run resume`; `work-order retry`; `task create` / `task cancel`; `msg`; `handoff
 list` / `handoff accept` / `handoff reject`; `events watch`; `approval approve
 <approval-id>`; remote attach/renew/detach; and `quit`. With a focused
 workspace, `task create <objective>` uses that workspace; otherwise the first
@@ -388,7 +393,7 @@ credential-free loopback turn protocol. It proposes typed actions only;
 `researchd` executes granted actions through `CapabilityBroker` and constructs
 the authoritative `ExecutorResult`.
 
-Collaboration messages use a closed purpose vocabulary (`DISCUSSION`,
+Collaboration messages currently use a closed purpose vocabulary (`DISCUSSION`,
 `STATUS`, `QUESTION`, `DIRECTIVE`, `NOTICE`) and may durably reference one
 WorkOrder, Delegation, Invocation, or prior message in the same run. These
 links remain communication context and never confer workflow authority.
@@ -400,10 +405,17 @@ Native collaboration reads are available by message ID and at
 reply/delegation/invocation links. `LOCAL_ONLY` and `SECRET` bodies are
 redacted from these presentation projections.
 
+Developer Preview limitation: `/msg @agent <text>` currently records and
+projects the message. It does not yet place the message in a recipient inbox,
+add it to the target Agent context, wake that Agent, or produce an automatic
+reply. Durable delivery and reply turns are the active Agent Communication Core
+mainline.
+
 Install the optional `tui` extra and run `research --config researchd.json tui`
 for the projection-only workspace with Collab, Agents, Tasks, Approvals and
-System tabs. Refresh and layout state stay client-local; the TUI has no direct
-database or business-logic path.
+System tabs. Add `--language zh-CN` for the Chinese interface. Refresh and
+layout state stay client-local; the TUI has no direct database or
+business-logic path.
 
 The same daemon can be observed through independent terminal clients:
 

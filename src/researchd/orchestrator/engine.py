@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from researchd.agents.cloud_lead import CloudLeadResult
 from researchd.collaboration.gateway import CollaborationGateway
+from researchd.collaboration.contracts import AgentInvocationFailure
 from researchd.agents.schemas import PlanProposal, WorkOrderProposal
 from researchd.context.builder import CloudContextSelection
 from researchd.domain.enums import (
@@ -43,7 +44,7 @@ class VerificationDriver(Protocol):
 @dataclass(frozen=True)
 class OrchestrationLimits:
     max_iterations: int = 8
-    max_cloud_calls: int = 24
+    max_agent_turns: int = 24
     max_wall_seconds: int = 86_400
 
 
@@ -109,8 +110,8 @@ class ResearchOrchestrator:
             session.add(ResearchRunRecord(
                 run_id=identifier, workspace_id=workspace_id, objective=objective,
                 state=ResearchRunState.NEW.value, version=1, created_at=now, updated_at=now,
-                max_iterations=self.limits.max_iterations, max_cloud_calls=self.limits.max_cloud_calls,
-                iterations_used=0, cloud_calls_used=0, cancellation_requested=False,
+                max_iterations=self.limits.max_iterations, max_agent_turns=self.limits.max_agent_turns,
+                iterations_used=0, agent_turns_used=0, cancellation_requested=False,
             ))
             session.flush()
             session.add(AuditEventRecord(
@@ -145,11 +146,7 @@ class ResearchOrchestrator:
         if state is ResearchRunState.PLANNING:
             return await self._plan(run_id)
         if state is ResearchRunState.WAITING_EXTERNAL:
-            if self._has_reviewing_order(run_id):
-                self._transition_run(run_id, ResearchRunState.REVIEWING, "EXTERNAL_WAIT_RESUMED")
-                return True
-            self._transition_run(run_id, ResearchRunState.PLANNING, "EXTERNAL_WAIT_RESUMED")
-            return True
+            return False
         if state is ResearchRunState.WAITING_HUMAN:
             return False
         if state is ResearchRunState.REVIEWING:
@@ -160,15 +157,26 @@ class ResearchOrchestrator:
 
     async def _plan(self, run_id: str) -> bool:
         run = self._run(run_id)
-        if not self._consume_cloud_call(run_id, run):
+        if not self._consume_agent_turn(run_id, run):
             return False
         try:
             result = await self.collaboration.plan(CloudContextSelection(run_id=run_id))
+        except AgentInvocationFailure as error:
+            self._transition_run(
+                run_id, ResearchRunState.WAITING_EXTERNAL, "AGENT_PLAN_WAITING",
+                {
+                    "failure_category": error.failure_category.value,
+                    "reason_code": error.result.reason_code,
+                },
+            )
+            return False
         except (CloudProviderUnavailable, TimeoutError) as error:
-            self._transition_run(run_id, ResearchRunState.WAITING_EXTERNAL, "CLOUD_PLAN_WAITING", {"error": type(error).__name__})
+            category = "INVOCATION_TIMEOUT" if isinstance(error, TimeoutError) else "TRANSPORT_FAILED"
+            self._transition_run(run_id, ResearchRunState.WAITING_EXTERNAL, "AGENT_PLAN_WAITING", {"failure_category": category})
             return False
         except (CloudSchemaInvalid, CloudBudgetExceeded) as error:
-            self._transition_run(run_id, ResearchRunState.FAILED, "CLOUD_PLAN_FAILED", {"error": type(error).__name__})
+            category = "OUTPUT_INVALID" if isinstance(error, CloudSchemaInvalid) else "AGENT_BUDGET_EXCEEDED"
+            self._transition_run(run_id, ResearchRunState.FAILED, "AGENT_PLAN_FAILED", {"failure_category": category})
             return False
         self._persist_plan(run_id, result)
         self._transition_run(
@@ -247,11 +255,7 @@ class ResearchOrchestrator:
         if state is WorkOrderState.EXECUTING:
             return await self._execute_or_resume(order)
         if state is WorkOrderState.EXECUTION_FAILED:
-            refreshed = self._order(order.work_order_id)
-            self.transitions.transition_work_order(refreshed.work_order_id, refreshed.version, WorkOrderState.REVISION_REQUIRED,
-                event_type="REVISION_REQUIRED", actor_type="controller", actor_id="orchestrator", correlation_id=refreshed.work_order_id)
-            self._create_revision(self._order(refreshed.work_order_id), "execution failed")
-            return True
+            return False
         if state is WorkOrderState.VERIFYING:
             return self._verify(order)
         if state is WorkOrderState.VERIFICATION_FAILED:
@@ -461,6 +465,10 @@ class ResearchOrchestrator:
         delegation_id: str | None = None,
     ) -> str:
         """Retry an unchanged WorkOrder with a new immutable Attempt."""
+        if (attempt_id is None) != (delegation_id is None):
+            raise OrchestrationError(
+                "retry Attempt and Delegation identities must be supplied together"
+            )
         if attempt_id is not None:
             with self.sessions() as session:
                 existing = session.get(AttemptRecord, attempt_id)
@@ -472,10 +480,23 @@ class ResearchOrchestrator:
         if WorkOrderState(order.state) is not WorkOrderState.EXECUTION_FAILED:
             raise OrchestrationError("only an execution-failed WorkOrder can be retried")
         run = self._run(order.run_id)
+        if ResearchRunState(run.state) is not ResearchRunState.WAITING_EXTERNAL:
+            raise OrchestrationError("retry requires a Run waiting on an external Agent")
         if run.iterations_used >= run.max_iterations:
             self._transition_run(order.run_id, ResearchRunState.FAILED, "MAX_ITERATIONS_EXCEEDED")
             raise OrchestrationError("maximum iterations exceeded")
-        attempt_id = attempt_id or f"att_{uuid4().hex}"
+        if attempt_id is None:
+            # A command may be replayed after the controller provisioned the
+            # Delegation/workspace but before it committed the Attempt and
+            # workflow transitions.  Bind both identities to the durable
+            # pre-transition WorkOrder version so that replay recovers that
+            # authority instead of leaking a second live Delegation/grant.
+            retry_digest = hashlib.sha256(
+                f"{work_order_id}:retry:{order.version}".encode()
+            ).hexdigest()[:32]
+            attempt_id = f"att_retry_{retry_digest}"
+            delegation_id = f"del_retry_{retry_digest}"
+        assert delegation_id is not None
         prepared_delegation_id = self.collaboration.prepare_execution(
             order,
             preferred_agent_id=AgentId(preferred_agent_id) if preferred_agent_id else None,
@@ -495,11 +516,13 @@ class ResearchOrchestrator:
             if (
                 current_order.version != order.version
                 or WorkOrderState(current_order.state) is not WorkOrderState.EXECUTION_FAILED
+                or ResearchRunState(current_run.state) is not ResearchRunState.WAITING_EXTERNAL
             ):
                 raise OrchestrationError("execution-failed WorkOrder changed during retry")
             if current_run.iterations_used >= current_run.max_iterations:
                 raise OrchestrationError("maximum iterations exceeded")
             current_run.iterations_used += 1
+            current_run.state = ResearchRunState.ACTIVE.value
             current_run.version += 1
             current_run.updated_at = now
             current_order.state = WorkOrderState.EXECUTING.value
@@ -524,7 +547,34 @@ class ResearchOrchestrator:
                 run_id=order.run_id, entity_type="attempt", entity_id=attempt_id, actor_type="controller",
                 actor_id="orchestrator", timestamp=now, correlation_id=attempt_id,
                 causation_id=None, metadata_json={}))
+            session.add(AuditEventRecord(
+                event_id=f"evt_{uuid4().hex}", event_type="AGENT_EXECUTION_RESUMED",
+                run_id=order.run_id, entity_type="research_run", entity_id=order.run_id,
+                actor_type="controller", actor_id="orchestrator", timestamp=now,
+                correlation_id=attempt_id, causation_id=None,
+                metadata_json={"work_order_id": work_order_id},
+            ))
         return attempt_id
+
+    def resume_external(self, run_id: str) -> ResearchRunState:
+        """Durably resume a PLAN/REVIEW Agent wait; execution uses explicit retry."""
+        run = self._run(run_id)
+        if ResearchRunState(run.state) is not ResearchRunState.WAITING_EXTERNAL:
+            raise OrchestrationError("Run is not waiting on an external Agent")
+        with self.sessions() as session:
+            execution_failure = session.scalar(select(WorkOrderRecord.work_order_id).where(
+                WorkOrderRecord.run_id == run_id,
+                WorkOrderRecord.state == WorkOrderState.EXECUTION_FAILED.value,
+            ).limit(1))
+        if execution_failure is not None:
+            raise OrchestrationError("execution failure requires WorkOrder retry or Handoff")
+        target = (
+            ResearchRunState.REVIEWING
+            if self._has_reviewing_order(run_id)
+            else ResearchRunState.PLANNING
+        )
+        self._transition_run(run_id, target, "AGENT_EXTERNAL_RESUMED")
+        return target
 
     async def _execute_or_resume(self, order: WorkOrderRecord) -> bool:
         attempt = self._latest_attempt(order.work_order_id)
@@ -532,22 +582,101 @@ class ResearchOrchestrator:
             raise OrchestrationError("EXECUTING WorkOrder has no Attempt")
         result = self._stored_execution_result(attempt.attempt_id)
         if result is None:
-            result = await self.collaboration.execute(order, attempt)
+            try:
+                result = await self.collaboration.execute(order, attempt)
+            except AgentInvocationFailure as error:
+                if self._execution_was_cancelled(order.run_id, attempt.attempt_id):
+                    self._record_late_execution_result(order.run_id, attempt.attempt_id)
+                    return False
+                self._close_execution_failure(
+                    order, attempt,
+                    failure_category=error.failure_category.value,
+                    reason_code=error.result.reason_code or "AGENT_INVOCATION_FAILED",
+                )
+                self.collaboration.finalize_attempt_workspace(attempt.attempt_id)
+                return True
+            if self._execution_was_cancelled(order.run_id, attempt.attempt_id):
+                self._record_late_execution_result(order.run_id, attempt.attempt_id)
+                return False
             self._store_execution_result(attempt.attempt_id, result)
         if result.status != "execution_complete":
-            actor_type, actor_id = self._agent_actor(order.work_order_id)
-            self.transitions.transition_attempt(attempt.attempt_id, attempt.version, AttemptState.FAILED,
-                event_type="EXECUTION_FAILED", actor_type=actor_type, actor_id=actor_id, correlation_id=attempt.attempt_id)
-            refreshed = self._order(order.work_order_id)
-            self.transitions.transition_work_order(refreshed.work_order_id, refreshed.version, WorkOrderState.EXECUTION_FAILED,
-                event_type="EXECUTION_FAILED", actor_type="controller", actor_id="orchestrator", correlation_id=attempt.attempt_id)
+            self._close_execution_failure(
+                order, attempt,
+                failure_category="AGENT_REPORTED_FAILURE",
+                reason_code=result.status,
+            )
+            self.collaboration.finalize_attempt_workspace(attempt.attempt_id)
             return True
+        self.collaboration.finalize_attempt_workspace(attempt.attempt_id)
         self.transitions.transition_attempt(attempt.attempt_id, attempt.version, AttemptState.VERIFYING,
             event_type="VERIFICATION_STARTED", actor_type="controller", actor_id="orchestrator", correlation_id=attempt.attempt_id)
         refreshed = self._order(order.work_order_id)
         self.transitions.transition_work_order(refreshed.work_order_id, refreshed.version, WorkOrderState.VERIFYING,
             event_type="VERIFICATION_STARTED", actor_type="controller", actor_id="orchestrator", correlation_id=attempt.attempt_id)
         return True
+
+    def _execution_was_cancelled(self, run_id: str, attempt_id: str) -> bool:
+        with self.sessions() as session:
+            run = session.get(ResearchRunRecord, run_id)
+            attempt = session.get(AttemptRecord, attempt_id)
+            return bool(
+                run is not None
+                and attempt is not None
+                and (
+                    run.cancellation_requested
+                    or ResearchRunState(run.state) is ResearchRunState.CANCELLED
+                    or AttemptState(attempt.state) is AttemptState.CANCELLED
+                )
+            )
+
+    def _record_late_execution_result(self, run_id: str, attempt_id: str) -> None:
+        with self.sessions.begin() as session:
+            already_recorded = session.scalar(select(AuditEventRecord.event_id).where(
+                AuditEventRecord.run_id == run_id,
+                AuditEventRecord.entity_type == "attempt",
+                AuditEventRecord.entity_id == attempt_id,
+                AuditEventRecord.event_type == "EXECUTION_LATE_RESULT_IGNORED",
+            ).limit(1))
+            if already_recorded is None:
+                session.add(AuditEventRecord(
+                    event_id=f"evt_{uuid4().hex}",
+                    event_type="EXECUTION_LATE_RESULT_IGNORED",
+                    run_id=run_id, entity_type="attempt", entity_id=attempt_id,
+                    actor_type="controller", actor_id="orchestrator",
+                    timestamp=utc_now(), correlation_id=attempt_id,
+                    causation_id=None, metadata_json={"authority_reopened": False},
+                ))
+
+    def _close_execution_failure(
+        self,
+        order: WorkOrderRecord,
+        attempt: AttemptRecord,
+        *,
+        failure_category: str,
+        reason_code: str,
+    ) -> None:
+        metadata = {
+            "failure_category": failure_category,
+            "reason_code": reason_code[:128],
+        }
+        actor_type, actor_id = self._agent_actor(order.work_order_id)
+        current_attempt = self._attempt(attempt.attempt_id)
+        self.transitions.transition_attempt(
+            current_attempt.attempt_id, current_attempt.version, AttemptState.FAILED,
+            event_type="EXECUTION_FAILED", actor_type=actor_type, actor_id=actor_id,
+            correlation_id=current_attempt.attempt_id, metadata=metadata,
+        )
+        current_order = self._order(order.work_order_id)
+        self.transitions.transition_work_order(
+            current_order.work_order_id, current_order.version,
+            WorkOrderState.EXECUTION_FAILED, event_type="EXECUTION_FAILED",
+            actor_type="controller", actor_id="orchestrator",
+            correlation_id=current_attempt.attempt_id, metadata=metadata,
+        )
+        self._transition_run(
+            order.run_id, ResearchRunState.WAITING_EXTERNAL,
+            "AGENT_EXECUTION_WAITING", metadata,
+        )
 
     def _verify(self, order: WorkOrderRecord) -> bool:
         attempt = self._latest_attempt(order.work_order_id)
@@ -583,22 +712,33 @@ class ResearchOrchestrator:
             self._transition_run(run_id, ResearchRunState.COMPLETED, "RUN_COMPLETED")
             return True
         attempt = self._latest_attempt(order.work_order_id)
-        if not self._consume_cloud_call(run_id, self._run(run_id)):
+        if not self._consume_agent_turn(run_id, self._run(run_id)):
             return False
         try:
             result = await self.collaboration.review(CloudContextSelection(
                 run_id=run_id, work_order_id=order.work_order_id,
                 verification_id=self._latest_verification_id(order.work_order_id),
             ))
+        except AgentInvocationFailure as error:
+            self._transition_run(
+                run_id, ResearchRunState.WAITING_EXTERNAL, "AGENT_REVIEW_WAITING",
+                {
+                    "failure_category": error.failure_category.value,
+                    "reason_code": error.result.reason_code,
+                },
+            )
+            return False
         except (CloudProviderUnavailable, TimeoutError) as error:
-            self._transition_run(run_id, ResearchRunState.WAITING_EXTERNAL, "CLOUD_REVIEW_WAITING", {"error": type(error).__name__})
+            category = "INVOCATION_TIMEOUT" if isinstance(error, TimeoutError) else "TRANSPORT_FAILED"
+            self._transition_run(run_id, ResearchRunState.WAITING_EXTERNAL, "AGENT_REVIEW_WAITING", {"failure_category": category})
             return False
         except (CloudSchemaInvalid, CloudBudgetExceeded) as error:
-            self._transition_run(run_id, ResearchRunState.FAILED, "CLOUD_REVIEW_FAILED", {"error": type(error).__name__})
+            category = "OUTPUT_INVALID" if isinstance(error, CloudSchemaInvalid) else "AGENT_BUDGET_EXCEEDED"
+            self._transition_run(run_id, ResearchRunState.FAILED, "AGENT_REVIEW_FAILED", {"failure_category": category})
             return False
         if str(result.output.work_order_id) != order.work_order_id:
             self._transition_run(run_id, ResearchRunState.FAILED, "REVIEW_SCOPE_MISMATCH")
-            raise OrchestrationError("cloud review references a different WorkOrder")
+            raise OrchestrationError("Agent review references a different WorkOrder")
         self._persist_review(run_id, order, attempt, result)
         decision = result.output.decision
         current = self._order(order.work_order_id)
@@ -673,6 +813,15 @@ class ResearchOrchestrator:
             ))
 
     def _create_revision(self, order: WorkOrderRecord, reason: str, *, objective: str | None = None) -> bool:
+        # A REVISION_REQUIRED predecessor stays immutable and may be observed
+        # again after a wake/restart.  Its already-created child is the durable
+        # proof that the revision request was consumed.
+        with self.sessions() as session:
+            existing_child = session.scalar(select(WorkOrderRecord.work_order_id).where(
+                WorkOrderRecord.parent_work_order_id == order.work_order_id,
+            ).limit(1))
+        if existing_child is not None:
+            return False
         run = self._run(order.run_id)
         if run.iterations_used >= run.max_iterations:
             self._transition_run(order.run_id, ResearchRunState.FAILED, "MAX_ITERATIONS_EXCEEDED")
@@ -694,6 +843,7 @@ class ResearchOrchestrator:
         if existing is not None:
             if existing.parent_work_order_id != work_order_id or existing.objective != objective:
                 raise OrchestrationError("handoff revision identity conflict")
+            self._resume_handoff_revision(existing.run_id)
             return existing.work_order_id
         order = self._order(work_order_id)
         state = WorkOrderState(order.state)
@@ -715,7 +865,22 @@ class ResearchOrchestrator:
                 session, order.run_id, proposal, parent=work_order_id,
                 reason=reason, work_order_id=revision_work_order_id,
             )
+        self._resume_handoff_revision(order.run_id)
         return revision_work_order_id
+
+    def _resume_handoff_revision(self, run_id: str) -> None:
+        """Make a durable Handoff revision runnable, including crash replay."""
+        run = self._run(run_id)
+        state = ResearchRunState(run.state)
+        if state is ResearchRunState.WAITING_EXTERNAL:
+            self._transition_run(
+                run_id,
+                ResearchRunState.ACTIVE,
+                "HANDOFF_REVISION_RESUMED",
+            )
+            return
+        if state is not ResearchRunState.ACTIVE:
+            raise OrchestrationError("handoff revision cannot resume this Run state")
 
     async def cancel(self, run_id: str) -> RunSnapshot:
         run = self._run(run_id)
@@ -731,6 +896,7 @@ class ResearchOrchestrator:
             current_attempt = self._attempt(attempt.attempt_id)
             self.transitions.transition_attempt(current_attempt.attempt_id, current_attempt.version, AttemptState.CANCELLED,
                 event_type="ATTEMPT_CANCELLED", actor_type="controller", actor_id="orchestrator", correlation_id=current_attempt.attempt_id)
+            self.collaboration.finalize_attempt_workspace(attempt.attempt_id)
         for order in self._active_orders(run_id):
             self._cancel_order(order)
         latest = self._run(run_id)
@@ -835,14 +1001,14 @@ class ResearchOrchestrator:
             run.version += 1
             run.updated_at = utc_now()
 
-    def _consume_cloud_call(self, run_id: str, run: ResearchRunRecord) -> bool:
-        if run.cloud_calls_used >= run.max_cloud_calls:
-            self._transition_run(run_id, ResearchRunState.FAILED, "MAX_CLOUD_CALLS_EXCEEDED")
+    def _consume_agent_turn(self, run_id: str, run: ResearchRunRecord) -> bool:
+        if run.agent_turns_used >= run.max_agent_turns:
+            self._transition_run(run_id, ResearchRunState.FAILED, "MAX_AGENT_TURNS_EXCEEDED")
             return False
         with self.sessions.begin() as session:
             current = session.get(ResearchRunRecord, run_id)
             assert current is not None
-            current.cloud_calls_used += 1
+            current.agent_turns_used += 1
             current.version += 1
             current.updated_at = utc_now()
         return True
@@ -887,10 +1053,16 @@ class ResearchOrchestrator:
     def _next_order(self, run_id: str) -> WorkOrderRecord | None:
         with self.sessions() as session:
             query = select(WorkOrderRecord).where(WorkOrderRecord.run_id == run_id, WorkOrderRecord.state.not_in((WorkOrderState.ACCEPTED.value, WorkOrderState.FAILED.value, WorkOrderState.CANCELLED.value))).order_by(WorkOrderRecord.created_at)
-            result = session.scalars(query).first()
-            if result is not None:
+            for result in session.scalars(query):
+                if result.state == WorkOrderState.REVISION_REQUIRED.value:
+                    child = session.scalar(select(WorkOrderRecord.work_order_id).where(
+                        WorkOrderRecord.parent_work_order_id == result.work_order_id,
+                    ).limit(1))
+                    if child is not None:
+                        continue
                 session.expunge(result)
-            return result
+                return result
+            return None
 
     def _review_order(self, run_id: str) -> WorkOrderRecord | None:
         with self.sessions() as session:

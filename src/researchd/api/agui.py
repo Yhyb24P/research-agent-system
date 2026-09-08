@@ -118,7 +118,7 @@ class AGUIProjectionAdapter:
     _RUN_FAILURE_EVENTS = {
         "RUN_FAILED",
         "MAX_WALL_TIME_EXCEEDED",
-        "CLOUD_REVIEW_FAILED",
+        "AGENT_REVIEW_FAILED",
         "REVIEW_SCOPE_MISMATCH",
         "REVIEW_EVIDENCE_INCOMPLETE",
         "ABORT_RECOMMENDED",

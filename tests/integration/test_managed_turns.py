@@ -74,10 +74,9 @@ from tests.integration.test_storage import migrate
 ModelT = TypeVar("ModelT")
 
 
-def test_managed_http_read_bound_is_purpose_aware() -> None:
-    assert HttpxAgentClient._read_timeout_seconds({"purpose": "PLAN"}) == 310.0
-    assert HttpxAgentClient._read_timeout_seconds({"purpose": "REVIEW"}) == 310.0
-    assert HttpxAgentClient._read_timeout_seconds({"purpose": "EXECUTE"}) == 610.0
+def test_managed_http_read_bound_is_generic() -> None:
+    client = HttpxAgentClient(read_timeout_seconds=42.0)
+    assert client.read_timeout_seconds == 42.0
 
 
 def _get(session: Session, model: type[ModelT], primary_key: str) -> ModelT:

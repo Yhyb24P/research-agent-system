@@ -321,6 +321,13 @@ class WorkspaceDelegationService:
                 row.cleanup_state = CleanupState.FAILED.value
                 row.updated_at = datetime.now(UTC)
                 row.version += 1
+                delegation = session.get(DelegationRecord, row.delegation_id)
+                if delegation is not None:
+                    self._event(
+                        session, run_id=delegation.run_id,
+                        event_type="WORKSPACE_CLEANUP_FAILED", grant_id=grant_id,
+                        correlation_id=row.delegation_id, metadata={},
+                    )
             raise
         now = datetime.now(UTC)
         with self.sessions.begin() as session:
@@ -332,6 +339,58 @@ class WorkspaceDelegationService:
             row.version += 1
             transport_row.state = "CLOSED"
             transport_row.closed_at = now
+            delegation = session.get(DelegationRecord, row.delegation_id)
+            if delegation is not None:
+                self._event(
+                    session, run_id=delegation.run_id,
+                    event_type="WORKSPACE_CLEANED", grant_id=grant_id,
+                    correlation_id=row.delegation_id, metadata={},
+                )
+
+    def finalize_delegation(self, delegation_id: str) -> str | None:
+        """Reconcile evidence, terminate workspace authority, then clean resources.
+
+        Cleanup is deliberately best effort: its durable state and audit event
+        remain visible without reopening a terminal Delegation.
+        """
+        with self.sessions() as session:
+            row = session.scalar(select(WorkspaceGrantRecord).where(
+                WorkspaceGrantRecord.delegation_id == delegation_id,
+            ))
+            if row is None:
+                return None
+            delegation = session.get(DelegationRecord, delegation_id)
+            if delegation is None or delegation.state not in {"COMPLETED", "FAILED", "CANCELLED"}:
+                raise WorkspaceDelegationError(
+                    "workspace finalization requires a terminal Delegation"
+                )
+            grant_id = row.workspace_grant_id
+            state = WorkspaceGrantState(row.state)
+            cleanup_state = CleanupState(row.cleanup_state)
+        artifact_id: str | None = None
+        if state is WorkspaceGrantState.PENDING:
+            now = datetime.now(UTC)
+            with self.sessions.begin() as session:
+                pending = self._locked_grant(session, grant_id, WorkspaceGrantState.PENDING)
+                pending.state = WorkspaceGrantState.CANCELLED.value
+                pending.cleanup_state = CleanupState.CLEANED.value
+                pending.updated_at = now
+                pending.version += 1
+            return None
+        if state is WorkspaceGrantState.ACTIVE:
+            try:
+                artifact_id = self.reconcile(grant_id)
+            except Exception:
+                # Reconciliation already records FAILED/EXPIRED. Partial output
+                # is never promoted to verification evidence.
+                pass
+            cleanup_state = CleanupState.PENDING
+        if cleanup_state is not CleanupState.CLEANED:
+            try:
+                self.cleanup(grant_id)
+            except Exception:
+                pass
+        return artifact_id
 
     def renew(self, grant_id: str, *, additional_seconds: int) -> datetime:
         if additional_seconds <= 0 or additional_seconds > 86_400:
@@ -418,6 +477,27 @@ class WorkspaceDelegationService:
                     correlation_id=row.delegation_id,
                     metadata={"interrupted_state": interrupted_state, "cleanup_state": cleanup_state.value},
                 )
+            recovered.append(grant_id)
+        with self.sessions() as session:
+            cleanup_pending = tuple(session.scalars(
+                select(WorkspaceGrantRecord.workspace_grant_id).where(
+                    WorkspaceGrantRecord.state.in_((
+                        WorkspaceGrantState.COMPLETED.value,
+                        WorkspaceGrantState.EXPIRED.value,
+                        WorkspaceGrantState.CANCELLED.value,
+                        WorkspaceGrantState.FAILED.value,
+                    )),
+                    WorkspaceGrantRecord.cleanup_state.in_((
+                        CleanupState.PENDING.value,
+                        CleanupState.FAILED.value,
+                    )),
+                )
+            ))
+        for grant_id in cleanup_pending:
+            try:
+                self.cleanup(grant_id)
+            except Exception:
+                continue
             recovered.append(grant_id)
         return tuple(recovered)
 

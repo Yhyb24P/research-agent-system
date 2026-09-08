@@ -38,7 +38,9 @@ from researchd.daemon.contracts import (
     ExternalResearchTaskCreateRequest,
     ExternalRestorePlanRequest,
     ExternalRunCancelRequest,
+    ExternalRunResumeRequest,
     ExternalWorkOrderRejectRequest,
+    ExternalWorkOrderRetryRequest,
     ExternalWorkspaceCreateRequest,
     HumanDecisionCommand,
     HandoffDecisionCommand,
@@ -49,6 +51,8 @@ from researchd.daemon.contracts import (
     ResearchTaskCreateCommand,
     RestorePlanCommand,
     RunCancelCommand,
+    RunResumeCommand,
+    WorkOrderRetryCommand,
     WorkOrderRejectCommand,
     WorkspaceCreateCommand,
 )
@@ -181,6 +185,14 @@ class ControlCommandRouter:
                 run_id=parts[2],
             )
             return await self._execute(cancel_command)
+        if len(parts) == 4 and parts[:2] == ["api", "runs"] and parts[3] == "resume":
+            resume_request = ExternalRunResumeRequest.model_validate(payload)
+            return await self._execute(RunResumeCommand(
+                command_id=resume_request.command_id,
+                actor_type="HUMAN",
+                actor_id=self.human_actor_id,
+                run_id=parts[2],
+            ))
         if len(parts) == 4 and parts[:2] == ["api", "approvals"] and parts[3] == "approve":
             approval_request = ExternalApprovalApproveRequest.model_validate(payload)
             approval_command = ApprovalApproveCommand(
@@ -201,6 +213,15 @@ class ControlCommandRouter:
                 objective=decision_request.objective,
             )
             return await self._execute(decision_command)
+        if len(parts) == 4 and parts[:2] == ["api", "work-orders"] and parts[3] == "retry":
+            retry_request = ExternalWorkOrderRetryRequest.model_validate(payload)
+            return await self._execute(WorkOrderRetryCommand(
+                command_id=retry_request.command_id,
+                actor_type="HUMAN",
+                actor_id=self.human_actor_id,
+                work_order_id=parts[2],
+                target_agent_id=retry_request.target_agent_id,
+            ))
         if len(parts) == 4 and parts[:2] == ["api", "handoffs"] and parts[3] == "decision":
             handoff_request = ExternalHandoffDecisionRequest.model_validate(payload)
             handoff_command = HandoffDecisionCommand(

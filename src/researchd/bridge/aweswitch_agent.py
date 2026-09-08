@@ -32,6 +32,7 @@ from researchd.domain.review import ReviewDecision
 
 _ENV_REFERENCE = re.compile(r"^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$")
 _LOOPBACK = frozenset({"127.0.0.1", "localhost", "::1"})
+_SUPPORTED_PROVIDERS = frozenset({"codex", "qwen"})
 _MANAGED_PROMPT = (
     "Process the managed request context supplied on stdin and return only "
     "the JSON response required by that context."
@@ -103,7 +104,7 @@ def load_profile_metadata(
         wording = "unknown" if not matches else "ambiguous"
         raise AweswitchProfileError(f"{wording} aweswitch profile: {profile_name}")
     provider, profile = matches[0]
-    if provider != "qwen":
+    if provider not in _SUPPORTED_PROVIDERS:
         raise AweswitchProfileError(
             f"Developer Preview bridge does not yet support provider: {provider}"
         )
@@ -220,7 +221,7 @@ class AweswitchManagedBridge:
         self,
         *,
         aweswitch: Path,
-        qwen: Path,
+        agent_cli: Path,
         config_path: Path,
         profile: str,
         cwd: Path,
@@ -229,14 +230,14 @@ class AweswitchManagedBridge:
     ) -> None:
         if not aweswitch.is_absolute() or not aweswitch.is_file():
             raise AweswitchProfileError("aweswitch executable must be an absolute file")
-        if not qwen.is_absolute() or not qwen.is_file() or not os.access(qwen, os.X_OK):
-            raise AweswitchProfileError("qwen executable must be an absolute executable file")
+        if not agent_cli.is_absolute() or not agent_cli.is_file() or not os.access(agent_cli, os.X_OK):
+            raise AweswitchProfileError("Agent CLI must be an absolute executable file")
         if not cwd.is_absolute() or not cwd.is_dir():
             raise AweswitchProfileError("bridge cwd must be an absolute directory")
         if timeout_seconds <= 0 or max_output_bytes <= 0:
             raise AweswitchProfileError("bridge bounds must be positive")
         self.aweswitch = aweswitch
-        self.qwen = qwen
+        self.agent_cli = agent_cli
         self.config_path = config_path
         self.profile = profile
         self.cwd = cwd
@@ -257,19 +258,25 @@ class AweswitchManagedBridge:
         prompt = build_managed_prompt(turn).encode("utf-8")
         if len(prompt) > 512_000:
             raise AweswitchProfileError("managed turn prompt exceeds bridge input limit")
-        command = (
-            str(self.aweswitch),
-            self.profile,
-            "-p",
-            _MANAGED_PROMPT,
-            "-o",
-            "json",
-        )
         child_env = build_aweswitch_environment(self.config_path, self.profile)
-        # aweswitch launches the provider by its stable command name.  Admit
-        # only the directory containing the installer-resolved Qwen binary;
+        # aweswitch launches the provider by its stable command name. Admit
+        # only the directory containing the installer-resolved Agent CLI;
         # never inherit an arbitrary caller PATH into the managed process.
-        child_env["PATH"] = os.pathsep.join((str(self.qwen.parent), os.defpath))
+        child_env["PATH"] = os.pathsep.join((str(self.agent_cli.parent), os.defpath))
+        provider = str(health["provider"])
+        if provider == "codex":
+            return self._invoke_codex(prompt, child_env)
+        return self._invoke_qwen(prompt, child_env)
+
+    def _invoke_qwen(
+        self,
+        prompt: bytes,
+        child_env: Mapping[str, str],
+    ) -> ManagedAgentTurnResponse:
+        command = (
+            str(self.aweswitch), self.profile,
+            "-p", _MANAGED_PROMPT, "-o", "json",
+        )
         with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
             process = subprocess.Popen(
                 command,
@@ -295,6 +302,58 @@ class AweswitchManagedBridge:
             stdout.seek(0)
             payload = stdout.read(self.max_output_bytes)
         return self._decode(payload)
+
+    def _invoke_codex(
+        self,
+        prompt: bytes,
+        child_env: Mapping[str, str],
+    ) -> ManagedAgentTurnResponse:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            schema_path = root / "managed-response.schema.json"
+            result_path = root / "managed-response.json"
+            schema_path.write_text(
+                json.dumps(ManagedAgentTurnResponse.model_json_schema(), sort_keys=True),
+                encoding="utf-8",
+            )
+            command = (
+                str(self.aweswitch), self.profile, "--",
+                "exec", "--ephemeral", "--sandbox", "read-only",
+                "--output-schema", str(schema_path),
+                "--output-last-message", str(result_path),
+                "--json", "-",
+            )
+            with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
+                process = subprocess.Popen(
+                    command,
+                    cwd=self.cwd,
+                    env=child_env,
+                    stdin=subprocess.PIPE,
+                    stdout=stdout,
+                    stderr=stderr,
+                    start_new_session=(os.name == "posix"),
+                )
+                try:
+                    process.communicate(prompt, timeout=self.timeout_seconds)
+                except subprocess.TimeoutExpired as error:
+                    self._terminate(process)
+                    raise AweswitchProfileError("aweswitch turn timed out") from error
+                if process.returncode != 0:
+                    raise AweswitchProfileError(
+                        f"aweswitch turn failed with exit code {process.returncode}"
+                    )
+                if stdout.tell() > self.max_output_bytes:
+                    raise AweswitchProfileError("aweswitch output exceeds limit")
+            try:
+                size = result_path.stat().st_size
+                if size <= 0 or size > self.max_output_bytes:
+                    raise AweswitchProfileError("aweswitch result is empty or exceeds limit")
+                payload = result_path.read_bytes()
+                return ManagedAgentTurnResponse.model_validate_json(payload)
+            except OSError as error:
+                raise AweswitchProfileError("aweswitch result is unavailable") from error
+            except ValidationError as error:
+                raise AweswitchProfileError("aweswitch returned invalid managed JSON") from error
 
     @staticmethod
     def _terminate(process: subprocess.Popen[bytes]) -> None:
@@ -396,7 +455,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="research-aweswitch-agent")
     parser.add_argument("--profile", required=True)
     parser.add_argument("--aweswitch", type=Path, required=True)
-    parser.add_argument("--qwen", type=Path, required=True)
+    parser.add_argument("--agent-cli", type=Path, required=True)
     parser.add_argument("--config", type=Path, default=None)
     parser.add_argument("--cwd", type=Path, required=True)
     parser.add_argument("--host", default="127.0.0.1")
@@ -408,7 +467,7 @@ def main(argv: list[str] | None = None) -> int:
     config = args.config or default_aweswitch_config()
     bridge = AweswitchManagedBridge(
         aweswitch=args.aweswitch.resolve(strict=True),
-        qwen=args.qwen.absolute(),
+        agent_cli=args.agent_cli.absolute(),
         config_path=config.resolve(strict=True),
         profile=args.profile,
         cwd=args.cwd.resolve(strict=True),

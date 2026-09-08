@@ -90,7 +90,9 @@ def parse_line(line: str) -> ParsedCommand:
     if head == "runtime":
         return _parse_simple_subcommand("runtime", tokens[1:], {"list": (0, 1), "stop": 1})
     if head == "run":
-        return _parse_simple_subcommand(head, tokens[1:], {"list": 0})
+        return _parse_simple_subcommand(head, tokens[1:], {"list": 0, "resume": 1})
+    if head == "work-order":
+        return _parse_simple_subcommand(head, tokens[1:], {"retry": (1, 2)})
     if head == "task":
         return _parse_task(tokens[1:])
     if head == "events":
@@ -267,6 +269,19 @@ def resolve_agent_reference(
         for item in agents
         if str(item.get("display_name", "")).strip().lower() == normalized
     ]
+    if not matches:
+        matches = [
+            item
+            for item in agents
+            if any(
+                normalized in {
+                    str(runtime.get("model_provider", "")).strip().lower(),
+                    str(runtime.get("model_name", "")).strip().lower(),
+                }
+                for runtime in item.get("runtimes", [])
+                if isinstance(runtime, dict)
+            )
+        ]
     if len(matches) == 1:
         return matches[0]
     if len(matches) > 1:
@@ -409,6 +424,18 @@ def _execute(
                 f"work_orders={len(item['work_orders'])}  "
                 f"pending_approvals={len(item['pending_approval_ids'])}"
             )
+    elif command.name == "run resume":
+        envelope = client.post_command(f"/api/runs/{command.args[0]}/resume", {})
+        print_fn(f"{envelope['status']} {envelope['command_id']}")
+    elif command.name == "work-order retry":
+        retry_payload: dict[str, Any] = {}
+        if len(command.args) == 2:
+            agent = resolve_agent_reference(client.get("/api/agents"), command.args[1])
+            retry_payload["target_agent_id"] = agent["agent_id"]
+        envelope = client.post_command(
+            f"/api/work-orders/{command.args[0]}/retry", retry_payload,
+        )
+        print_fn(f"{envelope['status']} {envelope['command_id']}")
     elif command.name == "task create":
         if state.current_workspace is None:
             if len(command.args) < 2:

@@ -109,12 +109,19 @@ class _WakeRecordingOrchestrator:
 class _ApprovalControl:
     """Answers the dispatcher's approve_request with the resumed run reference."""
 
-    def __init__(self) -> None:
+    def __init__(self, sessions: sessionmaker[Session]) -> None:
+        self.sessions = sessions
         self.granted_by: list[str] = []
 
     async def approve_request(self, approval_id: str, *, granted_by: str) -> dict[str, object]:
         assert approval_id == "approval_product"
         self.granted_by.append(granted_by)
+        with self.sessions.begin() as session:
+            run = session.get(ResearchRunRecord, "run_product")
+            assert run is not None
+            run.state = ResearchRunState.ACTIVE.value
+            run.version += 1
+            run.updated_at = datetime.now(UTC)
         return {"work_order_id": "wo_product", "run_id": "run_product"}
 
 
@@ -123,9 +130,21 @@ def test_approval_success_wakes_the_orchestration_driver(tmp_path: Path) -> None
     engine = create_sqlite_engine(tmp_path / "approval_wake.db")
     Base.metadata.create_all(engine)
     sessions = session_factory(engine)
+    now = datetime.now(UTC)
+    with sessions.begin() as session:
+        session.add(WorkspaceRecord(
+            workspace_id="ws_product", name="Approval wake", version=1,
+            created_at=now, updated_at=now,
+        ))
+    with sessions.begin() as session:
+        session.add(ResearchRunRecord(
+            run_id="run_product", workspace_id="ws_product",
+            objective="resume after approval", state=ResearchRunState.WAITING_HUMAN.value,
+            version=1, created_at=now, updated_at=now,
+        ))
     orchestrator = _WakeRecordingOrchestrator()
     driver = OrchestrationDriver(cast(OrchestrationTarget, orchestrator), sessions)
-    control = _ApprovalControl()
+    control = _ApprovalControl(sessions)
     dispatcher = DaemonCommandDispatcher(
         cast(RuntimeSupervisor, object()),
         cast(ControlMutationAuthority, control),

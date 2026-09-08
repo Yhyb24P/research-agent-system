@@ -21,7 +21,7 @@ def test_profile_discovery_returns_only_non_secret_metadata(tmp_path: Path) -> N
     profiles = discover_aweswitch_profiles(config)
 
     assert profiles == [
-        {"profile": "cx", "provider": "codex", "managed_bridge_supported": False},
+        {"profile": "cx", "provider": "codex", "managed_bridge_supported": True},
         {"profile": "qw", "provider": "qwen", "managed_bridge_supported": True},
     ]
     assert "secret-value" not in repr(profiles)
@@ -44,7 +44,8 @@ def test_generated_definition_uses_real_paths_and_profile_reference_only(
         profile="qw",
         project_root=project.resolve(),
         aweswitch=aweswitch.resolve(),
-        qwen=Path("/bin/true"),
+        agent_cli=Path("/bin/true"),
+        provider="qwen",
         aweswitch_config=config.resolve(),
     )
 
@@ -55,7 +56,7 @@ def test_generated_definition_uses_real_paths_and_profile_reference_only(
     assert payload["profile"]["labels"]["profile_ref"] == "aweswitch:qw"
     assert payload["runtimes"][0]["framework"] == "research-agent-json-v1"
     assert str(aweswitch.resolve()) in encoded
-    assert '"--qwen", "/bin/true"' in encoded
+    assert '"--agent-cli", "/bin/true"' in encoded
     assert '"--timeout", "600"' in encoded
     assert str(project.resolve()) in encoded
     assert "TOKEN" not in encoded

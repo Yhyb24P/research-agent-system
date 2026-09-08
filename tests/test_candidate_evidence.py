@@ -43,7 +43,8 @@ def _sha256(path: Path) -> str:
 
 
 def _inputs(tmp_path: Path, *, e2e_result: str = "PASS", manifest_commit: str = COMMIT_A,
-            manifest_tags: list[str] | None = None) -> dict[str, str]:
+            manifest_tags: list[str] | None = None,
+            failure_e2e_result: str = "PASS") -> dict[str, str]:
     wheel = tmp_path / "wheel.whl"
     wheel.write_bytes(b"wheel-bytes")
     sdist = tmp_path / "sdist.tar.gz"
@@ -57,17 +58,21 @@ def _inputs(tmp_path: Path, *, e2e_result: str = "PASS", manifest_commit: str = 
     }))
     e2e = tmp_path / "e2e.json"
     e2e.write_text(json.dumps({"result": e2e_result}))
+    failure_e2e = tmp_path / "failure-e2e.json"
+    failure_e2e.write_text(json.dumps({"result": failure_e2e_result}))
     return {"wheel": str(wheel), "sdist": str(sdist), "sbom": str(sbom),
-            "manifest": str(manifest), "e2e": str(e2e)}
+            "manifest": str(manifest), "e2e": str(e2e),
+            "failure_e2e": str(failure_e2e)}
 
 
 def _run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, mode: str,
          *, candidate_tag: str | None = TAG, candidate_commit: str = COMMIT_A,
          checked_out_commit: str = COMMIT_A, e2e_result: str = "PASS",
          manifest_commit: str = COMMIT_A, manifest_tags: list[str] | None = None,
-         output: str | None = None) -> int:
+         output: str | None = None, failure_e2e_result: str = "PASS") -> int:
     files = _inputs(tmp_path, e2e_result=e2e_result, manifest_commit=manifest_commit,
-                    manifest_tags=manifest_tags)
+                    manifest_tags=manifest_tags,
+                    failure_e2e_result=failure_e2e_result)
     argv = [
         "candidate_evidence.py", "--mode", mode,
         "--candidate-commit", candidate_commit,
@@ -76,6 +81,7 @@ def _run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, mode: str,
         "--wheel", files["wheel"], "--sdist", files["sdist"],
         "--manifest", files["manifest"], "--sbom", files["sbom"],
         "--e2e", files["e2e"],
+        "--failure-e2e", files["failure_e2e"],
         "--workflow-run-identity", "local/unit-test",
         "--output", output or str(tmp_path / "evidence.json"),
     ]
@@ -101,6 +107,14 @@ def test_exact_missing_tag_fails_closed(monkeypatch: pytest.MonkeyPatch, tmp_pat
 def test_exact_non_pass_e2e_fails_closed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     with pytest.raises(SystemExit, match="did not report PASS"):
         _run(monkeypatch, tmp_path, "exact", e2e_result="FAIL")
+    assert not (tmp_path / "evidence.json").exists()
+
+
+def test_exact_non_pass_failure_e2e_fails_closed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    with pytest.raises(SystemExit, match="failure-recovery E2E did not report PASS"):
+        _run(monkeypatch, tmp_path, "exact", failure_e2e_result="FAIL")
     assert not (tmp_path / "evidence.json").exists()
 
 
@@ -135,6 +149,11 @@ def test_preflight_correct_inputs_yield_hash_bound_summary(
     assert summary["checked_out_commit"] == COMMIT_A
     assert summary["project_version"] == "1.0.0rc81"
     assert summary["product_e2e_result"] == "PASS"
+    assert summary["product_e2e_sha256"] == _sha256(Path(files["e2e"]))
+    assert summary["product_failure_e2e_result"] == "PASS"
+    assert summary["product_failure_e2e_sha256"] == _sha256(
+        Path(files["failure_e2e"])
+    )
     assert summary["qualification_claim"] == "PREFLIGHT_ONLY"
     assert summary["workflow_run_identity"] == "local/unit-test"
     assert summary["wheel_sha256"] == _sha256(Path(files["wheel"]))

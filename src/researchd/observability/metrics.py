@@ -19,10 +19,10 @@ from researchd.storage.models import (
 
 @dataclass(frozen=True)
 class MetricsSnapshot:
-    cloud_calls: int
-    cloud_tokens: int
-    cloud_cost_usd: Decimal
-    cloud_statuses: dict[str, int]
+    agent_turns: int
+    agent_tokens: int
+    agent_cost_usd: Decimal
+    agent_turn_statuses: dict[str, int]
     job_states: dict[str, int]
     policy_outcomes: dict[str, int]
     approval_statuses: dict[str, int]
@@ -39,10 +39,10 @@ class MetricsSnapshot:
 
     def as_dict(self) -> dict[str, Any]:
         return {
-            "cloud_calls": self.cloud_calls,
-            "cloud_tokens": self.cloud_tokens,
-            "cloud_cost_usd": format(self.cloud_cost_usd, "f"),
-            "cloud_statuses": dict(self.cloud_statuses),
+            "agent_turns": self.agent_turns,
+            "agent_tokens": self.agent_tokens,
+            "agent_cost_usd": format(self.agent_cost_usd, "f"),
+            "agent_turn_statuses": dict(self.agent_turn_statuses),
             "job_states": dict(self.job_states),
             "policy_outcomes": dict(self.policy_outcomes),
             "approval_statuses": dict(self.approval_statuses),
@@ -59,12 +59,12 @@ class MetricsSnapshot:
 
     def prometheus(self) -> str:
         lines = [
-            f"research_cloud_calls_total {self.cloud_calls}",
-            f"research_cloud_tokens_total {self.cloud_tokens}",
-            f"research_cloud_cost_usd_total {self.cloud_cost_usd}",
+            f"research_agent_turns_total {self.agent_turns}",
+            f"research_agent_tokens_total {self.agent_tokens}",
+            f"research_agent_cost_usd_total {self.agent_cost_usd}",
         ]
         for name, values in (
-            ("cloud_status", self.cloud_statuses), ("job_state", self.job_states),
+            ("agent_turn_status", self.agent_turn_statuses), ("job_state", self.job_states),
             ("policy_outcome", self.policy_outcomes), ("approval_status", self.approval_statuses),
             ("verifier_outcome", self.verifier_outcomes), ("review_decision", self.review_decisions),
         ):
@@ -121,7 +121,7 @@ def collect_metrics(sessions: sessionmaker[Session], *, run_id: str | None = Non
         invocations = session.scalars(invocation_query).all()
         agents = session.scalars(select(AgentRecord).order_by(AgentRecord.agent_id)).all()
         runtimes = session.scalars(select(AgentRuntimeRecord).order_by(AgentRuntimeRecord.runtime_id)).all()
-        cloud_statuses = Counter(item.status for item in interactions)
+        agent_turn_statuses = Counter(item.status for item in interactions)
         active_by_agent = Counter(item.assigned_agent_id for item in delegations if item.state in {"ASSIGNED", "RUNNING"} and item.assigned_agent_id is not None)
         utilization = {agent.agent_id: round(active_by_agent.get(agent.agent_id, 0) / agent.max_parallel_delegations, 6) for agent in agents}
         reference = datetime.now(UTC)
@@ -163,10 +163,10 @@ def collect_metrics(sessions: sessionmaker[Session], *, run_id: str | None = Non
             ]),
         }
         return MetricsSnapshot(
-            cloud_calls=len(interactions),
-            cloud_tokens=sum(item.total_tokens for item in interactions),
-            cloud_cost_usd=sum((Decimal(item.cost_usd) for item in interactions), Decimal("0")),
-            cloud_statuses=dict(cloud_statuses),
+            agent_turns=len(interactions),
+            agent_tokens=sum(item.total_tokens for item in interactions),
+            agent_cost_usd=sum((Decimal(item.cost_usd) for item in interactions), Decimal("0")),
+            agent_turn_statuses=dict(agent_turn_statuses),
             job_states=dict(Counter(item.state for item in jobs)),
             policy_outcomes=dict(Counter(item.outcome for item in policies)),
             approval_statuses=dict(Counter(item.status for item in approvals)),

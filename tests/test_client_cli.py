@@ -121,3 +121,39 @@ def test_setup_and_doctor_do_not_require_an_existing_config(
     assert main(["doctor"]) == 0
     assert calls[0][0] == "setup"
     assert calls[1] == ("doctor", None)
+
+
+def test_daemon_subcommand_dispatches_restart_stop_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    def fake_restart(config: Path) -> int:
+        calls.append("restart")
+        return 0
+
+    def fake_stop(config: Path) -> int:
+        calls.append("stop")
+        return 0
+
+    def fake_status(config: Path) -> int:
+        calls.append("status")
+        return 0
+
+    interactive: list[Path] = []
+
+    def fake_interactive(config: Path) -> int:
+        interactive.append(config)
+        return 0
+
+    monkeypatch.setattr("researchd.client.cli.restart_daemon", fake_restart)
+    monkeypatch.setattr("researchd.client.cli.stop_daemon", fake_stop)
+    monkeypatch.setattr("researchd.client.cli.run_status", fake_status)
+    monkeypatch.setattr("researchd.client.cli.interactive_entry", fake_interactive)
+
+    assert main(["--config", "cfg.json", "daemon", "restart"]) == 0
+    assert main(["--config", "cfg.json", "daemon", "stop"]) == 0
+    assert main(["--config", "cfg.json", "daemon", "status"]) == 0
+    assert calls == ["restart", "stop", "status"]
+    # A restart reaches a fresh READY daemon; it never drops into the shell.
+    assert interactive == []

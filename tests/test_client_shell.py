@@ -125,6 +125,12 @@ def test_parse_agent_subcommands() -> None:
 
 def test_parse_run_list() -> None:
     assert parse_line("run list") == ParsedCommand("run list", (), {})
+    assert parse_line("run resume run_one") == ParsedCommand(
+        "run resume", ("run_one",), {},
+    )
+    assert parse_line("work-order retry wo_one agent_backup") == ParsedCommand(
+        "work-order retry", ("wo_one", "agent_backup"), {},
+    )
     with pytest.raises(ShellParseError):
         parse_line("run list extra")
     with pytest.raises(ShellParseError):
@@ -315,6 +321,20 @@ def test_shell_task_cancel_targets_the_run_route() -> None:
     path, payload = client.posts[-1]
     assert path == "/api/runs/run_one/cancel"
     assert payload == {}
+
+
+def test_shell_exposes_explicit_agent_failure_recovery() -> None:
+    client = _FakeClient()
+    _drive([
+        "run resume run_one",
+        "work-order retry wo_one agent_alpha",
+        "quit",
+    ], client)
+    assert client.posts[-2] == ("/api/runs/run_one/resume", {})
+    assert client.posts[-1] == (
+        "/api/work-orders/wo_one/retry",
+        {"target_agent_id": "agent_alpha"},
+    )
 
 
 def test_shell_msg_generates_a_message_identity() -> None:

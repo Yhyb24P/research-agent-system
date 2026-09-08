@@ -160,6 +160,10 @@ class Fixture:
             order.state = WorkOrderState.EXECUTION_FAILED.value
             order.version += 1
             order.updated_at = now
+            run = _get(session, ResearchRunRecord, order.run_id)
+            run.state = ResearchRunState.WAITING_EXTERNAL.value
+            run.version += 1
+            run.updated_at = now
 
     def controller(self) -> ResearchOrchestrator:
         from researchd.collaboration.gateway import CollaborationGateway
@@ -315,6 +319,7 @@ def test_continue_accept_replay_is_idempotent_and_conflicting_target_is_rejected
 def test_revise_accept_creates_a_parented_work_order(fixture: Fixture) -> None:
     with fixture.sessions.begin() as session:
         _get(session, WorkOrderRecord, "wo_exec").state = WorkOrderState.VERIFICATION_FAILED.value
+        _get(session, ResearchRunRecord, "run_h").state = ResearchRunState.WAITING_EXTERNAL.value
     proposal_id = fixture.broker.submit_handoff(
         InvocationId("inv_exec"),
         fixture.action(
@@ -338,6 +343,39 @@ def test_revise_accept_creates_a_parented_work_order(fixture: Fixture) -> None:
         assert revision.parent_work_order_id == "wo_exec"
         assert revision.objective == "retry with a different strategy"
         assert _get(session, WorkOrderRecord, "wo_exec").state == WorkOrderState.REVISION_REQUIRED.value
+        assert _get(session, ResearchRunRecord, "run_h").state == ResearchRunState.ACTIVE.value
+
+
+def test_handoff_revision_replay_resumes_existing_child(fixture: Fixture) -> None:
+    """A crash after child creation cannot strand its Run before the wake."""
+    controller = fixture.controller()
+    with fixture.sessions.begin() as session:
+        _get(session, WorkOrderRecord, "wo_exec").state = WorkOrderState.VERIFICATION_FAILED.value
+        _get(session, ResearchRunRecord, "run_h").state = ResearchRunState.WAITING_EXTERNAL.value
+
+    revision_id = controller.create_handoff_revision(
+        "wo_exec",
+        objective="recover the revision",
+        reason="handoff crash recovery",
+        revision_work_order_id="wo_handoff_replay",
+    )
+    with fixture.sessions.begin() as session:
+        # Crash injection: the child commit survived while the subsequent Run
+        # transition did not.  Replaying the controller command must heal it.
+        _get(session, ResearchRunRecord, "run_h").state = ResearchRunState.WAITING_EXTERNAL.value
+
+    assert controller.create_handoff_revision(
+        "wo_exec",
+        objective="recover the revision",
+        reason="handoff crash recovery",
+        revision_work_order_id="wo_handoff_replay",
+    ) == revision_id
+    with fixture.sessions() as session:
+        assert _get(session, ResearchRunRecord, "run_h").state == ResearchRunState.ACTIVE.value
+        children = session.scalars(select(WorkOrderRecord).where(
+            WorkOrderRecord.parent_work_order_id == "wo_exec",
+        )).all()
+        assert [row.work_order_id for row in children] == ["wo_handoff_replay"]
 
 
 def test_revise_cannot_select_an_execution_target(fixture: Fixture) -> None:
@@ -450,3 +488,63 @@ def test_retry_crash_leaves_no_executing_order_without_attempt(fixture: Fixture)
         assert len(attempts) == 1
         assert _get(session, WorkOrderRecord, "wo_exec").state == WorkOrderState.EXECUTING.value
         assert resolved.resolution_entity_id == attempts[0].attempt_id
+
+
+def test_accept_effect_cannot_be_concurrently_rejected_before_decision_commit(
+    fixture: Fixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    proposal_id = fixture.proposal()
+    fixture.terminalize_source()
+    service = HandoffResolutionService(fixture.sessions, fixture.controller())
+    decide = service._decide
+
+    def crash_before_decision(*args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError("simulated crash before Handoff decision commit")
+
+    monkeypatch.setattr(service, "_decide", crash_before_decision)
+    with pytest.raises(RuntimeError, match="decision commit"):
+        service.accept(
+            proposal_id,
+            actor_type="HUMAN",
+            actor_id="operator",
+            reason="accept and continue",
+            target_agent_id="agent_b",
+        )
+
+    with fixture.sessions() as session:
+        proposal = _get(session, HandoffProposalRecord, proposal_id)
+        assert proposal.status == HandoffStatus.PROPOSED.value
+        assert proposal.decision_actor_type == "HUMAN"
+        assert proposal.resolution_entity_type == "agent"
+        assert proposal.resolution_entity_id == "agent_b"
+        assert session.scalar(select(AuditEventRecord.event_type).where(
+            AuditEventRecord.event_type == "HANDOFF_ACCEPT_RESERVED",
+            AuditEventRecord.entity_id == proposal_id,
+        )) == "HANDOFF_ACCEPT_RESERVED"
+        assert len(session.scalars(select(AttemptRecord).where(
+            AttemptRecord.attempt_id.like("att_handoff_%"),
+        )).all()) == 1
+
+    monkeypatch.setattr(service, "_decide", decide)
+    with pytest.raises(ValueError, match="acceptance is already in progress"):
+        service.reject(
+            proposal_id,
+            actor_type="HUMAN",
+            actor_id="operator",
+            reason="reject after effect",
+        )
+
+    resolved = service.accept(
+        proposal_id,
+        actor_type="HUMAN",
+        actor_id="operator",
+        reason="resume accepted decision",
+        target_agent_id="agent_b",
+    )
+    assert resolved.status is HandoffStatus.ACCEPTED
+    assert resolved.resolution_entity_type == "attempt"
+    with fixture.sessions() as session:
+        assert len(session.scalars(select(AttemptRecord).where(
+            AttemptRecord.attempt_id.like("att_handoff_%"),
+        )).all()) == 1

@@ -139,6 +139,22 @@ jobs:
             echo "::error::installed product E2E failed; diagnostics are preserved in candidate-evidence"
             exit "${e2e_status}"
           fi
+      - name: Run installed Agent failure-recovery E2E
+        run: |
+          set -euo pipefail
+          FAILURE_E2E_ROOT="${CLEAN_ROOT}/failure-e2e-state"
+          set +e
+          env -u PYTHONPATH "${CLEAN_ROOT}/venv/bin/python" tests/product_e2e/run_failure_e2e.py \
+            --root "${FAILURE_E2E_ROOT}" --commit "${CHECKED_OUT_COMMIT}" \
+            > >(tee "${RUNNER_TEMP}/candidate-evidence/product-failure-e2e.json") \
+            2> >(tee "${RUNNER_TEMP}/candidate-evidence/product-failure-e2e.stderr.log" >&2)
+          failure_e2e_status=$?
+          set -e
+          printf '%s\n' "${failure_e2e_status}" > "${RUNNER_TEMP}/candidate-evidence/product-failure-e2e.exit-code"
+          if [ "${failure_e2e_status}" -ne 0 ]; then
+            echo "::error::installed Agent failure-recovery E2E failed; diagnostics are preserved in candidate-evidence"
+            exit "${failure_e2e_status}"
+          fi
       - name: Generate manifest, SBOM and evidence summary
         run: |
           set -euo pipefail
@@ -151,6 +167,7 @@ jobs:
             --manifest "${RUNNER_TEMP}/candidate-evidence/release-manifest.json" \
             --sbom "${RUNNER_TEMP}/candidate-evidence/sbom.json" \
             --e2e "${RUNNER_TEMP}/candidate-evidence/product-e2e.json" \
+            --failure-e2e "${RUNNER_TEMP}/candidate-evidence/product-failure-e2e.json" \
             --workflow-run-identity "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
             --output "${RUNNER_TEMP}/candidate-evidence/candidate-evidence.json"
           sha256sum "${RUNNER_TEMP}/candidate-evidence/"*.json >> "${RUNNER_TEMP}/candidate-evidence/artifact-sha256.txt"
