@@ -22,3 +22,6 @@ publish = false
 async-trait = "0.1"
 rusqlite = { version = "0.32", features = ["bundled"] }
 tokio = { version = "1", features = ["macros", "rt"] }
+sha2 = "0.10"
+ignore = "0.4"
+libc = "0.2"
