@@ -2,85 +2,102 @@
 
 ## Positioning
 
-`research-agent-system` is an Agent Collaboration Plane plus Trusted Control
-Plane. Agent is the integration identity; runtime implementation details and
-protocols are subordinate to `AgentRuntime`.
+`research-agent-system` is a heterogeneous Agent coding/work team.
 
-## Required invariants
+The one job: connect Agents with different strengths to one project. High-intelligence
+Agents do planning, hard reasoning, architecture, synthesis and review. Local or cheap
+Agents and deterministic workers do repetitive, long-running, file-heavy, data-heavy and
+tool-heavy work. Results and artifacts flow back automatically to the Agent that
+continues the reasoning, with no manual copy/paste between Agents.
 
-- Planning, execution, and review enter `ResearchOrchestrator` through
-  `CollaborationGateway`, `Delegation`, and `AgentInvocation`.
-- Agent skills are descriptive and never grant trusted `Capability` values.
-- Verification, policy, orchestration, and job management remain trusted
-  system actors and cannot be registered as ordinary Agents.
-- A2A and MCP remain adapters; protocol tasks are not authoritative workflow
-  records.
-- Workspace grants and AG-UI events remain bounded transport/projection
-  records; LangGraph may implement an Agent runtime but never orchestration.
-- Preserve append-only audit history, immutable artifacts, explicit state
-  transitions, and fail-closed security behavior.
-- Keep repository usage documentation in `README.md` and `README.zh-CN.md`.
-  Tracked documentation under `docs/` is limited to `docs/qualification/`;
-  other documentation trees require an explicit governance change.
+Communication, scheduling, recovery and safety boundaries are supporting mechanics that
+let several Agents finish work. They are not the product.
 
-## Commands
+The native Rust Coding Agent is the execution engine for model-backed Agents. External
+Agents (Codex/Claude-style CLIs) plug in through adapters.
+
+## Direction
+
+The previous "Trusted Control Plane / qualification / verification" product direction is
+retired. Do not extend it. The active work is the Rust v2 strangler rewrite on branch
+`v2/rust-agent-team` (baseline `8cf27dc2a9e03ffbc1fbd091a576e0fb0f16bb93`).
+
+- The Python `researchd` control-plane implementation is a frozen reference, not the
+  active roadmap. Do not add features to it.
+- The active roadmap is `R0 -> R8`, documented in `docs/v2/ROADMAP.md`.
+- `docs/qualification/` is the frozen legacy qualification framework. Historical only.
+
+## Do not recreate as core
+
+Do not build these back into the product:
+
+- `PolicyEngine` / `ApprovalService`
+- a mandatory independent Verifier
+- IQ/DQ/RQ qualification
+- backup/DR as a product subsystem
+- the `WorkOrder + Attempt + Delegation + Invocation` quartet
+- trust-zone / capability / audit systems as product identity
+
+Narrow runtime mechanics that genuinely help an Agent finish work may survive, but they
+are not the product and not the roadmap.
+
+## Engineering guards that remain
+
+Path containment, command timeout, process-group termination, output truncation, atomic
+writes, file hashes, Git checkpoints and crash recovery stay. They make a Coding Agent
+reliable. They are runtime mechanics, not a control-plane product.
+
+## Rust target
+
+A Cargo workspace of small crates:
+
+```text
+Cargo.toml
+crates/
+  agent-code-core/       # session state machine, Agent loop, events, recovery
+  agent-code-model/      # async model client (OpenAI-compatible HTTP first)
+  agent-code-tools/      # the five atomic tools
+  agent-code-workspace/  # project rules, Git worktree/checkpoint, path handling, diff/rollback
+  agent-code-context/    # context budget, truncation, compaction, repository map
+  agent-code-storage/    # small SQLite journal
+  agent-code-team/       # Agent registry, lead, task board, scheduling, result flow
+  agent-code-tui/        # ratatui/crossterm
+  agent-code-cli/        # clap
+```
+
+Five atomic tools: `view_file`, `edit_file`, `write_file`, `search_dir`,
+`execute_command`. `execute_command` uses structured `program + argv + cwd + timeout +
+env` by default. `edit_file` uses exact unique matching, an expected file hash, and only
+limited line-ending/trailing-whitespace normalization.
+
+Required Rust CI:
 
 ```bash
-uv sync --frozen --extra a2a --extra langgraph-agent --extra qualification
-uv run alembic upgrade head
-uv run researchd --config researchd.json init
-uv run researchd --config researchd.json serve
+cargo fmt --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+```
+
+## Legacy Python (transition)
+
+The Python package under `src/researchd/` (daemons `researchd`, `researchctl`,
+`research`) is the frozen reference implementation. It still builds and tests, but it is
+not the active direction. Do not extend it. R8 deletes the unreachable control-plane
+modules after Rust E2E parity.
+
+Legacy commands (still work, not the roadmap):
+
+```bash
+uv sync --frozen
 uv run pytest -q
 uv run mypy src tests
-uv run python scripts/qualification_validate.py \
-  --plan examples/qualification_plan.example.json \
-  --evidence examples/qualification_evidence.example.json \
-  --acceptance examples/qualification_acceptance.example.json
 git diff --check
 ```
 
-Use `researchd init` only for a fresh database and `researchd serve` for the
-readiness-gated loopback daemon. Normal startup never upgrades a schema. Use
-`researchctl --database <path>` for the local read-only inspection surface.
-The JSON daemon configuration rejects unknown fields and requires absolute
-paths, loopback binding, repository IDs, and fixed argv arrays for job types.
-Use `researchd --config <path> validate` or `inspect` before initialization;
-both are read-only and inspect never echoes fixed command arguments.
-
 ## Structure
 
-- `src/researchd/collaboration/`: Agent identity, selection, delegation,
-  invocation, adapters, and messages.
-- `src/researchd/orchestrator/`: trusted bounded workflow controller.
-- `src/researchd/context/`: target-Agent context selection and egress.
-- `src/researchd/storage/`: authoritative schema, migrations, and records.
-- `tests/`: unit, integration, security, migration, and qualification gates.
-
-## Current state
-
-PX00–PX09 are implemented and closed by their recorded exact-head CI evidence.
-The daily `research` client, managed planner/coder/reviewer flow, collaboration
-and handoff projections, detached consoles, governed A2A attachment, and the
-bounded external CLI bridge are present. PX09 Browser Control Tower, including
-the loopback browser launcher, collaboration/Agent-console projections and
-event-offset stream, closed at `40d83ec` after Qwen's independent matrix and
-exact-head CI `33351341328`. Keep future work on a new explicitly scoped plan;
-do not reopen a closed productization item with compatibility patches.
-
-Before any release claim, require a green CI run tied to the exact commit and an
-immutable RC tag; keep unverified operational qualification explicitly pending.
-
-Product-hardening PH01–PH05 is closed at `83361ba` by exact-head CI
-`33359344081`: daemon-owned runnable-run recovery, approval-ID-only HUMAN
-approval, daily bootstrap/workspace controls, strong daemon identity, and
-packaged explicit migrations. Do not reintroduce grant-bearing public approval
-routes, arbitrary runtime launch input, or legacy command compatibility.
-
-The active `preview/developer-ux` track is a Developer Preview derived from
-the immutable rc.82 source candidate. It adds trusted global setup, managed
-aweswitch-backed planner/coder/reviewer onboarding, an interactive TUI,
-continuous detached projections, schema `0026` Run-scoped Artifact ingress,
-and an immutable-manifest installer. It is not a Production Go claim. Keep
-raw host paths, expanded profile secrets, and file bytes out of Agent identity,
-audit metadata, and command authority; downstream Agents receive only
-policy-admitted Artifact context.
+- `crates/`: the Rust v2 workspace (active).
+- `src/researchd/`: legacy Python control-plane reference (transition; targeted for R8).
+- `docs/v2/`: the active Rust v2 roadmap and contracts.
+- `docs/qualification/`: frozen legacy qualification framework, historical only.
+- `tests/`: legacy Python test gates.

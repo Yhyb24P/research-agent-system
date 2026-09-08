@@ -1,3 +1,7 @@
+> **Frozen / legacy.** This qualification mainline belongs to the retired Trusted
+> Control Plane direction and is no longer the active roadmap. Retained as a historical
+> reference only. The active roadmap is [../v2/ROADMAP.md](../v2/ROADMAP.md).
+
 # V1 Qualification Mainline Plan
 
 ## 1. Baseline

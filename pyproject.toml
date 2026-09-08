@@ -1,7 +1,9 @@
 [project]
 name = "research-agent-system"
 version = "1.0.0rc83.dev0"
-description = "Agent collaboration plane and trusted control plane for research workflows"
+# Legacy/transition reference package. The active product direction is the Rust v2
+# heterogeneous Agent team (branch v2/rust-agent-team, see docs/v2/ROADMAP.md).
+description = "Heterogeneous Agent coding/work team: a native Rust coding-agent runtime with local and external Agent adapters"
 license = "Apache-2.0"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"

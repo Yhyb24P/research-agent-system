@@ -1,3 +1,10 @@
+> **Frozen / legacy.** This launcher architecture belongs to the retired Trusted Control
+> Plane direction and is no longer the active roadmap. Retained as architecture/audit
+> history only. The active roadmap is [docs/v2/ROADMAP.md](docs/v2/ROADMAP.md).
+>
+> **已冻结 / 遗留。** 本 launcher 架构属于已废止的可信控制面方向，不再是活动路线图，
+> 仅作为架构与审计历史保留。活动路线图见 [docs/v2/ROADMAP.md](docs/v2/ROADMAP.md)。
+
 # Agent Workspace Launcher Architecture / Agent Workspace Launcher 架构冻结
 
 Status: **LP00 architecture freeze for post-V1 productization**  

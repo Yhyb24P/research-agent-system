@@ -1,3 +1,7 @@
+> **Frozen / legacy.** This qualification framework belongs to the retired Trusted
+> Control Plane direction and is no longer the active roadmap. It is retained as a
+> historical reference only. The active roadmap is [../v2/ROADMAP.md](../v2/ROADMAP.md).
+
 # Qualification Mainline
 
 This directory defines the post-RC qualification mainline for `research-agent-system`.
