@@ -1,35 +1,72 @@
-use agent_code_core::{AgentState, Journal, JournalError, ToolCallId, ToolCallState};
-use rusqlite::{params, Connection};
+use agent_code_core::{AgentState, Journal, JournalError, SessionId, ToolCallId, ToolCallState};
+use rusqlite::{params, Connection, Transaction};
 
 use crate::schema::SCHEMA;
 
-const SESSION: &str = "s";
-
-/// A durable journal backed by a SQLite connection.
+/// A durable journal backed by a SQLite connection, bound to one session.
 pub struct SqliteJournal {
     conn: Connection,
+    session: SessionId,
 }
 
 impl SqliteJournal {
-    /// Open a connection and apply the journal schema.
-    pub fn open(conn: Connection) -> Result<Self, rusqlite::Error> {
+    /// Open a connection, apply the schema, and bind to `session`.
+    pub fn open(conn: Connection, session: SessionId) -> Result<Self, rusqlite::Error> {
         conn.execute_batch(SCHEMA)?;
-        Ok(Self { conn })
+        Ok(Self { conn, session })
     }
 
-    /// Open a journal on an in-memory database.
-    pub fn in_memory() -> Result<Self, rusqlite::Error> {
-        Self::open(Connection::open_in_memory()?)
+    /// Open a journal on an in-memory database, bound to `session`.
+    pub fn in_memory(session: SessionId) -> Result<Self, rusqlite::Error> {
+        Self::open(Connection::open_in_memory()?, session)
     }
 }
 
 impl Journal for SqliteJournal {
-    fn record_transition(&mut self, from: AgentState, to: AgentState) -> Result<(), JournalError> {
+    fn create(&mut self, initial: AgentState) -> Result<(), JournalError> {
+        let sid = self.session.as_str();
+        let active = initial.active_call().map(|c| c.as_u64());
         self.conn
             .execute(
-                "INSERT INTO transitions (session_id, from_state, to_state) VALUES (?1, ?2, ?3)",
-                params![SESSION, format!("{from:?}"), format!("{to:?}")],
+                "INSERT INTO sessions (id, state, active_call, created_at) VALUES (?1, ?2, ?3, ?4)",
+                params![sid, initial.as_str(), active, now()],
             )
+            .map_err(|e| JournalError::Storage(e.to_string()))?;
+        Ok(())
+    }
+
+    fn current_state(&self) -> Result<Option<AgentState>, JournalError> {
+        let sid = self.session.as_str();
+        let mut stmt = self
+            .conn
+            .prepare("SELECT state, active_call FROM sessions WHERE id = ?1")
+            .map_err(|e| JournalError::Storage(e.to_string()))?;
+        let mut rows = stmt
+            .query_map(params![sid], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, Option<i64>>(1)?))
+            })
+            .map_err(|e| JournalError::Storage(e.to_string()))?;
+        match rows.next() {
+            Some(row) => {
+                let (variant, active) = row.map_err(|e| JournalError::Storage(e.to_string()))?;
+                let active = active.map(|id| ToolCallId::new(id as u64));
+                let state = AgentState::restore(&variant, active)
+                    .ok_or_else(|| JournalError::Storage("unknown state".into()))?;
+                Ok(Some(state))
+            }
+            None => Ok(None),
+        }
+    }
+
+    fn record_transition(&mut self, from: AgentState, to: AgentState) -> Result<(), JournalError> {
+        let sid = self.session.as_str();
+        let tx = self
+            .conn
+            .transaction()
+            .map_err(|e| JournalError::Storage(e.to_string()))?;
+        insert_transition(&tx, sid, &from, &to)?;
+        update_state(&tx, sid, &to)?;
+        tx.commit()
             .map_err(|e| JournalError::Storage(e.to_string()))?;
         Ok(())
     }
@@ -39,27 +76,107 @@ impl Journal for SqliteJournal {
         call: ToolCallId,
         state: ToolCallState,
     ) -> Result<(), JournalError> {
-        self.conn
-            .execute(
-                "INSERT INTO tool_calls (session_id, call_id, state) VALUES (?1, ?2, ?3)
-                 ON CONFLICT(session_id, call_id) DO UPDATE SET state = excluded.state",
-                params![SESSION, call.as_u64(), format!("{state:?}")],
-            )
+        let sid = self.session.as_str();
+        upsert_tool_state(&self.conn, sid, call, state.as_str())
+    }
+
+    fn begin_tool_call(&mut self, from: AgentState, call: ToolCallId) -> Result<(), JournalError> {
+        let to = AgentState::ExecutingTool { call };
+        let sid = self.session.as_str();
+        let tx = self
+            .conn
+            .transaction()
+            .map_err(|e| JournalError::Storage(e.to_string()))?;
+        insert_transition(&tx, sid, &from, &to)?;
+        update_state(&tx, sid, &to)?;
+        upsert_tool_state(&tx, sid, call, ToolCallState::Running.as_str())?;
+        tx.commit()
             .map_err(|e| JournalError::Storage(e.to_string()))?;
         Ok(())
     }
 
-    fn running_tools(&self) -> Vec<ToolCallId> {
-        let state = format!("{:?}", ToolCallState::Running);
+    fn finish_tool_call(
+        &mut self,
+        call: ToolCallId,
+        tool_state: ToolCallState,
+        to: AgentState,
+    ) -> Result<(), JournalError> {
+        let from = AgentState::ExecutingTool { call };
+        let sid = self.session.as_str();
+        let tx = self
+            .conn
+            .transaction()
+            .map_err(|e| JournalError::Storage(e.to_string()))?;
+        upsert_tool_state(&tx, sid, call, tool_state.as_str())?;
+        insert_transition(&tx, sid, &from, &to)?;
+        update_state(&tx, sid, &to)?;
+        tx.commit()
+            .map_err(|e| JournalError::Storage(e.to_string()))?;
+        Ok(())
+    }
+
+    fn running_tools(&self) -> Result<Vec<ToolCallId>, JournalError> {
+        let sid = self.session.as_str();
         let mut stmt = self
             .conn
             .prepare("SELECT call_id FROM tool_calls WHERE session_id = ?1 AND state = ?2")
-            .expect("prepare running_tools query");
+            .map_err(|e| JournalError::Storage(e.to_string()))?;
         let rows = stmt
-            .query_map(params![SESSION, state], |row| row.get::<_, i64>(0))
-            .expect("query running_tools");
-        rows.filter_map(Result::ok)
-            .map(|id| ToolCallId::new(id as u64))
-            .collect()
+            .query_map(params![sid, ToolCallState::Running.as_str()], |row| {
+                row.get::<_, i64>(0)
+            })
+            .map_err(|e| JournalError::Storage(e.to_string()))?;
+        let mut out = Vec::new();
+        for row in rows {
+            let id = row.map_err(|e| JournalError::Storage(e.to_string()))?;
+            out.push(ToolCallId::new(id as u64));
+        }
+        Ok(out)
     }
+}
+
+fn insert_transition(
+    tx: &Transaction,
+    sid: &str,
+    from: &AgentState,
+    to: &AgentState,
+) -> Result<(), JournalError> {
+    tx.execute(
+        "INSERT INTO transitions (session_id, from_state, to_state) VALUES (?1, ?2, ?3)",
+        params![sid, from.as_str(), to.as_str()],
+    )
+    .map_err(|e| JournalError::Storage(e.to_string()))?;
+    Ok(())
+}
+
+fn update_state(tx: &Transaction, sid: &str, state: &AgentState) -> Result<(), JournalError> {
+    let active = state.active_call().map(|c| c.as_u64());
+    tx.execute(
+        "UPDATE sessions SET state = ?2, active_call = ?3 WHERE id = ?1",
+        params![sid, state.as_str(), active],
+    )
+    .map_err(|e| JournalError::Storage(e.to_string()))?;
+    Ok(())
+}
+
+fn upsert_tool_state(
+    conn: &Connection,
+    sid: &str,
+    call: ToolCallId,
+    state: &str,
+) -> Result<(), JournalError> {
+    conn.execute(
+        "INSERT INTO tool_calls (session_id, call_id, state) VALUES (?1, ?2, ?3)
+         ON CONFLICT(session_id, call_id) DO UPDATE SET state = excluded.state",
+        params![sid, call.as_u64(), state],
+    )
+    .map_err(|e| JournalError::Storage(e.to_string()))?;
+    Ok(())
+}
+
+fn now() -> String {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs().to_string())
+        .unwrap_or_default()
 }

@@ -8,7 +8,7 @@ use crate::state::{ToolCallId, ToolCallState};
 pub fn recover_interrupted_tools<J: Journal>(
     journal: &mut J,
 ) -> Result<Vec<ToolCallId>, JournalError> {
-    let running = journal.running_tools();
+    let running = journal.running_tools()?;
     for call in &running {
         journal.record_tool_state(*call, ToolCallState::Interrupted)?;
     }

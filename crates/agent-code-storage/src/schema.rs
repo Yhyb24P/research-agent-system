@@ -4,6 +4,7 @@ pub const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS sessions (
     id TEXT PRIMARY KEY,
     state TEXT NOT NULL,
+    active_call INTEGER,
     created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS agent_turns (

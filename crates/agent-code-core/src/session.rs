@@ -6,18 +6,29 @@ use crate::state::{AgentState, ToolCallId, ToolCallState};
 /// every transition so a crash can be recovered.
 pub struct Session<J: Journal> {
     state: AgentState,
-    active_call: Option<ToolCallId>,
     journal: J,
 }
 
 impl<J: Journal> Session<J> {
-    /// Start a session in `Initializing`.
-    pub fn new(journal: J) -> Self {
-        Self {
+    /// Create a brand-new session in the initial state.
+    pub fn create(mut journal: J) -> Result<Self, JournalError> {
+        journal.create(AgentState::Initializing)?;
+        Ok(Self {
             state: AgentState::Initializing,
-            active_call: None,
             journal,
+        })
+    }
+
+    /// Recover an existing session from its journal, marking any `Running`
+    /// tool as `Interrupted` so it is not replayed.
+    pub fn recover(mut journal: J) -> Result<Self, JournalError> {
+        let state = journal
+            .current_state()?
+            .ok_or(JournalError::UnknownSession)?;
+        for call in journal.running_tools()? {
+            journal.record_tool_state(call, ToolCallState::Interrupted)?;
         }
+        Ok(Self { state, journal })
     }
 
     /// The current state.
@@ -30,21 +41,22 @@ impl<J: Journal> Session<J> {
         self.transition_to(AgentState::Observing)
     }
 
-    /// Move to `WaitingModel`: the Agent is about to ask the model for a decision.
+    /// Move to `WaitingModel`.
     pub fn wait_model(&mut self) -> Result<(), JournalError> {
         self.transition_to(AgentState::WaitingModel)
     }
 
-    /// Begin executing a tool call. Journals `Requested`, moves to
-    /// `ExecutingTool`, then journals `Running` immediately before the
-    /// (possibly non-idempotent) side effect.
+    /// Begin executing a tool call. One atomic persisted step: transition to
+    /// `ExecutingTool { call }` and mark the tool `Running`. The in-memory
+    /// state only advances after the journal step succeeds.
     pub fn begin_tool(&mut self, call: ToolCallId) -> Result<(), JournalError> {
-        self.journal
-            .record_tool_state(call, ToolCallState::Requested)?;
-        self.active_call = Some(call);
-        self.transition_to(AgentState::ExecutingTool)?;
-        self.journal
-            .record_tool_state(call, ToolCallState::Running)?;
+        let to = AgentState::ExecutingTool { call };
+        if !Self::legal(self.state, to) {
+            return Err(JournalError::IllegalTransition);
+        }
+        let from = self.state;
+        self.journal.begin_tool_call(from, call)?;
+        self.state = to;
         Ok(())
     }
 
@@ -58,12 +70,12 @@ impl<J: Journal> Session<J> {
         self.finish_tool(call, ToolCallState::Failed)
     }
 
-    /// Move to `Verifying` after a logical edit batch.
+    /// Move to `Verifying`.
     pub fn verify(&mut self) -> Result<(), JournalError> {
         self.transition_to(AgentState::Verifying)
     }
 
-    /// Move to `Delivering` after verification passes.
+    /// Move to `Delivering`.
     pub fn deliver(&mut self) -> Result<(), JournalError> {
         self.transition_to(AgentState::Delivering)
     }
@@ -83,13 +95,19 @@ impl<J: Journal> Session<J> {
         self.transition_to(AgentState::RolledBack)
     }
 
-    fn finish_tool(&mut self, call: ToolCallId, state: ToolCallState) -> Result<(), JournalError> {
-        if self.active_call != Some(call) {
-            return Err(JournalError::UnknownToolCall);
+    fn finish_tool(
+        &mut self,
+        call: ToolCallId,
+        tool_state: ToolCallState,
+    ) -> Result<(), JournalError> {
+        let to = AgentState::Observing;
+        match self.state {
+            AgentState::ExecutingTool { call: active } if active == call => {}
+            _ => return Err(JournalError::UnknownToolCall),
         }
-        self.journal.record_tool_state(call, state)?;
-        self.active_call = None;
-        self.transition_to(AgentState::Observing)
+        self.journal.finish_tool_call(call, tool_state, to)?;
+        self.state = to;
+        Ok(())
     }
 
     fn transition_to(&mut self, to: AgentState) -> Result<(), JournalError> {
@@ -107,23 +125,22 @@ impl<J: Journal> Session<J> {
         if from.is_terminal() {
             return false;
         }
-        use AgentState::*;
-        if to == Failed {
+        if matches!(to, AgentState::Failed) {
             return true;
         }
         matches!(
             (from, to),
-            (Initializing, Observing)
-                | (Observing, WaitingModel)
-                | (WaitingModel, ExecutingTool)
-                | (ExecutingTool, Observing)
-                | (Observing, Verifying)
-                | (Verifying, Observing)
-                | (Verifying, Delivering)
-                | (Delivering, Completed)
-                | (Observing, RolledBack)
-                | (Verifying, RolledBack)
-                | (ExecutingTool, RolledBack)
+            (AgentState::Initializing, AgentState::Observing)
+                | (AgentState::Observing, AgentState::WaitingModel)
+                | (AgentState::WaitingModel, AgentState::ExecutingTool { .. })
+                | (AgentState::ExecutingTool { .. }, AgentState::Observing)
+                | (AgentState::Observing, AgentState::Verifying)
+                | (AgentState::Verifying, AgentState::Observing)
+                | (AgentState::Verifying, AgentState::Delivering)
+                | (AgentState::Delivering, AgentState::Completed)
+                | (AgentState::Observing, AgentState::RolledBack)
+                | (AgentState::Verifying, AgentState::RolledBack)
+                | (AgentState::ExecutingTool { .. }, AgentState::RolledBack)
         )
     }
 }

@@ -7,6 +7,8 @@ pub enum JournalError {
     IllegalTransition,
     /// A tool-call operation referenced a call that is not active.
     UnknownToolCall,
+    /// Recovery was asked for a session that was never created.
+    UnknownSession,
     /// The underlying journal store failed.
     Storage(String),
 }
@@ -16,6 +18,7 @@ impl fmt::Display for JournalError {
         match self {
             Self::IllegalTransition => write!(f, "illegal state transition"),
             Self::UnknownToolCall => write!(f, "unknown or inactive tool call"),
+            Self::UnknownSession => write!(f, "session was not created"),
             Self::Storage(msg) => write!(f, "journal storage error: {msg}"),
         }
     }
