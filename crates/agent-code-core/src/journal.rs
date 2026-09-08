@@ -68,6 +68,14 @@ impl InMemoryJournal {
     pub fn transitions(&self) -> &[(AgentState, AgentState)] {
         &self.transitions
     }
+
+    /// The most recently recorded state for a tool call, if any.
+    pub fn latest_tool_state(&self, call: ToolCallId) -> Option<ToolCallState> {
+        self.tool_states
+            .iter()
+            .rev()
+            .find_map(|(c, s)| if *c == call { Some(*s) } else { None })
+    }
 }
 
 impl Journal for InMemoryJournal {

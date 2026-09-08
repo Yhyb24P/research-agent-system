@@ -79,6 +79,47 @@ mod tests {
     }
 
     #[test]
+    fn recover_resumes_mid_tool_to_observing_and_continues() {
+        let mut journal = InMemoryJournal::new(SessionId::new("s"));
+        journal.create(AgentState::Initializing).unwrap();
+        journal
+            .record_transition(AgentState::Initializing, AgentState::Observing)
+            .unwrap();
+        journal
+            .record_transition(AgentState::Observing, AgentState::WaitingModel)
+            .unwrap();
+        journal
+            .begin_tool_call(AgentState::WaitingModel, ToolCallId::new(7))
+            .unwrap();
+        // A crash leaves the session stuck in ExecutingTool with a Running tool.
+        let mut s = Session::recover(journal).unwrap();
+        // Resumed to Observing, so the next model turn can proceed.
+        assert_eq!(s.state(), AgentState::Observing);
+        s.wait_model().unwrap();
+        assert_eq!(s.state(), AgentState::WaitingModel);
+    }
+
+    #[test]
+    fn recover_keeps_interrupted_tool_not_failed() {
+        let mut journal = InMemoryJournal::new(SessionId::new("s"));
+        journal.create(AgentState::Initializing).unwrap();
+        journal
+            .record_transition(AgentState::Initializing, AgentState::Observing)
+            .unwrap();
+        journal
+            .record_transition(AgentState::Observing, AgentState::WaitingModel)
+            .unwrap();
+        journal
+            .begin_tool_call(AgentState::WaitingModel, ToolCallId::new(7))
+            .unwrap();
+        recover_interrupted_tools(&mut journal).unwrap();
+        assert_eq!(
+            journal.latest_tool_state(ToolCallId::new(7)),
+            Some(ToolCallState::Interrupted)
+        );
+    }
+
+    #[test]
     fn session_recover_loads_persisted_state() {
         let mut journal = InMemoryJournal::new(SessionId::new("s"));
         journal.create(AgentState::Initializing).unwrap();

@@ -1,5 +1,6 @@
 use crate::error::JournalError;
 use crate::journal::Journal;
+use crate::recovery::recover_interrupted_tools;
 use crate::state::{AgentState, ToolCallId, ToolCallState};
 
 /// A single native Coding Agent session. Drives the state machine and journals
@@ -19,15 +20,21 @@ impl<J: Journal> Session<J> {
         })
     }
 
-    /// Recover an existing session from its journal, marking any `Running`
-    /// tool as `Interrupted` so it is not replayed.
+    /// Recover an existing session from its journal. Any `Running` tool is
+    /// marked `Interrupted` so it is never blindly replayed; if the crash left
+    /// the session mid-tool, it atomically resumes to `Observing` so the next
+    /// model turn can proceed (the `Interrupted` state is preserved).
     pub fn recover(mut journal: J) -> Result<Self, JournalError> {
         let state = journal
             .current_state()?
             .ok_or(JournalError::UnknownSession)?;
-        for call in journal.running_tools()? {
-            journal.record_tool_state(call, ToolCallState::Interrupted)?;
-        }
+        recover_interrupted_tools(&mut journal)?;
+        let state = if matches!(state, AgentState::ExecutingTool { .. }) {
+            journal.record_transition(state, AgentState::Observing)?;
+            AgentState::Observing
+        } else {
+            state
+        };
         Ok(Self { state, journal })
     }
 
