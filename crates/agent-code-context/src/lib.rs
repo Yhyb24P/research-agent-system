@@ -6,6 +6,8 @@
 
 mod budget;
 mod build;
+mod history;
 
 pub use budget::{truncate_chars, BytesTokenCounter, ContextBudget, ContextError, TokenCounter};
 pub use build::{build_context, serialize_context, ContextSpec};
+pub use history::{build_compact_context, compact_older, HistorySource};

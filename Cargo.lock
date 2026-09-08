@@ -30,6 +30,7 @@ dependencies = [
 name = "agent-code-storage"
 version = "0.1.0"
 dependencies = [
+ "agent-code-context",
  "agent-code-core",
  "agent-code-model",
  "rusqlite",

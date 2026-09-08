@@ -1,6 +1,8 @@
 //! Append-only durable observations. Records are never compacted or deleted
 //! here; the context layer only reads them to build a bounded projection.
 
+use agent_code_context::{ContextError, HistorySource};
+use agent_code_core::SessionId;
 use agent_code_model::Observation;
 use rusqlite::params;
 
@@ -20,7 +22,11 @@ impl SqliteJournal {
 
     /// Read this session's observations in insertion order.
     pub fn read_observations(&self) -> Result<Vec<Observation>, rusqlite::Error> {
-        let sid = self.session().as_str();
+        self.fetch(self.session().as_str())
+    }
+
+    /// Read a session's observations in insertion order.
+    fn fetch(&self, sid: &str) -> Result<Vec<Observation>, rusqlite::Error> {
         let mut stmt = self
             .conn()
             .prepare("SELECT payload FROM observations WHERE session_id = ?1 ORDER BY id ASC")?;
@@ -31,6 +37,13 @@ impl SqliteJournal {
             out.push(decode_payload(&payload)?);
         }
         Ok(out)
+    }
+}
+
+impl HistorySource for SqliteJournal {
+    fn observations(&self, session: &SessionId) -> Result<Vec<Observation>, ContextError> {
+        self.fetch(session.as_str())
+            .map_err(|e| ContextError::History(e.to_string()))
     }
 }
 
