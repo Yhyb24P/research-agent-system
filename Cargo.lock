@@ -52,6 +52,7 @@ dependencies = [
  "agent-code-tools",
  "glob",
  "ignore",
+ "libc",
  "regex",
  "sha2",
 ]

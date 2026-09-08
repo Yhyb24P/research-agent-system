@@ -12,3 +12,4 @@ sha2.workspace = true
 ignore.workspace = true
 glob.workspace = true
 regex.workspace = true
+libc.workspace = true

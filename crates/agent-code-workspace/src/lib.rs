@@ -1,11 +1,13 @@
 //! Workspace containment, bounded file/search tools, and Git checkpoints.
 
 mod error;
+mod exec;
 mod tools;
 mod workspace;
 mod write;
 
 pub use error::ToolError;
+pub use exec::CommandOutput;
 pub use tools::{SearchHit, SearchOutput, ViewOutput, MAX_VIEW_LINES};
 pub use workspace::Workspace;
 pub use write::{EditOutput, SyntaxGuard, WriteOutput};
