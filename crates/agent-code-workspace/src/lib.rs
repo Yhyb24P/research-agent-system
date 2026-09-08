@@ -11,8 +11,8 @@ pub use error::ToolError;
 pub use exec::CommandOutput;
 pub use git::GitWorkspace;
 pub use tools::{SearchHit, SearchOutput, ViewOutput, MAX_VIEW_LINES};
-pub use workspace::Workspace;
-pub use write::{EditOutput, SyntaxGuard, WriteOutput};
+pub use workspace::{Workspace, DEFAULT_MAX_WRITE_BYTES};
+pub use write::{CandidateGuard, ChangedRange, EditOutput, PostWriteGuard, WriteOutput};
 
 /// A Git checkpoint for rollback.
 #[derive(Debug, Clone, PartialEq, Eq)]

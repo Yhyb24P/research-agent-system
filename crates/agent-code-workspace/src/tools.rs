@@ -43,10 +43,13 @@ pub struct SearchOutput {
 
 impl Workspace {
     /// Return up to MAX_VIEW_LINES numbered lines of a contained file, plus
-    /// its SHA-256 hash for use as an expected_file_hash guard.
+    /// its SHA-256 hash for use as an expected_file_hash guard. Both are
+    /// derived from a single byte snapshot so they can never disagree.
     pub fn view_file(&self, req: &ViewFile) -> Result<ViewOutput, ToolError> {
-        let content = self.read_file(&req.path)?;
-        let hash = self.hash_file(&req.path)?;
+        let bytes = self.read_bytes(&req.path)?;
+        let hash = crate::workspace::sha256_hex(&bytes);
+        let content =
+            String::from_utf8(bytes).map_err(|_| ToolError::Io("not valid UTF-8".into()))?;
         let all: Vec<&str> = content.lines().collect();
         let total = all.len();
         let start = req.start_line.max(1) as usize;
@@ -76,6 +79,12 @@ impl Workspace {
     /// Bounded, gitignore-aware search across the workspace. Returns matching
     /// lines (never whole files), capped at req.max_matches.
     pub fn search_dir(&self, req: &SearchDir) -> Result<SearchOutput, ToolError> {
+        if req.max_matches == 0 {
+            return Ok(SearchOutput {
+                matches: Vec::new(),
+                truncated: false,
+            });
+        }
         let re =
             Regex::new(&req.pattern).map_err(|e| ToolError::Io(format!("invalid pattern: {e}")))?;
         let glob_pat = req

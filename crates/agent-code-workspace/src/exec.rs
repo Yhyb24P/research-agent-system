@@ -1,5 +1,6 @@
 use agent_code_tools::ExecuteCommand;
-use std::io::Read;
+use std::collections::VecDeque;
+use std::io::{Read, Write};
 use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -7,12 +8,14 @@ use std::time::{Duration, Instant};
 use crate::error::ToolError;
 use crate::workspace::Workspace;
 
-/// Characters kept from the start of a stream before it is truncated.
+/// Bytes kept from the start of a stream in memory.
 const OUTPUT_HEAD: usize = 2000;
-/// Characters kept from the end of a stream before it is truncated.
+/// Bytes kept from the end of a stream in memory.
 const OUTPUT_TAIL: usize = 2000;
 
-/// The bounded result of an execute_command call.
+/// The bounded result of an execute_command call. Only fixed-size head/tail
+/// and a total byte count are held in memory; the full output is streamed to
+/// the log files, so a runaway command cannot exhaust memory.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandOutput {
     pub program: String,
@@ -21,17 +24,77 @@ pub struct CommandOutput {
     pub timed_out: bool,
     pub stdout_head: String,
     pub stdout_tail: String,
+    /// Total bytes the command wrote to stdout.
+    pub stdout_total: u64,
     pub stderr_head: String,
     pub stderr_tail: String,
+    /// Total bytes the command wrote to stderr.
+    pub stderr_total: u64,
     pub truncated: bool,
-    /// Workspace-relative path to the full (untruncated) output log.
-    pub log_path: String,
+    /// Workspace-relative path to the full stdout log.
+    pub stdout_log: String,
+    /// Workspace-relative path to the full stderr log.
+    pub stderr_log: String,
+}
+
+/// Streams a pipe to a log file while retaining only a bounded head/tail in
+/// memory plus a running total.
+struct BoundedSink {
+    file: std::fs::File,
+    head: Vec<u8>,
+    tail: VecDeque<u8>,
+    total: u64,
+}
+
+impl BoundedSink {
+    fn new(file: std::fs::File) -> Self {
+        Self {
+            file,
+            head: Vec::new(),
+            tail: VecDeque::new(),
+            total: 0,
+        }
+    }
+
+    fn write(&mut self, chunk: &[u8]) -> std::io::Result<()> {
+        self.file.write_all(chunk)?;
+        let room = OUTPUT_HEAD.saturating_sub(self.head.len());
+        if room > 0 {
+            let take = room.min(chunk.len());
+            self.head.extend_from_slice(&chunk[..take]);
+        }
+        for &b in chunk {
+            self.tail.push_back(b);
+            if self.tail.len() > OUTPUT_TAIL {
+                self.tail.pop_front();
+            }
+        }
+        self.total += chunk.len() as u64;
+        Ok(())
+    }
+
+    fn head(&self) -> String {
+        String::from_utf8_lossy(&self.head).into_owned()
+    }
+
+    fn tail(&self) -> String {
+        let bytes: Vec<u8> = self.tail.iter().copied().collect();
+        String::from_utf8_lossy(&bytes).into_owned()
+    }
+
+    fn total(&self) -> u64 {
+        self.total
+    }
+
+    fn truncated(&self) -> bool {
+        self.total > (OUTPUT_HEAD + OUTPUT_TAIL) as u64
+    }
 }
 
 impl Workspace {
     /// Run `program` with `args` (no shell), cwd contained to the workspace,
     /// inherited env plus explicit overrides, and a timeout that kills the
-    /// whole process group. Full output is logged; head/tail are returned.
+    /// whole process group. Output is streamed to logs; head/tail are kept.
     pub fn execute_command(&self, req: &ExecuteCommand) -> Result<CommandOutput, ToolError> {
         let cwd = match &req.cwd {
             Some(c) => self.resolve(c)?,
@@ -56,8 +119,18 @@ impl Workspace {
 
         let out_pipe = child.stdout.take();
         let err_pipe = child.stderr.take();
-        let out_handle = drain_pipe(out_pipe);
-        let err_handle = drain_pipe(err_pipe);
+
+        let log_dir = self.root().join(".agent-logs");
+        std::fs::create_dir_all(&log_dir).map_err(|e| ToolError::Io(e.to_string()))?;
+        let out_log_rel = format!(".agent-logs/cmd-{pid}-out.log");
+        let err_log_rel = format!(".agent-logs/cmd-{pid}-err.log");
+        let out_log = std::fs::File::create(log_dir.join(format!("cmd-{pid}-out.log")))
+            .map_err(|e| ToolError::Io(e.to_string()))?;
+        let err_log = std::fs::File::create(log_dir.join(format!("cmd-{pid}-err.log")))
+            .map_err(|e| ToolError::Io(e.to_string()))?;
+
+        let out_handle = drain_pipe(out_pipe, out_log);
+        let err_handle = drain_pipe(err_pipe, err_log);
 
         let (tx, rx) = std::sync::mpsc::channel::<Result<std::process::ExitStatus, String>>();
         let waiter = std::thread::spawn(move || {
@@ -83,90 +156,53 @@ impl Workspace {
         };
         let _ = waiter.join();
 
-        let stdout = out_handle
+        let out_sink = out_handle
             .join()
             .map_err(|_| ToolError::Io("stdout reader aborted".into()))?;
-        let stderr = err_handle
+        let err_sink = err_handle
             .join()
             .map_err(|_| ToolError::Io("stderr reader aborted".into()))?;
 
-        let log_rel = self.write_output_log(pid, &req.program, &req.args, &stdout, &stderr)?;
-
-        let (stdout_head, stdout_tail, t1) = head_tail(&stdout);
-        let (stderr_head, stderr_tail, t2) = head_tail(&stderr);
         Ok(CommandOutput {
             program: req.program.clone(),
             exit_code: status.code(),
             timed_out,
-            stdout_head,
-            stdout_tail,
-            stderr_head,
-            stderr_tail,
-            truncated: t1 || t2,
-            log_path: log_rel,
+            stdout_head: out_sink.head(),
+            stdout_tail: out_sink.tail(),
+            stdout_total: out_sink.total(),
+            stderr_head: err_sink.head(),
+            stderr_tail: err_sink.tail(),
+            stderr_total: err_sink.total(),
+            truncated: out_sink.truncated() || err_sink.truncated(),
+            stdout_log: out_log_rel,
+            stderr_log: err_log_rel,
         })
-    }
-
-    /// Persist the full command output to `.agent-logs/` and return its
-    /// workspace-relative path.
-    fn write_output_log(
-        &self,
-        pid: i32,
-        program: &str,
-        args: &[String],
-        stdout: &str,
-        stderr: &str,
-    ) -> Result<String, ToolError> {
-        let log_dir = self.root().join(".agent-logs");
-        std::fs::create_dir_all(&log_dir).map_err(|e| ToolError::Io(e.to_string()))?;
-        let rel = format!(".agent-logs/cmd-{pid}.log");
-        let body = format!(
-            "$ {program} {}\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}\n",
-            args.join(" ")
-        );
-        self.atomic_write(&rel, &body)?;
-        Ok(rel)
     }
 }
 
 /// Read a pipe to completion on a background thread so a chatty child never
-/// deadlocks on a full pipe buffer.
-fn drain_pipe<R: Read + Send + 'static>(pipe: Option<R>) -> std::thread::JoinHandle<String> {
+/// deadlocks on a full pipe buffer, streaming to `log` and retaining only a
+/// bounded head/tail.
+fn drain_pipe<R: Read + Send + 'static>(
+    pipe: Option<R>,
+    log: std::fs::File,
+) -> std::thread::JoinHandle<BoundedSink> {
     std::thread::spawn(move || {
-        let Some(mut p) = pipe else {
-            return String::new();
-        };
-        let mut buf = String::new();
-        let _ = p.read_to_string(&mut buf);
-        buf
+        let mut sink = BoundedSink::new(log);
+        let mut buf = [0u8; 8192];
+        if let Some(mut p) = pipe {
+            loop {
+                match p.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        let _ = sink.write(&buf[..n]);
+                    }
+                    Err(_) => break,
+                }
+            }
+        }
+        sink
     })
-}
-
-/// Split a string into (head, tail, truncated), keeping the first OUTPUT_HEAD
-/// and last OUTPUT_TAIL characters on a char boundary.
-fn head_tail(s: &str) -> (String, String, bool) {
-    if s.len() <= OUTPUT_HEAD + OUTPUT_TAIL {
-        return (s.to_string(), String::new(), false);
-    }
-    let head_end = char_boundary_before(s, OUTPUT_HEAD);
-    let tail_start = char_boundary_after(s, s.len() - OUTPUT_TAIL);
-    (s[..head_end].to_string(), s[tail_start..].to_string(), true)
-}
-
-fn char_boundary_before(s: &str, idx: usize) -> usize {
-    let mut i = idx.min(s.len());
-    while i > 0 && !s.is_char_boundary(i) {
-        i -= 1;
-    }
-    i
-}
-
-fn char_boundary_after(s: &str, idx: usize) -> usize {
-    let mut i = idx;
-    while i < s.len() && !s.is_char_boundary(i) {
-        i += 1;
-    }
-    i
 }
 
 #[cfg(test)]
@@ -203,7 +239,7 @@ mod tests {
         assert!(!out.timed_out);
         assert_eq!(out.exit_code, Some(0));
         assert!(out.stdout_head.contains("hello"));
-        assert!(std::path::Path::new(ws.root().join(&out.log_path).to_str().unwrap()).exists());
+        assert!(std::path::Path::new(ws.root().join(&out.stdout_log).to_str().unwrap()).exists());
     }
 
     #[test]
@@ -218,14 +254,15 @@ mod tests {
     #[test]
     fn truncates_long_output_to_head_and_tail() {
         let (ws, _) = ws();
-        // Print 10000 distinct lines so stdout far exceeds the head+tail cap.
+        // Print 10000 lines so stdout far exceeds the head+tail cap.
         let out = ws
             .execute_command(&cmd("sh", &["-c", "seq 1 10000"], 10))
             .unwrap();
         assert!(out.truncated);
         assert!(out.stdout_head.starts_with("1\n"));
         assert!(out.stdout_tail.ends_with("10000\n"));
-        assert!(out.stdout_head.len() <= OUTPUT_HEAD + 1);
+        assert!(out.stdout_head.len() <= OUTPUT_HEAD);
+        assert!(out.stdout_total > (OUTPUT_HEAD + OUTPUT_TAIL) as u64);
     }
 
     #[test]

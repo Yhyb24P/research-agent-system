@@ -4,11 +4,15 @@ use std::path::{Component, Path, PathBuf};
 
 use crate::error::ToolError;
 
+/// Hard ceiling on a single write_file payload. Callers may only tighten it.
+pub const DEFAULT_MAX_WRITE_BYTES: u64 = 1024 * 1024;
+
 /// A workspace root that all file access is contained to.
 #[derive(Debug, Clone)]
 pub struct Workspace {
     root: PathBuf,
     root_canonical: PathBuf,
+    max_write_bytes: u64,
 }
 
 impl Workspace {
@@ -19,7 +23,19 @@ impl Workspace {
         Ok(Self {
             root: root_canonical.clone(),
             root_canonical,
+            max_write_bytes: DEFAULT_MAX_WRITE_BYTES,
         })
+    }
+
+    /// Cap a single write_file payload. May only tighten the default.
+    pub fn with_max_write_bytes(mut self, bytes: u64) -> Self {
+        self.max_write_bytes = bytes.min(DEFAULT_MAX_WRITE_BYTES);
+        self
+    }
+
+    /// The effective hard cap on a single write_file payload.
+    pub fn max_write_bytes(&self) -> u64 {
+        self.max_write_bytes
     }
 
     /// The canonical workspace root.
@@ -58,13 +74,12 @@ impl Workspace {
 
     /// SHA-256 hex digest of a contained file.
     pub fn hash_file(&self, rel: &str) -> Result<String, ToolError> {
-        let bytes = std::fs::read(self.resolve(rel)?).map_err(|e| ToolError::Io(e.to_string()))?;
-        let digest = Sha256::digest(&bytes);
-        let mut hex = String::with_capacity(64);
-        for b in digest.iter() {
-            hex.push_str(&format!("{:02x}", b));
-        }
-        Ok(hex)
+        Ok(sha256_hex(&self.read_bytes(rel)?))
+    }
+
+    /// Read a contained file's raw bytes.
+    pub fn read_bytes(&self, rel: &str) -> Result<Vec<u8>, ToolError> {
+        std::fs::read(self.resolve(rel)?).map_err(|e| ToolError::Io(e.to_string()))
     }
 
     /// Atomically write `content` to a contained path (temp file + rename).
@@ -117,4 +132,14 @@ fn within_root_lexically(p: &Path) -> bool {
         }
     }
     true
+}
+
+/// SHA-256 hex digest of a byte slice.
+pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    let mut hex = String::with_capacity(64);
+    for b in digest.iter() {
+        hex.push_str(&format!("{:02x}", b));
+    }
+    hex
 }
