@@ -1,9 +1,11 @@
-//! Workspace containment, file primitives, and Git checkpoints.
+//! Workspace containment, bounded file/search tools, and Git checkpoints.
 
 mod error;
+mod tools;
 mod workspace;
 
 pub use error::ToolError;
+pub use tools::{SearchHit, SearchOutput, ViewOutput, MAX_VIEW_LINES};
 pub use workspace::Workspace;
 
 /// A Git checkpoint for rollback.
