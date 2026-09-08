@@ -1,0 +1,9 @@
+[package]
+name = "agent-code-workspace"
+description = "Project rules, Git worktree/checkpoint, path handling, diff and rollback"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]

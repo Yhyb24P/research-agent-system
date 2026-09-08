@@ -1,0 +1,13 @@
+[package]
+name = "agent-code-model"
+description = "Small async model-client abstraction (OpenAI-compatible first)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true

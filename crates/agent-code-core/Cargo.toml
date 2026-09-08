@@ -1,0 +1,9 @@
+[package]
+name = "agent-code-core"
+description = "Durable state machine, journal and recovery for the native Coding Agent"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]

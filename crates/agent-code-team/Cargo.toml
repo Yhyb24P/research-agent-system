@@ -1,0 +1,10 @@
+[package]
+name = "agent-code-team"
+description = "Agent registry, lead, task board, scheduling and result flow"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+async-trait.workspace = true

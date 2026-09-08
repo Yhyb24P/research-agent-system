@@ -1,0 +1,23 @@
+name: rust
+
+on:
+  push:
+    branches: [v2/rust-agent-team]
+  pull_request:
+    branches: [v2/rust-agent-team]
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: [clippy, rustfmt]
+      - uses: Swatinem/rust-cache@v2
+      - name: Format
+        run: cargo fmt --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Test
+        run: cargo test --workspace

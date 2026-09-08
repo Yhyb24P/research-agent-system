@@ -1,0 +1,24 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/agent-code-core",
+    "crates/agent-code-model",
+    "crates/agent-code-tools",
+    "crates/agent-code-workspace",
+    "crates/agent-code-context",
+    "crates/agent-code-storage",
+    "crates/agent-code-team",
+    "crates/agent-code-tui",
+    "crates/agent-code-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+
+[workspace.dependencies]
+async-trait = "0.1"
+rusqlite = { version = "0.32", features = ["bundled"] }
+tokio = { version = "1", features = ["macros", "rt"] }

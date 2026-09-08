@@ -1,0 +1,11 @@
+[package]
+name = "agent-code-storage"
+description = "Small SQLite journal for durable Agent state"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+agent-code-core = { path = "../agent-code-core" }
+rusqlite.workspace = true

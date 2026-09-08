@@ -1,0 +1,9 @@
+[package]
+name = "agent-code-tui"
+description = "Interactive terminal UI (ratatui/crossterm)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]

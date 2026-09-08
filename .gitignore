@@ -2,6 +2,8 @@
 .pytest_cache/
 .mypy_cache/
 __pycache__/
+# Rust build output.
+/target/
 # Tracked documentation trees: docs/qualification/ (frozen legacy) and
 # docs/v2/ (active Rust v2 roadmap). Other local notes under docs/ remain
 # ignored unless governance is changed explicitly.
