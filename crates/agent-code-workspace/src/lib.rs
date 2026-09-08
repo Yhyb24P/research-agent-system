@@ -3,10 +3,12 @@
 mod error;
 mod tools;
 mod workspace;
+mod write;
 
 pub use error::ToolError;
 pub use tools::{SearchHit, SearchOutput, ViewOutput, MAX_VIEW_LINES};
 pub use workspace::Workspace;
+pub use write::{EditOutput, SyntaxGuard, WriteOutput};
 
 /// A Git checkpoint for rollback.
 #[derive(Debug, Clone, PartialEq, Eq)]
