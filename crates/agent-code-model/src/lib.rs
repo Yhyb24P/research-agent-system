@@ -4,7 +4,7 @@ mod client;
 mod types;
 
 pub use client::{ModelClient, StubModelClient};
-pub use types::{ModelContext, ModelDecision, ModelError};
+pub use types::{ModelContext, ModelDecision, ModelError, Observation};
 
 #[cfg(test)]
 mod tests {

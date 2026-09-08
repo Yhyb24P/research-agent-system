@@ -9,6 +9,10 @@ version = "0.1.0"
 [[package]]
 name = "agent-code-context"
 version = "0.1.0"
+dependencies = [
+ "agent-code-core",
+ "agent-code-model",
+]
 
 [[package]]
 name = "agent-code-core"

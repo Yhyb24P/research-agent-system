@@ -1,11 +1,11 @@
 //! Context budgeting, truncation and compaction.
 //!
-//! R1 provides the budget shape only; selection and compaction land in R3.
+//! This crate turns a durable, unbounded observation history into a bounded,
+//! model-facing [`agent_code_model::ModelContext`]. It owns the token budget,
+//! section selection and compaction; it never mutates the durable history.
 
-/// A token budget for the model-facing context.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ContextBudget {
-    pub max_tokens: u32,
-    /// Tokens always reserved for the next model output / tool call.
-    pub reserved_output: u32,
-}
+mod budget;
+mod build;
+
+pub use budget::{truncate_chars, BytesTokenCounter, ContextBudget, ContextError, TokenCounter};
+pub use build::{build_context, serialize_context, ContextSpec};
