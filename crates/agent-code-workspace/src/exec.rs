@@ -158,10 +158,10 @@ impl Workspace {
 
         let out_sink = out_handle
             .join()
-            .map_err(|_| ToolError::Io("stdout reader aborted".into()))?;
+            .map_err(|_| ToolError::Io("stdout reader aborted".into()))??;
         let err_sink = err_handle
             .join()
-            .map_err(|_| ToolError::Io("stderr reader aborted".into()))?;
+            .map_err(|_| ToolError::Io("stderr reader aborted".into()))??;
 
         Ok(CommandOutput {
             program: req.program.clone(),
@@ -182,11 +182,11 @@ impl Workspace {
 
 /// Read a pipe to completion on a background thread so a chatty child never
 /// deadlocks on a full pipe buffer, streaming to `log` and retaining only a
-/// bounded head/tail.
+/// bounded head/tail. Any read or log-write failure is propagated.
 fn drain_pipe<R: Read + Send + 'static>(
     pipe: Option<R>,
     log: std::fs::File,
-) -> std::thread::JoinHandle<BoundedSink> {
+) -> std::thread::JoinHandle<Result<BoundedSink, ToolError>> {
     std::thread::spawn(move || {
         let mut sink = BoundedSink::new(log);
         let mut buf = [0u8; 8192];
@@ -194,14 +194,14 @@ fn drain_pipe<R: Read + Send + 'static>(
             loop {
                 match p.read(&mut buf) {
                     Ok(0) => break,
-                    Ok(n) => {
-                        let _ = sink.write(&buf[..n]);
-                    }
-                    Err(_) => break,
+                    Ok(n) => sink
+                        .write(&buf[..n])
+                        .map_err(|e| ToolError::Io(format!("drain log: {e}")))?,
+                    Err(e) => return Err(ToolError::Io(format!("read pipe: {e}"))),
                 }
             }
         }
-        sink
+        Ok(sink)
     })
 }
 

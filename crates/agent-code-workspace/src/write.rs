@@ -100,8 +100,11 @@ impl Workspace {
         if req.old_str.is_empty() {
             return Err(ToolError::MatchNotFound(req.path.clone()));
         }
-        let raw = self.read_file(&req.path)?;
-        let before_hash = self.hash_file(&req.path)?;
+        // A single byte snapshot supplies both the content and the before-hash,
+        // so the stale-hash check can never race the content read.
+        let bytes = self.read_bytes(&req.path)?;
+        let before_hash = crate::workspace::sha256_hex(&bytes);
+        let raw = String::from_utf8(bytes).map_err(|_| ToolError::Io("not valid UTF-8".into()))?;
         if let Some(expected) = &req.expected_file_hash {
             if before_hash != *expected {
                 return Err(ToolError::StaleHash {
@@ -312,15 +315,16 @@ mod tests {
 
     #[test]
     fn edit_normalizes_only_on_zero_exact_matches() {
-        // A CRLF file with an LF old_str: the exact search finds zero, the
-        // fallback matches the file's CRLF convention, and unrelated lines keep
-        // their original CRLF endings.
+        // A CRLF file with an LF cross-line anchor: the exact search finds zero
+        // (the file uses CRLF), so the fallback matches the file's CRLF
+        // convention and rewrites only the target fragment — unrelated bytes
+        // keep their original CRLF endings.
         let (ws, dir) = ws_with(&[("a.txt", "line1\r\nline2\r\nline3\r\n")]);
         ws.edit_file(
             &EditFile {
                 path: "a.txt".into(),
-                old_str: "line2".into(),
-                new_str: "LINE2".into(),
+                old_str: "line1\nline2".into(),
+                new_str: "line1\nLINE2".into(),
                 expected_file_hash: None,
             },
             None,
