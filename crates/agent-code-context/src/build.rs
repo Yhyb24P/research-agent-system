@@ -290,4 +290,22 @@ mod tests {
             .any(|o| matches!(o, Observation::Text(t) if t == "recent")));
         assert!(c.count(&serialize_context(&ctx)) <= b.free_tokens());
     }
+
+    #[test]
+    fn rules_and_map_reach_the_model_context() {
+        // N01 closed loop: loaded rules and the repository map are present in
+        // the model-facing projection, not just loadable.
+        let c = counter();
+        let b = ContextBudget::new(400, 0);
+        let s = ContextSpec {
+            task: "task",
+            project_rules: "## AGENTS.md\nbe precise",
+            repository_map: "# repo map\nmain.rs\nsrc/a.rs",
+            compact_summary: "",
+            observations: &[],
+        };
+        let ctx = build_context(&s, &b, &c).unwrap();
+        assert!(ctx.project_rules.contains("be precise"));
+        assert!(ctx.repository_map.contains("main.rs"));
+    }
 }

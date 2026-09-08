@@ -7,7 +7,11 @@
 mod budget;
 mod build;
 mod history;
+mod repo_map;
+mod rules;
 
 pub use budget::{truncate_chars, BytesTokenCounter, ContextBudget, ContextError, TokenCounter};
 pub use build::{build_context, serialize_context, ContextSpec};
 pub use history::{build_compact_context, compact_older, HistorySource};
+pub use repo_map::{RepoMap, RepoMapOptions};
+pub use rules::load_project_rules;
