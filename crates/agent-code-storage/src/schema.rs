@@ -52,4 +52,11 @@ CREATE TABLE IF NOT EXISTS transitions (
     from_state TEXT NOT NULL,
     to_state TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS observations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL REFERENCES sessions(id),
+    kind TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
 "#;

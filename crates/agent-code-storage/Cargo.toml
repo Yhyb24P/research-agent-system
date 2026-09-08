@@ -8,4 +8,5 @@ publish.workspace = true
 
 [dependencies]
 agent-code-core = { path = "../agent-code-core" }
+agent-code-model = { path = "../agent-code-model" }
 rusqlite.workspace = true

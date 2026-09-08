@@ -1,6 +1,7 @@
 //! Small SQLite journal for durable Agent state.
 
 mod journal;
+mod observations;
 mod schema;
 
 pub use journal::SqliteJournal;

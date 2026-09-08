@@ -10,6 +10,18 @@ pub struct SqliteJournal {
 }
 
 impl SqliteJournal {
+    /// The underlying connection, for the observation store.
+    pub(crate) fn conn(&self) -> &Connection {
+        &self.conn
+    }
+
+    /// The bound session, for the observation store.
+    pub(crate) fn session(&self) -> &SessionId {
+        &self.session
+    }
+}
+
+impl SqliteJournal {
     /// Open a connection, apply the schema, and bind to `session`.
     pub fn open(conn: Connection, session: SessionId) -> Result<Self, rusqlite::Error> {
         conn.execute_batch(SCHEMA)?;
@@ -174,7 +186,7 @@ fn upsert_tool_state(
     Ok(())
 }
 
-fn now() -> String {
+pub(crate) fn now() -> String {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs().to_string())
