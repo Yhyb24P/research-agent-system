@@ -18,10 +18,15 @@ pub struct ContextBudget {
     pub map_cap: u32,
     /// Character cap for a single observation.
     pub observation_cap: u32,
+    /// Tokens reserved for the model client's fixed request overhead (tool
+    /// schemas + message framing), so the full outbound request — not just the
+    /// context — fits the configured input budget (N11).
+    pub protocol_overhead: u32,
 }
 
 impl ContextBudget {
-    /// A budget with default section caps; `safety_margin` starts at 0.
+    /// A budget with default section caps; `safety_margin` and
+    /// `protocol_overhead` start at 0.
     pub fn new(max_tokens: u32, reserved_output: u32) -> Self {
         Self {
             max_tokens,
@@ -31,6 +36,7 @@ impl ContextBudget {
             rules_cap: 4000,
             map_cap: 4000,
             observation_cap: 2000,
+            protocol_overhead: 0,
         }
     }
 
@@ -39,6 +45,7 @@ impl ContextBudget {
         self.max_tokens
             .saturating_sub(self.reserved_output)
             .saturating_sub(self.safety_margin)
+            .saturating_sub(self.protocol_overhead)
     }
 }
 

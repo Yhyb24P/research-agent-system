@@ -50,18 +50,24 @@ impl ModelClient for OpenAiClient {
             .await
             .map_err(|e| ModelError::Transport(format!("model worker failed: {e}")))?
     }
+
+    fn protocol_overhead(&self) -> String {
+        // The fixed, context-independent part of the request: the JSON framing
+        // around an empty user message plus the five tool schemas. Reserving
+        // this in the context budget keeps the full outbound request within it.
+        let schemas = serde_json::to_string(&tool_schemas()).expect("schemas serialize");
+        format!(
+            r#"{{"model":"{}","messages":[{{"role":"user","content":""}}],"tools":{},"tool_choice":"auto"}}"#,
+            self.model, schemas
+        )
+    }
 }
 
 impl OpenAiClient {
     /// The blocking request/parse, run off the async executor.
     fn request(&self, ctx: &ModelContext) -> Result<ModelDecision, ModelError> {
         let url = format!("{}/chat/completions", self.endpoint.trim_end_matches('/'));
-        let body = serde_json::json!({
-            "model": self.model,
-            "messages": [{ "role": "user", "content": render_context(ctx) }],
-            "tools": tool_schemas(),
-            "tool_choice": "auto",
-        });
+        let body_str = openai_request_body(&self.model, ctx);
 
         let mut req = ureq::post(&url)
             .timeout(self.timeout)
@@ -69,13 +75,25 @@ impl OpenAiClient {
         if let Some(key) = &self.api_key {
             req = req.set("Authorization", &format!("Bearer {key}"));
         }
-        let body_str = body.to_string();
         let resp = req.send_string(&body_str).map_err(map_ureq_error)?;
         let text: String = resp
             .into_string()
             .map_err(|e| ModelError::Transport(e.to_string()))?;
         parse_response(&text)
     }
+}
+
+/// The exact JSON body POSTed to `/chat/completions`: the bounded context as
+/// the user message, plus the five tool schemas. Exposed so a caller can bill
+/// the full outbound request against a budget (N11).
+pub fn openai_request_body(model: &str, ctx: &ModelContext) -> String {
+    serde_json::json!({
+        "model": model,
+        "messages": [{ "role": "user", "content": render_context(ctx) }],
+        "tools": tool_schemas(),
+        "tool_choice": "auto",
+    })
+    .to_string()
 }
 
 /// Map a transport/HTTP error to [`ModelError`], never echoing the API key.

@@ -158,6 +158,26 @@ impl Journal for SqliteJournal {
             .map_err(|e| JournalError::Storage(e.to_string()))?;
         Ok(max.map(|m| m as u64))
     }
+
+    fn record_turn(&mut self, decision: &str, error: Option<&str>) -> Result<(), JournalError> {
+        let sid = self.session.as_str();
+        self.conn
+            .execute(
+                "INSERT INTO agent_turns (session_id, decision, error) VALUES (?1, ?2, ?3)",
+                params![sid, decision, error],
+            )
+            .map_err(|e| JournalError::Storage(e.to_string()))?;
+        Ok(())
+    }
+
+    fn record_tool_requested(
+        &mut self,
+        call: ToolCallId,
+        request: &str,
+    ) -> Result<(), JournalError> {
+        let sid = self.session.as_str();
+        upsert_tool_requested(&self.conn, sid, call, request)
+    }
 }
 
 fn insert_transition(
@@ -190,10 +210,36 @@ fn upsert_tool_state(
     call: ToolCallId,
     state: &str,
 ) -> Result<(), JournalError> {
+    // Preserves any recorded `request` payload: only `state` is touched on
+    // conflict, so the durable request written at the `Requested` boundary
+    // survives the later `Running`/terminal updates.
     conn.execute(
         "INSERT INTO tool_calls (session_id, call_id, state) VALUES (?1, ?2, ?3)
          ON CONFLICT(session_id, call_id) DO UPDATE SET state = excluded.state",
         params![sid, call.as_u64(), state],
+    )
+    .map_err(|e| JournalError::Storage(e.to_string()))?;
+    Ok(())
+}
+
+/// Record the `Requested` boundary: store the typed request payload alongside
+/// the state. On conflict (a later lifecycle step already ran) the payload is
+/// refreshed but the newer state is kept.
+fn upsert_tool_requested(
+    conn: &Connection,
+    sid: &str,
+    call: ToolCallId,
+    request: &str,
+) -> Result<(), JournalError> {
+    conn.execute(
+        "INSERT INTO tool_calls (session_id, call_id, state, request) VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(session_id, call_id) DO UPDATE SET request = excluded.request",
+        params![
+            sid,
+            call.as_u64(),
+            ToolCallState::Requested.as_str(),
+            request
+        ],
     )
     .map_err(|e| JournalError::Storage(e.to_string()))?;
     Ok(())

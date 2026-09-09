@@ -11,4 +11,4 @@ mod agent;
 mod dispatch;
 
 pub use agent::{AgentConfig, AgentError, AgentLoop, Delivery};
-pub use dispatch::{dispatch, observations_for, ToolOutcome};
+pub use dispatch::{dispatch, ToolOutcome};

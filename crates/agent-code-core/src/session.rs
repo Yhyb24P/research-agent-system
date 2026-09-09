@@ -21,15 +21,19 @@ impl<J: Journal> Session<J> {
     }
 
     /// Recover an existing session from its journal. Any `Running` tool is
-    /// marked `Interrupted` so it is never blindly replayed; if the crash left
-    /// the session mid-tool, it atomically resumes to `Observing` so the next
-    /// model turn can proceed (the `Interrupted` state is preserved).
+    /// marked `Interrupted` so it is never blindly replayed. A crash that left
+    /// the session mid-tool, mid-model-request, or mid-verification resumes
+    /// atomically to `Observing` so the next model turn can proceed: the
+    /// in-flight request is retried as a fresh turn, never replayed.
     pub fn recover(mut journal: J) -> Result<Self, JournalError> {
         let state = journal
             .current_state()?
             .ok_or(JournalError::UnknownSession)?;
         recover_interrupted_tools(&mut journal)?;
-        let state = if matches!(state, AgentState::ExecutingTool { .. }) {
+        let state = if matches!(
+            state,
+            AgentState::ExecutingTool { .. } | AgentState::WaitingModel | AgentState::Verifying
+        ) {
             journal.record_transition(state, AgentState::Observing)?;
             AgentState::Observing
         } else {
@@ -47,6 +51,31 @@ impl<J: Journal> Session<J> {
     /// (e.g. the highest tool-call id) to resume a recovered session.
     pub fn journal(&self) -> &J {
         &self.journal
+    }
+
+    /// Record a model turn (the serialized decision and any error) durably.
+    pub fn record_turn(&mut self, decision: &str, error: Option<&str>) -> Result<(), JournalError> {
+        self.journal.record_turn(decision, error)
+    }
+
+    /// Record that a tool call was requested, storing its typed request payload
+    /// (the `Requested` lifecycle boundary, before execution begins).
+    pub fn record_tool_requested(
+        &mut self,
+        call: ToolCallId,
+        request: &str,
+    ) -> Result<(), JournalError> {
+        self.journal.record_tool_requested(call, request)
+    }
+
+    /// Record a tool-call lifecycle state change without a session transition
+    /// (used for verification commands that run inside `Verifying`).
+    pub fn record_tool_state(
+        &mut self,
+        call: ToolCallId,
+        state: ToolCallState,
+    ) -> Result<(), JournalError> {
+        self.journal.record_tool_state(call, state)
     }
 
     /// Move to `Observing`.

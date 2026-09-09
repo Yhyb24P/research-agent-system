@@ -5,7 +5,7 @@ mod openai;
 mod types;
 
 pub use client::{ModelClient, StubModelClient};
-pub use openai::OpenAiClient;
+pub use openai::{openai_request_body, OpenAiClient};
 pub use types::{ModelContext, ModelDecision, ModelError, Observation};
 
 #[cfg(test)]

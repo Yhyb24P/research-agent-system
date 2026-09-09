@@ -3,13 +3,16 @@
 
 use agent_code_context::{
     build_compact_context, BytesTokenCounter, ContextBudget, HistorySink, HistorySource,
+    TokenCounter,
 };
-use agent_code_core::{AgentState, Journal, JournalError, Session, SessionId, ToolCallId};
+use agent_code_core::{
+    AgentState, Journal, JournalError, Session, SessionId, ToolCallId, ToolCallState,
+};
 use agent_code_model::{ModelClient, ModelContext, ModelDecision, ModelError, Observation};
 use agent_code_tools::{ExecuteCommand, ToolRequest};
 use agent_code_workspace::{GitWorkspace, ToolError, Workspace};
 
-use crate::dispatch::{dispatch, observations_for};
+use crate::dispatch::dispatch;
 
 /// Errors from driving the agent loop.
 #[derive(Debug)]
@@ -171,7 +174,22 @@ impl<J: Journal> AgentLoop<J> {
         for _round in 0..self.cfg.max_rounds {
             let ctx = self.build_context()?;
             self.session.wait_model()?;
-            let decision = self.model.decide(&ctx).await?;
+            let decision = match self.model.decide(&ctx).await {
+                Ok(d) => {
+                    // Durable turn: the serialized decision, no error.
+                    self.session
+                        .record_turn(&Self::serialize_decision(&d), None)?;
+                    d
+                }
+                Err(e) => {
+                    // The in-flight request was lost. Record the failed turn
+                    // durably and leave the session in `WaitingModel`; a
+                    // recovery resumes to `Observing` and re-issues the request
+                    // as a fresh turn, never replaying it.
+                    self.session.record_turn("", Some(&e.to_string()))?;
+                    return Err(AgentError::Model(e));
+                }
+            };
             match decision {
                 ModelDecision::Final(summary) => match self.finalize(summary).await? {
                     Some(delivery) => return Ok(delivery),
@@ -188,15 +206,20 @@ impl<J: Journal> AgentLoop<J> {
         Err(AgentError::MaxRounds)
     }
 
-    /// One tool round: assign a monotonic call id, atomically begin it, run
-    /// the real tool, record the result durably, and close the call.
+    /// One tool round: assign a monotonic call id, durably record the typed
+    /// request at the `Requested` boundary, atomically begin it, run the real
+    /// tool, record the result durably, and close the call.
     async fn step_tool(&mut self, req: ToolRequest) -> Result<(), AgentError> {
         let call = ToolCallId::new(self.next_call);
         self.next_call += 1;
+        // Durable `Requested` boundary: store the typed request payload before
+        // execution, so a crash between request and result is recoverable.
+        self.session
+            .record_tool_requested(call, &Self::serialize_request(&req))?;
         self.session.begin_tool(call)?;
         let outcome = dispatch(&self.ws, &req);
-        for obs in observations_for(&req, &outcome) {
-            self.sink.append(&self.session_id, &obs)?;
+        for obs in &outcome.observations {
+            self.sink.append(&self.session_id, obs)?;
         }
         if outcome.ok {
             self.session.tool_succeeded(call)?;
@@ -221,16 +244,32 @@ impl<J: Journal> AgentLoop<J> {
         let mut checks_run = Vec::new();
         if let Some(check) = &self.cfg.verify {
             let req = ToolRequest::ExecuteCommand(check.clone());
+            // The verification command reuses the tool execution + journal
+            // path: a monotonic call id and the Requested -> Running ->
+            // terminal lifecycle, recorded without a session transition (we
+            // are in `Verifying`, not `ExecutingTool`).
+            let call = ToolCallId::new(self.next_call);
+            self.next_call += 1;
+            self.session
+                .record_tool_requested(call, &Self::serialize_request(&req))?;
+            self.session
+                .record_tool_state(call, ToolCallState::Running)?;
             let outcome = dispatch(&self.ws, &req);
+            // Record the check output durably either way, so the full record of
+            // every check (pass or fail) survives.
+            for obs in &outcome.observations {
+                self.sink.append(&self.session_id, obs)?;
+            }
             if !outcome.ok {
-                // The check failed: record it durably and return to Observing so
-                // the next model turn sees the failure and can self-correct.
-                for obs in observations_for(&req, &outcome) {
-                    self.sink.append(&self.session_id, &obs)?;
-                }
+                // The check failed: return to Observing so the next model turn
+                // sees the failure and can self-correct.
+                self.session
+                    .record_tool_state(call, ToolCallState::Failed)?;
                 self.session.observe()?; // Verifying -> Observing
                 return Ok(None);
             }
+            self.session
+                .record_tool_state(call, ToolCallState::Succeeded)?;
             checks_run.push(req.describe());
         }
 
@@ -242,15 +281,31 @@ impl<J: Journal> AgentLoop<J> {
 
     /// Build the next turn's bounded context from the durable history.
     fn build_context(&self) -> Result<ModelContext, AgentError> {
+        let counter = BytesTokenCounter::default();
+        let mut budget = self.cfg.budget;
+        // Reserve the client's fixed protocol overhead so the full outbound
+        // request (context + framing + tool schemas) stays within the budget
+        // (N11), not just the rendered context.
+        budget.protocol_overhead = counter.count(&self.model.protocol_overhead());
         Ok(build_compact_context(
             self.source.as_ref(),
             &self.session_id,
             &self.cfg.task,
             &self.cfg.project_rules,
             &self.cfg.repository_map,
-            &self.cfg.budget,
-            &BytesTokenCounter::default(),
+            &budget,
+            &counter,
         )?)
+    }
+
+    /// The durable form of a model decision (the serialized decision).
+    fn serialize_decision(d: &ModelDecision) -> String {
+        serde_json::to_string(d).unwrap_or_else(|_| "<unserializable>".into())
+    }
+
+    /// The durable form of a typed tool request (the `Requested` payload).
+    fn serialize_request(req: &ToolRequest) -> String {
+        serde_json::to_string(req).unwrap_or_else(|_| "<unserializable>".into())
     }
 
     /// Assemble the delivery from the isolated worktree's real diff.
@@ -506,5 +561,59 @@ mod tests {
         );
         let _ = git.remove();
         let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// N11: reserving the client's fixed protocol overhead in the budget keeps
+    /// the *full* outbound request (context + framing + tool schemas) within
+    /// the configured input budget, not just the rendered context.
+    #[test]
+    fn outbound_request_reserves_protocol_overhead_within_input_budget() {
+        use agent_code_context::{build_compact_context, BytesTokenCounter, TokenCounter};
+        use agent_code_model::{openai_request_body, OpenAiClient};
+        use std::time::Duration;
+
+        /// An empty history source.
+        struct Empty;
+        impl HistorySource for Empty {
+            fn observations(&self, _s: &SessionId) -> Result<Vec<Observation>, ContextError> {
+                Ok(Vec::new())
+            }
+        }
+
+        let client = OpenAiClient::new(
+            "http://localhost/v1",
+            "test-model",
+            None,
+            Duration::from_secs(5),
+        );
+        let counter = BytesTokenCounter::default();
+        // Reserve the client's fixed protocol overhead (schemas + framing).
+        let mut budget = ContextBudget::new(4000, 200);
+        budget.protocol_overhead = counter.count(&client.protocol_overhead());
+        assert!(
+            budget.protocol_overhead > 0,
+            "the client must declare overhead"
+        );
+
+        let ctx = build_compact_context(
+            &Empty,
+            &SessionId::new("n11"),
+            "a small task",
+            "",
+            "",
+            &budget,
+            &counter,
+        )
+        .unwrap();
+
+        // The full outbound request must fit the configured input budget.
+        let body = openai_request_body("test-model", &ctx);
+        let input_budget = budget.max_tokens - budget.reserved_output;
+        assert!(
+            counter.count(&body) <= input_budget,
+            "outbound request ({}) must fit the input budget ({})",
+            counter.count(&body),
+            input_budget
+        );
     }
 }

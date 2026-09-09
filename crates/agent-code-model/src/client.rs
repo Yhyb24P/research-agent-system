@@ -9,6 +9,14 @@ use crate::types::{ModelContext, ModelDecision, ModelError};
 pub trait ModelClient: Send {
     /// Ask the model for the next decision given the compact context.
     async fn decide(&self, ctx: &ModelContext) -> Result<ModelDecision, ModelError>;
+
+    /// The fixed, context-independent part of this client's outbound request
+    /// (tool schemas + message framing), as the exact text that is sent. A
+    /// caller bills it against the context budget so the full request — not
+    /// just the context — fits the configured input budget (N11).
+    fn protocol_overhead(&self) -> String {
+        String::new()
+    }
 }
 
 /// A deterministic stub that always returns the same decision. Used by tests

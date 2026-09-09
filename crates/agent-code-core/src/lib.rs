@@ -235,5 +235,21 @@ mod tests {
         fn highest_call_id(&self) -> Result<Option<u64>, JournalError> {
             Ok(None)
         }
+
+        fn record_turn(
+            &mut self,
+            _decision: &str,
+            _error: Option<&str>,
+        ) -> Result<(), JournalError> {
+            Ok(())
+        }
+
+        fn record_tool_requested(
+            &mut self,
+            _call: ToolCallId,
+            _request: &str,
+        ) -> Result<(), JournalError> {
+            Ok(())
+        }
     }
 }

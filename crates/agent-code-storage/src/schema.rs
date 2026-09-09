@@ -10,12 +10,14 @@ CREATE TABLE IF NOT EXISTS sessions (
 CREATE TABLE IF NOT EXISTS agent_turns (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id TEXT NOT NULL REFERENCES sessions(id),
-    decision TEXT NOT NULL
+    decision TEXT NOT NULL,
+    error TEXT
 );
 CREATE TABLE IF NOT EXISTS tool_calls (
     session_id TEXT NOT NULL,
     call_id INTEGER NOT NULL,
     state TEXT NOT NULL,
+    request TEXT,
     PRIMARY KEY (session_id, call_id)
 );
 CREATE TABLE IF NOT EXISTS checkpoints (

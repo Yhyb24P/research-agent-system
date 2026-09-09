@@ -91,7 +91,7 @@ impl Observation {
 }
 
 /// The model's decision: either a final answer or a tool call to run next.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub enum ModelDecision {
     /// The task is complete; the inner value is the final summary.
     Final(String),

@@ -42,6 +42,19 @@ pub trait Journal {
     /// The highest tool-call id recorded for this session, if any. Lets a
     /// recovered loop resume monotonic ids without reusing a spent one.
     fn highest_call_id(&self) -> Result<Option<u64>, JournalError>;
+
+    /// Record one model turn: the serialized decision and any error. A failed
+    /// model request records its error so a recovery can see the turn was lost
+    /// and re-issue it as a fresh turn.
+    fn record_turn(&mut self, decision: &str, error: Option<&str>) -> Result<(), JournalError>;
+
+    /// Record that a tool call was requested, storing its typed request payload
+    /// durably (the `Requested` lifecycle boundary, before execution begins).
+    fn record_tool_requested(
+        &mut self,
+        call: ToolCallId,
+        request: &str,
+    ) -> Result<(), JournalError>;
 }
 
 /// A journal backed by in-memory vectors. Bound to one session.
@@ -50,6 +63,8 @@ pub struct InMemoryJournal {
     state: Option<AgentState>,
     transitions: Vec<(AgentState, AgentState)>,
     tool_states: Vec<(ToolCallId, ToolCallState)>,
+    turns: Vec<(String, Option<String>)>,
+    tool_requests: Vec<(ToolCallId, String)>,
 }
 
 impl InMemoryJournal {
@@ -60,6 +75,8 @@ impl InMemoryJournal {
             state: None,
             transitions: Vec::new(),
             tool_states: Vec::new(),
+            turns: Vec::new(),
+            tool_requests: Vec::new(),
         }
     }
 
@@ -71,6 +88,20 @@ impl InMemoryJournal {
     /// The recorded transitions, in order.
     pub fn transitions(&self) -> &[(AgentState, AgentState)] {
         &self.transitions
+    }
+
+    /// The recorded model turns (decision, error), in order.
+    pub fn turns(&self) -> &[(String, Option<String>)] {
+        &self.turns
+    }
+
+    /// The durable request payload for a tool call, if recorded.
+    pub fn tool_request(&self, call: ToolCallId) -> Option<&str> {
+        self.tool_requests
+            .iter()
+            .rev()
+            .find(|(c, _)| *c == call)
+            .map(|(_, r)| r.as_str())
     }
 
     /// The most recently recorded state for a tool call, if any.
@@ -144,5 +175,21 @@ impl Journal for InMemoryJournal {
 
     fn highest_call_id(&self) -> Result<Option<u64>, JournalError> {
         Ok(self.tool_states.iter().map(|(c, _)| c.as_u64()).max())
+    }
+
+    fn record_turn(&mut self, decision: &str, error: Option<&str>) -> Result<(), JournalError> {
+        self.turns
+            .push((decision.to_string(), error.map(|s| s.to_string())));
+        Ok(())
+    }
+
+    fn record_tool_requested(
+        &mut self,
+        call: ToolCallId,
+        request: &str,
+    ) -> Result<(), JournalError> {
+        self.tool_requests.push((call, request.to_string()));
+        self.tool_states.push((call, ToolCallState::Requested));
+        Ok(())
     }
 }
