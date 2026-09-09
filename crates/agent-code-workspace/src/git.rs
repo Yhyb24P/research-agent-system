@@ -99,6 +99,19 @@ impl GitWorkspace {
         run_git(&self.worktree, &["diff", "--cached", since])
     }
 
+    /// Paths changed (added/modified/deleted) from `since` to the current
+    /// worktree, sorted. Includes new files.
+    pub fn changed_files(&self, since: &str) -> Result<Vec<String>, ToolError> {
+        run_git(&self.worktree, &["add", "-A"])?;
+        let out = run_git(&self.worktree, &["diff", "--cached", "--name-only", since])?;
+        Ok(out
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .map(str::to_string)
+            .collect())
+    }
+
     /// Roll the worktree back to `sha`: hard-reset tracked files and remove
     /// untracked ones.
     pub fn rollback(&self, sha: &str) -> Result<(), ToolError> {

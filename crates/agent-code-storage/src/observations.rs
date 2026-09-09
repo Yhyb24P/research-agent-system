@@ -1,7 +1,7 @@
 //! Append-only durable observations. Records are never compacted or deleted
 //! here; the context layer only reads them to build a bounded projection.
 
-use agent_code_context::{ContextError, HistorySource};
+use agent_code_context::{ContextError, HistorySink, HistorySource};
 use agent_code_core::SessionId;
 use agent_code_model::Observation;
 use rusqlite::params;
@@ -43,6 +43,20 @@ impl SqliteJournal {
 impl HistorySource for SqliteJournal {
     fn observations(&self, session: &SessionId) -> Result<Vec<Observation>, ContextError> {
         self.fetch(session.as_str())
+            .map_err(|e| ContextError::History(e.to_string()))
+    }
+}
+
+impl HistorySink for SqliteJournal {
+    fn append(&self, session: &SessionId, obs: &Observation) -> Result<(), ContextError> {
+        // This journal is bound to a single session; refuse to write to any
+        // other session rather than silently cross-contaminate.
+        if session != self.session() {
+            return Err(ContextError::History(
+                "observation sink is bound to a different session".into(),
+            ));
+        }
+        self.append_observation(obs)
             .map_err(|e| ContextError::History(e.to_string()))
     }
 }

@@ -13,6 +13,14 @@ pub trait HistorySource {
     fn observations(&self, session: &SessionId) -> Result<Vec<Observation>, ContextError>;
 }
 
+/// The write side of a durable observation history. The runtime appends
+/// decisions and tool results through it; the storage layer implements it.
+/// Paired with [`HistorySource`]: a store that is both can feed the next
+/// model turn what it just recorded.
+pub trait HistorySink {
+    fn append(&self, session: &SessionId, obs: &Observation) -> Result<(), ContextError>;
+}
+
 /// Collapse older observations into a bounded, deterministic summary that
 /// retains commands (program/argv/exit), changed files, tool outcomes, error
 /// signatures (deduplicated, counts summed), and deduplicated log lines, plus

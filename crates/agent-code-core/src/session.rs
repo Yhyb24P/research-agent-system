@@ -43,6 +43,12 @@ impl<J: Journal> Session<J> {
         self.state
     }
 
+    /// The underlying journal, for callers that need to read persisted facts
+    /// (e.g. the highest tool-call id) to resume a recovered session.
+    pub fn journal(&self) -> &J {
+        &self.journal
+    }
+
     /// Move to `Observing`.
     pub fn observe(&mut self) -> Result<(), JournalError> {
         self.transition_to(AgentState::Observing)
@@ -140,6 +146,9 @@ impl<J: Journal> Session<J> {
             (AgentState::Initializing, AgentState::Observing)
                 | (AgentState::Observing, AgentState::WaitingModel)
                 | (AgentState::WaitingModel, AgentState::ExecutingTool { .. })
+                // The model decided there is no tool to run (a final answer):
+                // return to the Observing hub, from which verification proceeds.
+                | (AgentState::WaitingModel, AgentState::Observing)
                 | (AgentState::ExecutingTool { .. }, AgentState::Observing)
                 | (AgentState::Observing, AgentState::Verifying)
                 | (AgentState::Verifying, AgentState::Observing)

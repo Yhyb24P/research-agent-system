@@ -37,6 +37,7 @@ crates/
   agent-code-workspace/  # project rules, Git worktree/checkpoint, path handling, diff/rollback
   agent-code-context/    # context budget, truncation, compaction, repository map
   agent-code-storage/    # small SQLite journal
+  agent-code-runtime/    # the native Agent loop: model decisions, tool dispatch, durable history
   agent-code-team/       # Agent registry, lead, task board, scheduling, result flow
   agent-code-tui/        # ratatui/crossterm
   agent-code-cli/        # clap

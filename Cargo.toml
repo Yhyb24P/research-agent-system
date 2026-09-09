@@ -7,6 +7,7 @@ members = [
     "crates/agent-code-workspace",
     "crates/agent-code-context",
     "crates/agent-code-storage",
+    "crates/agent-code-runtime",
     "crates/agent-code-team",
     "crates/agent-code-tui",
     "crates/agent-code-cli",

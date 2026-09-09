@@ -231,5 +231,9 @@ mod tests {
             }
             Ok(Vec::new())
         }
+
+        fn highest_call_id(&self) -> Result<Option<u64>, JournalError> {
+            Ok(None)
+        }
     }
 }

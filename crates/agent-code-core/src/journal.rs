@@ -38,6 +38,10 @@ pub trait Journal {
 
     /// The tool calls still in the non-terminal `Running` state for this session.
     fn running_tools(&self) -> Result<Vec<ToolCallId>, JournalError>;
+
+    /// The highest tool-call id recorded for this session, if any. Lets a
+    /// recovered loop resume monotonic ids without reusing a spent one.
+    fn highest_call_id(&self) -> Result<Option<u64>, JournalError>;
 }
 
 /// A journal backed by in-memory vectors. Bound to one session.
@@ -136,5 +140,9 @@ impl Journal for InMemoryJournal {
             .filter(|(_, s)| matches!(s, ToolCallState::Running))
             .map(|(c, _)| c)
             .collect())
+    }
+
+    fn highest_call_id(&self) -> Result<Option<u64>, JournalError> {
+        Ok(self.tool_states.iter().map(|(c, _)| c.as_u64()).max())
     }
 }

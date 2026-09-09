@@ -95,8 +95,8 @@ impl Observation {
 pub enum ModelDecision {
     /// The task is complete; the inner value is the final summary.
     Final(String),
-    /// Run a tool next; the inner value is an opaque request the caller assigns.
-    ToolCall(String),
+    /// Run a tool next; the inner value is a typed tool request.
+    ToolCall(agent_code_tools::ToolRequest),
 }
 
 /// Errors returned by a [`ModelClient`](crate::ModelClient).

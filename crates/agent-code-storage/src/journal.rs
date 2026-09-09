@@ -145,6 +145,19 @@ impl Journal for SqliteJournal {
         }
         Ok(out)
     }
+
+    fn highest_call_id(&self) -> Result<Option<u64>, JournalError> {
+        let sid = self.session.as_str();
+        let max: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT MAX(call_id) FROM tool_calls WHERE session_id = ?1",
+                params![sid],
+                |row| row.get(0),
+            )
+            .map_err(|e| JournalError::Storage(e.to_string()))?;
+        Ok(max.map(|m| m as u64))
+    }
 }
 
 fn insert_transition(

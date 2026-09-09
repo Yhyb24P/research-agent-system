@@ -1,0 +1,19 @@
+[package]
+name = "agent-code-runtime"
+description = "Native Coding Agent loop: model decisions, tool dispatch, durable history"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+agent-code-core = { path = "../agent-code-core" }
+agent-code-model = { path = "../agent-code-model" }
+agent-code-tools = { path = "../agent-code-tools" }
+agent-code-workspace = { path = "../agent-code-workspace" }
+agent-code-context = { path = "../agent-code-context" }
+
+[dev-dependencies]
+agent-code-storage = { path = "../agent-code-storage" }
+async-trait.workspace = true
+tokio.workspace = true

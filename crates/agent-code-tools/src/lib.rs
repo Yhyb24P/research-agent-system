@@ -4,7 +4,7 @@
 //! (filesystem access, command execution, search) land in R2.
 
 /// Request for `view_file`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ViewFile {
     pub path: String,
     pub start_line: u32,
@@ -12,7 +12,7 @@ pub struct ViewFile {
 }
 
 /// Request for `edit_file`. Exact unique match with an optional expected hash.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct EditFile {
     pub path: String,
     pub old_str: String,
@@ -21,7 +21,7 @@ pub struct EditFile {
 }
 
 /// Request for `write_file`. New files or explicit short-file replacement.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct WriteFile {
     pub path: String,
     pub content: String,
@@ -32,7 +32,7 @@ pub struct WriteFile {
 }
 
 /// Request for `search_dir`. Bounded ripgrep-style traversal.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SearchDir {
     pub pattern: String,
     pub glob: Option<String>,
@@ -40,7 +40,7 @@ pub struct SearchDir {
 }
 
 /// Request for `execute_command`. Structured argv by default.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ExecuteCommand {
     pub program: String,
     pub args: Vec<String>,
@@ -57,6 +57,43 @@ pub struct ToolResult {
     pub head: String,
     pub tail: String,
     pub truncated: bool,
+}
+
+/// A typed tool request: the union of the five tool requests. The model layer
+/// produces these (replacing an opaque string) and the runtime dispatches them.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum ToolRequest {
+    ViewFile(ViewFile),
+    EditFile(EditFile),
+    WriteFile(WriteFile),
+    SearchDir(SearchDir),
+    ExecuteCommand(ExecuteCommand),
+}
+
+impl ToolRequest {
+    /// The stable tool name, as the model and the durable log refer to it.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::ViewFile(_) => "view_file",
+            Self::EditFile(_) => "edit_file",
+            Self::WriteFile(_) => "write_file",
+            Self::SearchDir(_) => "search_dir",
+            Self::ExecuteCommand(_) => "execute_command",
+        }
+    }
+
+    /// A one-line, model-readable description of the request.
+    pub fn describe(&self) -> String {
+        match self {
+            Self::ViewFile(r) => format!("view_file {} [{}..{}]", r.path, r.start_line, r.end_line),
+            Self::EditFile(r) => format!("edit_file {}", r.path),
+            Self::WriteFile(r) => format!("write_file {}", r.path),
+            Self::SearchDir(r) => format!("search_dir /{}/", r.pattern),
+            Self::ExecuteCommand(r) => {
+                format!("execute_command {} {}", r.program, r.args.join(" "))
+            }
+        }
+    }
 }
 
 #[cfg(test)]
