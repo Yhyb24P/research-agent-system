@@ -1,9 +1,11 @@
 //! Small async model-client abstraction for the native Coding Agent.
 
 mod client;
+mod openai;
 mod types;
 
 pub use client::{ModelClient, StubModelClient};
+pub use openai::OpenAiClient;
 pub use types::{ModelContext, ModelDecision, ModelError, Observation};
 
 #[cfg(test)]
