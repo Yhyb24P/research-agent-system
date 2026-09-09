@@ -6,7 +6,7 @@ use agent_code_context::{
 };
 use agent_code_core::{AgentState, Journal, JournalError, Session, SessionId, ToolCallId};
 use agent_code_model::{ModelClient, ModelContext, ModelDecision, ModelError, Observation};
-use agent_code_tools::ToolRequest;
+use agent_code_tools::{ExecuteCommand, ToolRequest};
 use agent_code_workspace::{GitWorkspace, ToolError, Workspace};
 
 use crate::dispatch::{dispatch, observations_for};
@@ -84,15 +84,24 @@ pub struct AgentConfig {
     pub budget: ContextBudget,
     /// Maximum model rounds before the run is failed. Bounds the loop.
     pub max_rounds: u32,
+    /// Optional check run on every final decision. A non-zero exit records the
+    /// failure and loops back so the model can self-correct (N15).
+    pub verify: Option<ExecuteCommand>,
 }
 
-/// What the Agent delivers on success: the summary, the real diff, and the
-/// files it changed.
+/// What the Agent delivers on success: the summary, the real diff, the files
+/// it changed, the checks it ran, and any known failures or artifacts.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Delivery {
     pub summary: String,
     pub changed_files: Vec<String>,
     pub diff: String,
+    /// The verification checks that ran and passed before delivery.
+    pub checks_run: Vec<String>,
+    /// Failures the agent acknowledges at delivery time (empty on a clean run).
+    pub known_failures: Vec<String>,
+    /// Artifact paths the agent produced (empty when none).
+    pub artifacts: Vec<String>,
 }
 
 /// Drives one Coding Agent session to a terminal state.
@@ -164,9 +173,12 @@ impl<J: Journal> AgentLoop<J> {
             self.session.wait_model()?;
             let decision = self.model.decide(&ctx).await?;
             match decision {
-                ModelDecision::Final(summary) => {
-                    return self.finalize(summary).await;
-                }
+                ModelDecision::Final(summary) => match self.finalize(summary).await? {
+                    Some(delivery) => return Ok(delivery),
+                    // A configured check failed: its result is now in the
+                    // durable history, so the next model turn can react to it.
+                    None => continue,
+                },
                 ModelDecision::ToolCall(req) => {
                     self.step_tool(req).await?;
                 }
@@ -194,18 +206,38 @@ impl<J: Journal> AgentLoop<J> {
         Ok(())
     }
 
-    /// A final decision: record it, verify, deliver, complete.
-    async fn finalize(&mut self, summary: String) -> Result<Delivery, AgentError> {
+    /// A final decision: record it, run the configured check, then either
+    /// deliver (check passed or none configured) or loop back so the model can
+    /// self-correct. Returns `Some(delivery)` on success, `None` when a check
+    /// failed and the loop should continue (N15).
+    async fn finalize(&mut self, summary: String) -> Result<Option<Delivery>, AgentError> {
         self.sink.append(
             &self.session_id,
             &Observation::Text(format!("final: {summary}")),
         )?;
         self.session.observe()?;
         self.session.verify()?;
-        let delivery = self.build_delivery(&summary)?;
+
+        let mut checks_run = Vec::new();
+        if let Some(check) = &self.cfg.verify {
+            let req = ToolRequest::ExecuteCommand(check.clone());
+            let outcome = dispatch(&self.ws, &req);
+            if !outcome.ok {
+                // The check failed: record it durably and return to Observing so
+                // the next model turn sees the failure and can self-correct.
+                for obs in observations_for(&req, &outcome) {
+                    self.sink.append(&self.session_id, &obs)?;
+                }
+                self.session.observe()?; // Verifying -> Observing
+                return Ok(None);
+            }
+            checks_run.push(req.describe());
+        }
+
+        let delivery = self.build_delivery(&summary, checks_run)?;
         self.session.deliver()?;
         self.session.complete()?;
-        Ok(delivery)
+        Ok(Some(delivery))
     }
 
     /// Build the next turn's bounded context from the durable history.
@@ -222,7 +254,11 @@ impl<J: Journal> AgentLoop<J> {
     }
 
     /// Assemble the delivery from the isolated worktree's real diff.
-    fn build_delivery(&self, summary: &str) -> Result<Delivery, AgentError> {
+    fn build_delivery(
+        &self,
+        summary: &str,
+        checks_run: Vec<String>,
+    ) -> Result<Delivery, AgentError> {
         let since = self.git.initial_head();
         let changed_files = self.git.changed_files(since)?;
         let diff = self.git.diff(since)?;
@@ -230,6 +266,9 @@ impl<J: Journal> AgentLoop<J> {
             summary: summary.to_string(),
             changed_files,
             diff,
+            checks_run,
+            known_failures: Vec::new(),
+            artifacts: Vec::new(),
         })
     }
 }
@@ -313,6 +352,44 @@ mod tests {
         dir
     }
 
+    /// A repo whose `answer.txt` holds the wrong value; the check passes only
+    /// once the agent edits it to `4`.
+    fn temp_answer_repo() -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static SEQ: AtomicU32 = AtomicU32::new(0);
+        let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+        let dir =
+            std::env::temp_dir().join(format!("agent_code_rt_answer_{}_{seq}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(&dir)
+                .env("GIT_AUTHOR_NAME", "t")
+                .env("GIT_AUTHOR_EMAIL", "t@t")
+                .env("GIT_COMMITTER_NAME", "t")
+                .env("GIT_COMMITTER_EMAIL", "t@t")
+                .output()
+                .expect("run git")
+        };
+        git(&["init", "-q"]);
+        std::fs::write(dir.join("answer.txt"), "2\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-q", "-m", "init"]);
+        dir
+    }
+
+    fn answer_check() -> ExecuteCommand {
+        ExecuteCommand {
+            program: "sh".into(),
+            args: vec!["-c".into(), "test \"$(cat answer.txt)\" = \"4\"".into()],
+            cwd: None,
+            timeout_seconds: 10,
+            env: std::collections::BTreeMap::new(),
+        }
+    }
+
     #[tokio::test]
     async fn loop_dispatches_tools_and_delivers() {
         let repo = temp_git_repo();
@@ -340,6 +417,7 @@ mod tests {
             repository_map: String::new(),
             budget: ContextBudget::new(2000, 200),
             max_rounds: 5,
+            verify: None,
         };
         let mut loop_ = AgentLoop::new(
             session,
@@ -361,6 +439,72 @@ mod tests {
         assert!(obs
             .iter()
             .any(|o| matches!(o, Observation::Text(t) if t.starts_with("final:"))));
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    #[tokio::test]
+    async fn verification_failure_loops_back_until_the_check_passes() {
+        use agent_code_tools::EditFile;
+
+        let repo = temp_answer_repo();
+        let git = GitWorkspace::create(&repo).unwrap();
+        let sid = SessionId::new("s");
+        let session = Session::create(InMemoryJournal::new(sid.clone())).unwrap();
+        let store = MemStore::new();
+        // Final (check fails) -> corrective edit -> Final (check passes).
+        let model: Box<dyn ModelClient> = Box::new(Scripted {
+            decisions: Mutex::new(
+                vec![
+                    ModelDecision::Final("done".into()),
+                    ModelDecision::ToolCall(ToolRequest::EditFile(EditFile {
+                        path: "answer.txt".into(),
+                        old_str: "2".into(),
+                        new_str: "4".into(),
+                        expected_file_hash: None,
+                    })),
+                    ModelDecision::Final("fixed".into()),
+                ]
+                .into_iter()
+                .collect(),
+            ),
+        });
+        let cfg = AgentConfig {
+            task: "make the check pass".into(),
+            project_rules: String::new(),
+            repository_map: String::new(),
+            budget: ContextBudget::new(2000, 200),
+            max_rounds: 5,
+            verify: Some(answer_check()),
+        };
+        let mut loop_ = AgentLoop::new(
+            session,
+            model,
+            git.clone(),
+            Box::new(store.clone()),
+            Box::new(store.clone()),
+            cfg,
+            sid.clone(),
+        )
+        .unwrap();
+        let delivery = loop_.run().await.unwrap();
+
+        // Delivered on the corrected answer, with the check recorded.
+        assert_eq!(delivery.summary, "fixed");
+        assert_eq!(delivery.checks_run.len(), 1);
+        assert!(delivery.checks_run[0].contains("sh -c"));
+        assert!(delivery.changed_files.iter().any(|f| f == "answer.txt"));
+        assert!(delivery.diff.contains("4"));
+
+        // The failed check entered the durable history (a recorded check error).
+        let obs = store.obs.lock().unwrap();
+        assert!(
+            obs.iter().any(|o| matches!(
+                o,
+                Observation::Error { signature, .. } if signature.contains("sh failed")
+            )),
+            "expected a recorded check failure: {obs:?}"
+        );
+        let _ = git.remove();
         let _ = std::fs::remove_dir_all(&repo);
     }
 }
