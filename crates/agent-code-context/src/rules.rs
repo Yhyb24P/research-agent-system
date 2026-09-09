@@ -13,20 +13,35 @@ const RULE_FILES: [&str; 3] = ["AGENTS.md", "CLAUDE.md", "QWEN.md"];
 /// exists but cannot be read (permissions, invalid UTF-8, ...) is an error, so
 /// the Agent never silently ignores project rules.
 ///
+/// Path containment: the root and each rule file are canonicalized, and a
+/// rule file that resolves outside the repository root (e.g. a symlinked
+/// AGENTS.md) is an error, not silently followed.
+///
 /// Per-directory (nested) rules are deferred to R4.
 pub fn load_project_rules(root: &Path, cap: usize) -> Result<String, ContextError> {
+    let canon_root = std::fs::canonicalize(root).map_err(|e| ContextError::Io(e.to_string()))?;
     let mut out = String::new();
     for name in RULE_FILES {
-        match std::fs::read_to_string(root.join(name)) {
-            Ok(body) => {
-                if !out.is_empty() {
-                    out.push('\n');
-                }
-                out.push_str(&format!("## {name}\n{body}"));
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        let path = canon_root.join(name);
+        // Resolve symlinks; a missing file is skipped, a dangling/invalid one
+        // is an error.
+        let resolved = match std::fs::canonicalize(&path) {
+            Ok(p) => p,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
             Err(e) => return Err(ContextError::Io(e.to_string())),
+        };
+        // Containment: the resolved file must stay under the repository root.
+        if !resolved.starts_with(&canon_root) {
+            return Err(ContextError::Io(format!(
+                "rule file {name} escapes the repository root"
+            )));
         }
+        let body =
+            std::fs::read_to_string(&resolved).map_err(|e| ContextError::Io(e.to_string()))?;
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(&format!("## {name}\n{body}"));
     }
     Ok(truncate_chars(&out, cap))
 }
@@ -85,5 +100,21 @@ mod tests {
         let err = load_project_rules(&dir, 100).unwrap_err();
         assert!(matches!(err, ContextError::Io(_)));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn symlinked_rule_cannot_escape_the_repository() {
+        // An AGENTS.md that is a symlink pointing outside the repository root
+        // must not be followed: path containment is a global invariant.
+        let dir = temp_dir();
+        let outside = temp_dir();
+        let outside_file = outside.join("AGENTS.md");
+        std::fs::write(&outside_file, "outside rules").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&outside_file, dir.join("AGENTS.md")).unwrap();
+        let err = load_project_rules(&dir, 100).unwrap_err();
+        assert!(matches!(err, ContextError::Io(_)));
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&outside);
     }
 }

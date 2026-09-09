@@ -47,6 +47,7 @@ impl RepoMap {
         let mut entries: Vec<PathBuf> = Vec::new();
         let mut errors: Vec<String> = Vec::new();
         let mut dirs_scanned = 0usize;
+        let mut truncated = false;
         walk(
             &canon,
             0,
@@ -54,15 +55,13 @@ impl RepoMap {
             &mut entries,
             &mut errors,
             &mut dirs_scanned,
+            &mut truncated,
         )?;
         let mut rel: Vec<String> = entries
             .iter()
             .map(|p| p.strip_prefix(&canon).unwrap().display().to_string())
             .collect();
         rel.sort();
-        // Early-stop caps `entries` at max_entries; hitting the cap means there
-        // may be more, so the map is flagged truncated.
-        let truncated = rel.len() == opts.max_entries;
         Ok(RepoMap {
             root: canon.display().to_string(),
             entries: rel,
@@ -114,25 +113,40 @@ fn walk(
     entries: &mut Vec<PathBuf>,
     errors: &mut Vec<String>,
     dirs_scanned: &mut usize,
+    truncated: &mut bool,
 ) -> Result<(), ContextError> {
     // Stop descending once the entry cap is met: the traversal itself is
     // bounded, not just the final result.
-    if depth > opts.max_depth || entries.len() >= opts.max_entries {
+    if depth > opts.max_depth {
+        return Ok(());
+    }
+    if entries.len() >= opts.max_entries {
+        // The cap was already met before entering this directory, so its
+        // contents were not mapped: truncated.
+        *truncated = true;
         return Ok(());
     }
     *dirs_scanned += 1;
     let rd = std::fs::read_dir(dir).map_err(|e| ContextError::Io(e.to_string()))?;
+    // Visit children in sorted (by name) order so that which entries survive
+    // the cap is deterministic across filesystems, not dependent on the
+    // arbitrary read_dir enumeration order.
+    let mut children: Vec<std::fs::DirEntry> = Vec::new();
     for entry in rd {
+        match entry {
+            Ok(e) => children.push(e),
+            Err(e) => errors.push(format!("{}: {e}", dir.display())),
+        }
+    }
+    children.sort_by_key(|e| e.file_name());
+    for entry in children {
         if entries.len() >= opts.max_entries {
+            // Eligible entries remain but the cap is met: the map is
+            // truncated. Set only when we actually stop early — not when the
+            // repo has exactly the cap, or when the cap is zero.
+            *truncated = true;
             break;
         }
-        let entry = match entry {
-            Ok(e) => e,
-            Err(e) => {
-                errors.push(format!("{}: {e}", dir.display()));
-                continue;
-            }
-        };
         let ft = match entry.file_type() {
             Ok(ft) => ft,
             Err(e) => {
@@ -149,7 +163,15 @@ fn walk(
                 continue;
             }
             entries.push(path.clone());
-            walk(&path, depth + 1, opts, entries, errors, dirs_scanned)?;
+            walk(
+                &path,
+                depth + 1,
+                opts,
+                entries,
+                errors,
+                dirs_scanned,
+                truncated,
+            )?;
         } else {
             entries.push(path);
         }
@@ -278,6 +300,38 @@ mod tests {
         // Only a handful of the 40 subdirs were opened before the cap was hit;
         // a full scan would open all 40 (plus root).
         assert!(map.dirs_scanned() < 20);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn result_set_is_deterministic_regardless_of_creation_order() {
+        // Create files in reverse alphabetical order; the map must still
+        // select the alphabetically-first entries (deterministic), not the
+        // filesystem's enumeration order.
+        let dir = temp_dir();
+        for c in "abcdefghijklmnopqrstuvwxyz".chars().rev() {
+            std::fs::write(dir.join(format!("{c}.txt")), "x").unwrap();
+        }
+        let map = RepoMap::from_path(&dir, &opts(5, 5)).unwrap();
+        // The five alphabetically-smallest files, in sorted order.
+        assert_eq!(
+            map.entries(),
+            &["a.txt", "b.txt", "c.txt", "d.txt", "e.txt"]
+        );
+        assert!(map.truncated());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn exact_cap_is_not_flagged_truncated() {
+        // A repo with exactly `cap` entries is complete, not truncated.
+        let dir = temp_dir();
+        for c in ['a', 'b', 'c'] {
+            std::fs::write(dir.join(format!("{c}.txt")), "x").unwrap();
+        }
+        let map = RepoMap::from_path(&dir, &opts(5, 3)).unwrap();
+        assert_eq!(map.entries().len(), 3);
+        assert!(!map.truncated());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
