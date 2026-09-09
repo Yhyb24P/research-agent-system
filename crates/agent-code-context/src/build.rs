@@ -41,8 +41,8 @@ pub fn serialize_context(ctx: &ModelContext) -> String {
     }
     if !ctx.observations.is_empty() {
         out.push_str(OBS);
-        for o in &ctx.observations {
-            out.push_str(&o.render());
+        for line in &ctx.observations {
+            out.push_str(line);
             out.push('\n');
         }
     }
@@ -62,14 +62,15 @@ pub fn build_context(
     let free = budget.free_tokens();
     let mut ctx = ModelContext::default();
 
-    // 1. task: mandatory.
-    let task = truncate_chars(spec.task, budget.task_cap as usize);
-    let task_cost = counter.count(&format!("{TASK}{task}\n"));
-    if task_cost > free {
-        return Err(ContextError::BudgetTooSmall);
-    }
-    ctx.task = task;
-    let mut used = task_cost;
+    // 1. task: mandatory, but dynamically sized to fit both task_cap and the
+    //    free budget. Only if even the section framing does not fit do we fail.
+    let mut used = match fit_section(TASK, spec.task, budget.task_cap, free, counter) {
+        Some((content, cost)) => {
+            ctx.task = content;
+            cost
+        }
+        None => return Err(ContextError::BudgetTooSmall),
+    };
 
     // 2. project rules.
     if !spec.project_rules.is_empty() {
@@ -100,30 +101,24 @@ pub fn build_context(
     }
 
     // 4. recent observations: newest first, each capped, until the budget
-    //    runs out. The shared label is billed once.
-    let mut picked: Vec<(Observation, String)> = Vec::new();
+    //    runs out. The shared label is billed once. We store the exact
+    //    bounded text that was billed, so serialization cannot exceed it.
+    let mut picked: Vec<String> = Vec::new();
     for obs in spec.observations.iter().rev() {
         let rendered = truncate_chars(&obs.render(), budget.observation_cap as usize);
-        let mut lines: Vec<&str> = picked.iter().map(|(_, r)| r.as_str()).collect();
-        lines.push(&rendered);
+        let mut lines = picked.clone();
+        lines.push(rendered.clone());
         let block = format!("{OBS}{}\n", lines.join("\n"));
         if counter.count(&block) > free.saturating_sub(used) {
             break;
         }
-        picked.push((obs.clone(), rendered));
+        picked.push(rendered);
     }
     picked.reverse();
     if !picked.is_empty() {
-        let block = format!(
-            "{OBS}{}\n",
-            picked
-                .iter()
-                .map(|(_, r)| r.as_str())
-                .collect::<Vec<_>>()
-                .join("\n")
-        );
+        let block = format!("{OBS}{}\n", picked.join("\n"));
         used += counter.count(&block);
-        ctx.observations = picked.into_iter().map(|(o, _)| o).collect();
+        ctx.observations = picked;
     }
 
     // 5. compact summary of older observations: lowest priority.
@@ -142,10 +137,12 @@ pub fn build_context(
     Ok(ctx)
 }
 
-/// The largest char-prefix of `content` (capped to `cap` chars) whose
-/// serialized section (`label` + prefix + newline) fits in `remaining`
-/// tokens. Returns the prefix and its cost, or `None` if the label alone does
-/// not fit.
+/// The largest head/tail-truncated body of `content` (within `cap` chars)
+/// whose serialized section (`label` + body + newline) fits in `remaining`
+/// tokens. The body keeps both ends with a `…` marker when truncated, so a
+/// second, budget-driven truncation never silently drops the tail. Returns
+/// the body and its cost, or `None` if the section framing alone does not
+/// fit.
 fn fit_section(
     label: &str,
     content: &str,
@@ -156,22 +153,21 @@ fn fit_section(
     if counter.count(&format!("{label}\n")) > remaining {
         return None;
     }
-    let capped = truncate_chars(content, cap as usize);
-    let total = capped.chars().count();
+    // Largest char budget S (<= cap) whose head/tail-truncated body fits.
     let mut lo = 0usize;
-    let mut hi = total;
+    let mut hi = cap as usize;
     while lo < hi {
         let mid = (lo + hi).div_ceil(2);
-        let prefix: String = capped.chars().take(mid).collect();
-        if counter.count(&format!("{label}{prefix}\n")) <= remaining {
+        let body = truncate_chars(content, mid);
+        if counter.count(&format!("{label}{body}\n")) <= remaining {
             lo = mid;
         } else {
             hi = mid - 1;
         }
     }
-    let prefix: String = capped.chars().take(lo).collect();
-    let cost = counter.count(&format!("{label}{prefix}\n"));
-    Some((prefix, cost))
+    let body = truncate_chars(content, lo);
+    let cost = counter.count(&format!("{label}{body}\n"));
+    Some((body, cost))
 }
 
 #[cfg(test)]
@@ -217,11 +213,25 @@ mod tests {
 
     #[test]
     fn budget_too_small_for_task_errors() {
+        // Even the task section's framing ("[task]\n" + newline ≈ 3 tokens)
+        // does not fit, so there is no room for any task content.
         let c = counter();
-        let b = ContextBudget::new(4, 0);
+        let b = ContextBudget::new(2, 0);
         let err =
             build_context(&spec("a very long task that cannot fit", &[]), &b, &c).unwrap_err();
         assert!(matches!(err, ContextError::BudgetTooSmall));
+    }
+
+    #[test]
+    fn task_truncates_to_fit_instead_of_erroring() {
+        // A task longer than the budget is head/tail truncated to fit, not an
+        // error: only a budget that cannot hold the framing fails.
+        let c = counter();
+        let b = ContextBudget::new(10, 0);
+        let ctx = build_context(&spec("a very long task that cannot fit", &[]), &b, &c).unwrap();
+        assert!(ctx.task.chars().count() < "a very long task that cannot fit".chars().count());
+        assert!(ctx.task.contains('…'));
+        assert!(c.count(&serialize_context(&ctx)) <= b.free_tokens());
     }
 
     #[test]
@@ -242,10 +252,39 @@ mod tests {
         ];
         let ctx = build_context(&spec("task", &obs), &b, &c).unwrap();
         // Under a tight budget the newest observation is kept.
-        assert!(ctx
-            .observations
-            .iter()
-            .any(|o| matches!(o, Observation::Text(t) if t.contains("new"))));
+        assert!(ctx.observations.iter().any(|s| s.contains("new")));
+        assert!(c.count(&serialize_context(&ctx)) <= b.free_tokens());
+    }
+
+    #[test]
+    fn a_very_long_observation_is_stored_bounded() {
+        // An observation far larger than observation_cap is stored in its
+        // bounded, billed form (head/tail truncated to the cap), not the full
+        // original — so the serialized context can never exceed the budget
+        // because of uncounted re-rendering (N11).
+        let c = counter();
+        let b = ContextBudget::new(1000, 0);
+        let huge = "x".repeat(10_000);
+        let obs = [Observation::Text(huge)];
+        let ctx = build_context(&spec("task", &obs), &b, &c).unwrap();
+        assert_eq!(ctx.observations.len(), 1);
+        let stored = &ctx.observations[0];
+        // Exactly the bounded cap, not the 10k-character original.
+        assert_eq!(stored.chars().count(), b.observation_cap as usize);
+        assert!(stored.chars().count() < 10_000);
+        // N11: the exact serialized context (with the bounded obs) fits.
+        assert!(c.count(&serialize_context(&ctx)) <= b.free_tokens());
+    }
+
+    #[test]
+    fn a_very_long_observation_that_cannot_fit_is_dropped() {
+        // When even the bounded observation does not fit the remaining budget
+        // it is dropped; the context still respects the budget (N11).
+        let c = counter();
+        let b = ContextBudget::new(80, 0);
+        let obs = [Observation::Text("x".repeat(10_000))];
+        let ctx = build_context(&spec("task", &obs), &b, &c).unwrap();
+        assert!(ctx.observations.is_empty());
         assert!(c.count(&serialize_context(&ctx)) <= b.free_tokens());
     }
 
@@ -264,10 +303,7 @@ mod tests {
         let ctx = build_context(&s, &b, &c).unwrap();
         // The map is truncated to its cap, and the observation still fits.
         assert!(ctx.repository_map.chars().count() <= 10);
-        assert!(ctx
-            .observations
-            .iter()
-            .any(|o| matches!(o, Observation::Text(t) if t == "kept")));
+        assert!(ctx.observations.iter().any(|s| s == "kept"));
     }
 
     #[test]
@@ -284,10 +320,7 @@ mod tests {
         let ctx = build_context(&s, &b, &c).unwrap();
         // The recent observation is kept; the compact summary is dropped or
         // truncated to fit what remains.
-        assert!(ctx
-            .observations
-            .iter()
-            .any(|o| matches!(o, Observation::Text(t) if t == "recent")));
+        assert!(ctx.observations.iter().any(|s| s == "recent"));
         assert!(c.count(&serialize_context(&ctx)) <= b.free_tokens());
     }
 

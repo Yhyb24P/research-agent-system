@@ -32,6 +32,10 @@ pub struct RepoMap {
     entries: Vec<String>,
     truncated: bool,
     errors: Vec<String>,
+    /// Number of directories the traversal actually opened. Stays bounded by
+    /// the entry cap: once the cap is reached the walk stops, so this proves
+    /// the traversal itself is bounded, not just the result.
+    dirs_scanned: usize,
 }
 
 impl RepoMap {
@@ -42,22 +46,29 @@ impl RepoMap {
         let canon = std::fs::canonicalize(root).map_err(|e| ContextError::Io(e.to_string()))?;
         let mut entries: Vec<PathBuf> = Vec::new();
         let mut errors: Vec<String> = Vec::new();
-        walk(&canon, 0, opts, &mut entries, &mut errors)?;
+        let mut dirs_scanned = 0usize;
+        walk(
+            &canon,
+            0,
+            opts,
+            &mut entries,
+            &mut errors,
+            &mut dirs_scanned,
+        )?;
         let mut rel: Vec<String> = entries
             .iter()
             .map(|p| p.strip_prefix(&canon).unwrap().display().to_string())
             .collect();
         rel.sort();
-        let mut truncated = false;
-        if rel.len() > opts.max_entries {
-            rel.truncate(opts.max_entries);
-            truncated = true;
-        }
+        // Early-stop caps `entries` at max_entries; hitting the cap means there
+        // may be more, so the map is flagged truncated.
+        let truncated = rel.len() == opts.max_entries;
         Ok(RepoMap {
             root: canon.display().to_string(),
             entries: rel,
             truncated,
             errors,
+            dirs_scanned,
         })
     }
 
@@ -89,6 +100,11 @@ impl RepoMap {
     pub fn errors(&self) -> &[String] {
         &self.errors
     }
+
+    /// How many directories the traversal opened before stopping.
+    pub fn dirs_scanned(&self) -> usize {
+        self.dirs_scanned
+    }
 }
 
 fn walk(
@@ -97,12 +113,19 @@ fn walk(
     opts: &RepoMapOptions,
     entries: &mut Vec<PathBuf>,
     errors: &mut Vec<String>,
+    dirs_scanned: &mut usize,
 ) -> Result<(), ContextError> {
-    if depth > opts.max_depth {
+    // Stop descending once the entry cap is met: the traversal itself is
+    // bounded, not just the final result.
+    if depth > opts.max_depth || entries.len() >= opts.max_entries {
         return Ok(());
     }
+    *dirs_scanned += 1;
     let rd = std::fs::read_dir(dir).map_err(|e| ContextError::Io(e.to_string()))?;
     for entry in rd {
+        if entries.len() >= opts.max_entries {
+            break;
+        }
         let entry = match entry {
             Ok(e) => e,
             Err(e) => {
@@ -126,7 +149,7 @@ fn walk(
                 continue;
             }
             entries.push(path.clone());
-            walk(&path, depth + 1, opts, entries, errors)?;
+            walk(&path, depth + 1, opts, entries, errors, dirs_scanned)?;
         } else {
             entries.push(path);
         }
@@ -231,6 +254,30 @@ mod tests {
         // read_dir on a plain file fails; the error is surfaced, not ignored.
         let err = RepoMap::from_path(&file, &opts(1, 10));
         assert!(matches!(err, Err(ContextError::Io(_))));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn traversal_stops_at_the_entry_cap() {
+        // A tree far larger than the cap: many subdirs, each with files. The
+        // traversal must stop opening directories once the cap is met, not
+        // scan the whole tree and truncate afterwards.
+        let dir = temp_dir();
+        const SUBDIRS: usize = 40;
+        for i in 0..SUBDIRS {
+            let sub = dir.join(format!("d{i:02}"));
+            std::fs::create_dir_all(&sub).unwrap();
+            for j in 0..3 {
+                std::fs::write(sub.join(format!("f{j}.txt")), "x").unwrap();
+            }
+        }
+        let cap = 15;
+        let map = RepoMap::from_path(&dir, &opts(5, cap)).unwrap();
+        assert_eq!(map.entries().len(), cap);
+        assert!(map.truncated());
+        // Only a handful of the 40 subdirs were opened before the cap was hit;
+        // a full scan would open all 40 (plus root).
+        assert!(map.dirs_scanned() < 20);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

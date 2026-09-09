@@ -13,15 +13,17 @@ pub struct ModelContext {
     pub repository_map: String,
     /// A deterministic compaction of older observations.
     pub compact_summary: String,
-    /// Recent, individually bounded observations.
-    pub observations: Vec<Observation>,
+    /// Recent observations as the exact bounded text that was billed into the
+    /// context (head/tail truncated), so the serialized context can never
+    /// exceed the budget because of uncounted re-rendering.
+    pub observations: Vec<String>,
 }
 
-/// One structured thing the Agent observed. Plain data, no dependencies.
+/// One structured thing the Agent observed. Plain data.
 ///
 /// The durable journal stores these verbatim and never compacts them; the
 /// context layer projects a bounded view of them for the model.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Observation {
     /// A command ran. `exit` is `None` when the process was killed (timeout).
     Command {
@@ -76,70 +78,15 @@ impl Observation {
         }
     }
 
-    /// Compact durable form. Field separator `\u{1f}`, argv sub-separator
-    /// `\u{1d}`. Owned by this type; not a public interchange format.
+    /// Lossless durable form: a JSON document. Round-trips every field exactly,
+    /// including embedded control characters, empty strings, and Unicode.
     pub fn encode(&self) -> String {
-        match self {
-            Self::Command {
-                program,
-                argv,
-                exit,
-            } => {
-                let args = argv.join("\u{1d}");
-                let exit = match exit {
-                    Some(c) => c.to_string(),
-                    None => "~".to_string(),
-                };
-                format!("cmd\u{1f}{program}\u{1f}{args}\u{1f}{exit}")
-            }
-            Self::File { path, status } => format!("file\u{1f}{path}\u{1f}{status}"),
-            Self::Tool { name, ok } => {
-                format!("tool\u{1f}{name}\u{1f}{}", if *ok { "1" } else { "0" })
-            }
-            Self::Error { signature, count } => format!("err\u{1f}{signature}\u{1f}{count}"),
-            Self::Text(t) => format!("text\u{1f}{t}"),
-        }
+        serde_json::to_string(self).expect("Observation is JSON-serializable")
     }
 
     /// Parse the durable form produced by [`encode`](Self::encode).
     pub fn decode(s: &str) -> Result<Self, String> {
-        let parts: Vec<&str> = s.split('\u{1f}').collect();
-        match parts.first().copied() {
-            Some("cmd") => {
-                let program = parts.get(1).ok_or("cmd: missing program")?.to_string();
-                let argv = match parts.get(2) {
-                    Some(a) if !a.is_empty() => a.split('\u{1d}').map(str::to_string).collect(),
-                    _ => Vec::new(),
-                };
-                let exit = match parts.get(3) {
-                    Some(&"~") => None,
-                    Some(v) => Some(v.parse().map_err(|_| "cmd: bad exit".to_string())?),
-                    None => None,
-                };
-                Ok(Self::Command {
-                    program,
-                    argv,
-                    exit,
-                })
-            }
-            Some("file") => Ok(Self::File {
-                path: parts.get(1).ok_or("file: missing path")?.to_string(),
-                status: parts.get(2).ok_or("file: missing status")?.to_string(),
-            }),
-            Some("tool") => Ok(Self::Tool {
-                name: parts.get(1).ok_or("tool: missing name")?.to_string(),
-                ok: matches!(parts.get(2), Some(&"1")),
-            }),
-            Some("err") => Ok(Self::Error {
-                signature: parts.get(1).ok_or("err: missing signature")?.to_string(),
-                count: parts.get(2).and_then(|c| c.parse().ok()).unwrap_or(1),
-            }),
-            Some("text") => {
-                // Rejoin the tail in case the text itself contains the field sep.
-                Ok(Self::Text(parts[1..].join("\u{1f}")))
-            }
-            _ => Err(format!("unknown observation kind: {s}")),
-        }
+        serde_json::from_str(s).map_err(|e| e.to_string())
     }
 }
 
@@ -218,12 +165,41 @@ mod tests {
             signature: "E0308 mismatched types".into(),
             count: 3,
         });
-        // Text containing the field separator must survive via tail rejoin.
-        roundtrip(&Observation::Text("a\u{1f}b".into()));
+        roundtrip(&Observation::Text("a note".into()));
     }
 
     #[test]
-    fn decode_rejects_unknown_kind() {
-        assert!(Observation::decode("wat\u{1f}x").is_err());
+    fn hostile_fields_roundtrip_losslessly() {
+        // Both control characters (\u{1f}, \u{1d}), empty strings, and Unicode
+        // in every variant must round-trip exactly — the durable-history
+        // invariant. The old hand-rolled codec broke on these.
+        roundtrip(&Observation::Command {
+            program: "pr\u{1f}og\u{1d}ram".into(),
+            argv: vec![
+                "a\u{1d}b".into(),
+                "\u{1f}".into(),
+                String::new(),
+                "中文".into(),
+            ],
+            exit: Some(-1),
+        });
+        roundtrip(&Observation::File {
+            path: "p\u{1f}ath".into(),
+            status: String::new(),
+        });
+        roundtrip(&Observation::Tool {
+            name: "t\u{1d}ool".into(),
+            ok: true,
+        });
+        roundtrip(&Observation::Error {
+            signature: "sig\u{1f}中文".into(),
+            count: 0,
+        });
+        roundtrip(&Observation::Text("x\u{1f}y\u{1d}z 中文".into()));
+    }
+
+    #[test]
+    fn decode_rejects_non_json() {
+        assert!(Observation::decode("not json").is_err());
     }
 }

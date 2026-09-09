@@ -81,9 +81,9 @@ impl TokenCounter for BytesTokenCounter {
 }
 
 /// Errors from building a bounded context.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum ContextError {
-    /// The budget cannot hold even the mandatory task section and its marker.
+    /// The budget cannot hold even the task section framing.
     BudgetTooSmall,
     /// A durable history source failed to read.
     History(String),
