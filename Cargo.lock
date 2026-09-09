@@ -47,6 +47,7 @@ dependencies = [
  "agent-code-tools",
  "agent-code-workspace",
  "async-trait",
+ "rusqlite",
  "tokio",
 ]
 

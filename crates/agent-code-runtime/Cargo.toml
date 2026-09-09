@@ -16,4 +16,5 @@ agent-code-context = { path = "../agent-code-context" }
 [dev-dependencies]
 agent-code-storage = { path = "../agent-code-storage" }
 async-trait.workspace = true
+rusqlite.workspace = true
 tokio.workspace = true
