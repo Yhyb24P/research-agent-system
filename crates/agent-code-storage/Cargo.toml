@@ -10,4 +10,5 @@ publish.workspace = true
 agent-code-context = { path = "../agent-code-context" }
 agent-code-core = { path = "../agent-code-core" }
 agent-code-model = { path = "../agent-code-model" }
+agent-code-team = { path = "../agent-code-team" }
 rusqlite.workspace = true

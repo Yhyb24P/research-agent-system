@@ -1,9 +1,11 @@
 //! Small SQLite journal for durable Agent state.
 
+mod board;
 mod journal;
 mod observations;
 mod schema;
 
+pub use board::SqliteTaskBoard;
 pub use journal::SqliteJournal;
 pub use schema::{migrate, SCHEMA, SCHEMA_VERSION};
 
@@ -162,6 +164,71 @@ CREATE TABLE IF NOT EXISTS observations (
 );
 "#;
 
+    /// The exact R4 (version 2) schema: the R3 schema plus the two R4 columns
+    /// (`agent_turns.error`, `tool_calls.request`) and the v2 team tables.
+    const V2_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS sessions (
+    id TEXT PRIMARY KEY,
+    state TEXT NOT NULL,
+    active_call INTEGER,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS agent_turns (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL REFERENCES sessions(id),
+    decision TEXT NOT NULL,
+    error TEXT
+);
+CREATE TABLE IF NOT EXISTS tool_calls (
+    session_id TEXT NOT NULL,
+    call_id INTEGER NOT NULL,
+    state TEXT NOT NULL,
+    request TEXT,
+    PRIMARY KEY (session_id, call_id)
+);
+CREATE TABLE IF NOT EXISTS checkpoints (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL REFERENCES sessions(id),
+    git_head TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS team_tasks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    objective TEXT NOT NULL,
+    status TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS team_task_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id INTEGER NOT NULL REFERENCES team_tasks(id),
+    agent_id TEXT NOT NULL,
+    status TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    from_agent TEXT NOT NULL,
+    to_agent TEXT NOT NULL,
+    body TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS artifacts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL REFERENCES sessions(id),
+    path TEXT NOT NULL,
+    sha256 TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS transitions (
+    seq INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
+    from_state TEXT NOT NULL,
+    to_state TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS observations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL REFERENCES sessions(id),
+    kind TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+"#;
+
     /// Opening an R3 database migrates it to the current version: old data is
     /// preserved, the new columns become writable, and the session recovers.
     #[test]
@@ -251,6 +318,123 @@ CREATE TABLE IF NOT EXISTS observations (
             )
             .expect("tool request");
         assert_eq!(request, Some("edit a.txt".into()));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Opening an R4 (version 2) database migrates it to v3: the team-table
+    /// columns are added, `artifacts` is rebuilt with a nullable `task_id`, and
+    /// the board is usable. Old rows are preserved.
+    #[test]
+    fn v2_database_migrates_to_v3() {
+        use agent_code_team::{ArtifactMeta, TaskAttempt, TaskBoard, TaskKind, TaskStatus};
+
+        use super::SqliteTaskBoard;
+
+        let path = temp_db("v2to3");
+        let _ = std::fs::remove_file(&path);
+
+        // Build a version-2 database and seed team data.
+        {
+            let conn = Connection::open(&path).expect("open db");
+            conn.execute_batch(V2_SCHEMA).expect("apply v2 schema");
+            conn.pragma_update(None, "user_version", 2)
+                .expect("set version 2");
+            conn.execute(
+                "INSERT INTO sessions (id, state, active_call, created_at) VALUES ('s', 'Observing', NULL, 'now')",
+                [],
+            )
+            .expect("seed session");
+            conn.execute(
+                "INSERT INTO team_tasks (objective, status) VALUES ('old obj', 'pending')",
+                [],
+            )
+            .expect("seed task");
+            conn.execute(
+                "INSERT INTO team_task_runs (task_id, agent_id, status) VALUES (1, 'worker-a', 'running')",
+                [],
+            )
+            .expect("seed run");
+            conn.execute(
+                "INSERT INTO artifacts (session_id, path, sha256) VALUES ('s', 'out.txt', 'abc')",
+                [],
+            )
+            .expect("seed artifact");
+        }
+
+        // Open the board: the migration brings the database to v3.
+        let conn = Connection::open(&path).expect("reopen db");
+        let mut board = SqliteTaskBoard::open(conn).expect("open board");
+        assert_eq!(
+            board.schema_version().expect("version"),
+            crate::SCHEMA_VERSION
+        );
+
+        // The session-keyed artifact survived the `artifacts` rebuild.
+        let session_artifact: Option<String> = board
+            .conn()
+            .query_row(
+                "SELECT path FROM artifacts WHERE session_id = 's'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("session artifact");
+        assert_eq!(session_artifact, Some("out.txt".into()));
+
+        // The new columns are writable: a task with a kind, an attempt with a
+        // result, and a task-keyed artifact.
+        let id = board
+            .create_task("follow-up", Some(1), TaskKind::Reasoning, None)
+            .expect("create task");
+        board
+            .record_attempt(&TaskAttempt {
+                task_id: id,
+                attempt: 1,
+                agent_id: "reasoner-a".into(),
+                status: TaskStatus::Succeeded,
+                result: Some("done".into()),
+                error: None,
+            })
+            .expect("record attempt");
+        board
+            .record_artifact(
+                id,
+                &ArtifactMeta {
+                    path: "r.txt".into(),
+                    sha256: "def".into(),
+                },
+            )
+            .expect("record artifact");
+
+        let task = board.task(id).expect("read task").expect("task exists");
+        assert_eq!(task.kind, TaskKind::Reasoning);
+        assert_eq!(task.parent_task, Some(1));
+        let attempts = board.attempts(id).expect("attempts");
+        assert_eq!(attempts.len(), 1);
+        assert_eq!(attempts[0].result.as_deref(), Some("done"));
+        let arts = board.artifacts(id).expect("task artifacts");
+        assert_eq!(arts.len(), 1);
+        assert_eq!(arts[0].path, "r.txt");
+
+        // The seeded v2 task and run rows were preserved.
+        let old_task: String = board
+            .conn()
+            .query_row(
+                "SELECT objective FROM team_tasks WHERE objective = 'old obj'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("old task preserved");
+        assert_eq!(old_task, "old obj");
+        let old_run: String = board
+            .conn()
+            .query_row(
+                "SELECT agent_id FROM team_task_runs WHERE task_id = 1",
+                [],
+                |r| r.get(0),
+            )
+            .expect("old run preserved");
+        assert_eq!(old_run, "worker-a");
 
         let _ = std::fs::remove_file(&path);
     }

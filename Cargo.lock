@@ -59,6 +59,7 @@ dependencies = [
  "agent-code-context",
  "agent-code-core",
  "agent-code-model",
+ "agent-code-team",
  "rusqlite",
 ]
 

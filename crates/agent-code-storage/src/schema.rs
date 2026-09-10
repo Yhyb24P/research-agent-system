@@ -1,6 +1,8 @@
 /// The schema version this crate writes. Version 2 adds `agent_turns.error`
-/// and `tool_calls.request` on top of the R3 (version 1) schema.
-pub const SCHEMA_VERSION: i32 = 2;
+/// and `tool_calls.request` on top of the R3 (version 1) schema. Version 3
+/// extends the team tables for the durable task board: task parent/kind/
+/// target/assignee, run attempt/result/error, and task-keyed artifacts.
+pub const SCHEMA_VERSION: i32 = 3;
 
 /// The durable journal schema. Deliberately small; it does not reproduce the
 /// legacy qualification/audit schema.
@@ -32,13 +34,20 @@ CREATE TABLE IF NOT EXISTS checkpoints (
 CREATE TABLE IF NOT EXISTS team_tasks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     objective TEXT NOT NULL,
+    parent_task INTEGER,
+    kind TEXT NOT NULL,
+    target TEXT,
+    assignee TEXT,
     status TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS team_task_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     task_id INTEGER NOT NULL REFERENCES team_tasks(id),
+    attempt INTEGER NOT NULL,
     agent_id TEXT NOT NULL,
-    status TEXT NOT NULL
+    status TEXT NOT NULL,
+    result TEXT,
+    error TEXT
 );
 CREATE TABLE IF NOT EXISTS messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -48,7 +57,8 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 CREATE TABLE IF NOT EXISTS artifacts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    session_id TEXT NOT NULL REFERENCES sessions(id),
+    session_id TEXT,
+    task_id INTEGER,
     path TEXT NOT NULL,
     sha256 TEXT NOT NULL
 );
@@ -68,9 +78,9 @@ CREATE TABLE IF NOT EXISTS observations (
 "#;
 
 /// Idempotently bring `conn` up to [`SCHEMA_VERSION`]. A fresh database is
-/// created at the current version by [`SCHEMA`]; an older database (e.g. R3,
-/// version 1) is migrated by adding the missing columns in one transaction.
-/// Already-current databases are left untouched.
+/// created at the current version by [`SCHEMA`]; an older database is migrated
+/// by adding the missing columns in one transaction. Already-current databases
+/// are left untouched.
 pub fn migrate(conn: &mut rusqlite::Connection) -> Result<(), rusqlite::Error> {
     // Propagate a real PRAGMA read error rather than treating it as version 0
     // (which would silently re-run the migration).
@@ -82,8 +92,47 @@ pub fn migrate(conn: &mut rusqlite::Connection) -> Result<(), rusqlite::Error> {
     // R3 -> R4: the two columns the durable turn/request record needs.
     ensure_column(&tx, "agent_turns", "error", "TEXT")?;
     ensure_column(&tx, "tool_calls", "request", "TEXT")?;
+    // R4 -> R5: the durable task-board columns.
+    ensure_column(&tx, "team_tasks", "parent_task", "INTEGER")?;
+    ensure_column(&tx, "team_tasks", "kind", "TEXT")?;
+    ensure_column(&tx, "team_tasks", "target", "TEXT")?;
+    ensure_column(&tx, "team_tasks", "assignee", "TEXT")?;
+    ensure_column(&tx, "team_task_runs", "attempt", "INTEGER")?;
+    ensure_column(&tx, "team_task_runs", "result", "TEXT")?;
+    ensure_column(&tx, "team_task_runs", "error", "TEXT")?;
+    // `artifacts` gains a nullable `task_id` and a nullable `session_id`, so a
+    // team task's artifacts and a single-agent session's coexist. SQLite cannot
+    // relax a NOT NULL constraint in place, so the table is rebuilt.
+    migrate_artifacts_to_v3(&tx)?;
     tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     tx.commit()?;
+    Ok(())
+}
+
+/// Rebuild `artifacts` so both `session_id` and `task_id` are nullable,
+/// preserving existing rows. Skipped when the table is already at v3.
+fn migrate_artifacts_to_v3(tx: &rusqlite::Transaction) -> Result<(), rusqlite::Error> {
+    let has_task_id: i64 = tx.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('artifacts') WHERE name = 'task_id'",
+        [],
+        |r| r.get(0),
+    )?;
+    if has_task_id > 0 {
+        return Ok(());
+    }
+    tx.execute_batch(
+        "CREATE TABLE artifacts_v3 (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT,
+            task_id INTEGER,
+            path TEXT NOT NULL,
+            sha256 TEXT NOT NULL
+         );
+         INSERT INTO artifacts_v3 (id, session_id, path, sha256)
+             SELECT id, session_id, path, sha256 FROM artifacts;
+         DROP TABLE artifacts;
+         ALTER TABLE artifacts_v3 RENAME TO artifacts;",
+    )?;
     Ok(())
 }
 
