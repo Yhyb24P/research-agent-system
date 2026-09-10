@@ -5,7 +5,9 @@
 > **Status.** The active direction is a Rust v2 rewrite of the native Coding Agent and
 > the heterogeneous Agent team layer, on branch `v2/rust-agent-team`. The Python
 > `researchd` control-plane implementation is a frozen reference and is no longer the
-> product. See [docs/v2/ROADMAP.md](docs/v2/ROADMAP.md).
+> product. R4 is sealed; R5 is local work under review and is not yet accepted.
+> See [the roadmap](docs/v2/ROADMAP.md) and
+> [R5 status](docs/v2/R5_STATUS.md).
 
 Research Agent System is a **heterogeneous Agent coding/work team**.
 
@@ -75,7 +77,7 @@ Reasoner, bulk/tool work goes to a Worker or Utility, an explicit target wins, o
 the configured default. A worker result automatically becomes context for its parent task,
 the Lead, and any explicitly addressed Agent.
 
-Drivers:
+Planned drivers (R6; not yet implemented):
 
 - `NativeCodingAgentDriver` — the Rust state machine + model client + five tools.
 - `ExternalCliAgentDriver` — runs an external Coding Agent CLI; it is not wrapped in a

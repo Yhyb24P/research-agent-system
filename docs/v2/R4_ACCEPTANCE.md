@@ -105,4 +105,5 @@ exact-commit remote CI are both green. Both hold for R4:
 - `b6f53f3` carries a `Co-Authored-By: Claude Opus 4.8` trailer from a prior
   session (misattributed; this work is Qwen Code). Left as-is by decision;
   cosmetic only, not a functional issue.
-- R5 (Team) is not started.
+- R5 (Team) has a local implementation under review but is not sealed. See
+  [`R5_STATUS.md`](R5_STATUS.md).

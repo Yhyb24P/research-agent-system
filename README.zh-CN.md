@@ -4,7 +4,8 @@
 
 > **状态。** 当前活动方向是 Rust v2 重写：原生 Coding Agent 与异构 Agent 团队层，
 > 分支 `v2/rust-agent-team`。Python `researchd` 控制面实现是冻结参考，不再是产品。
-> 见 [docs/v2/ROADMAP.md](docs/v2/ROADMAP.md)。
+> R4 已封板；R5 仅有本地实现，仍在审校，尚未验收。见
+> [路线图](docs/v2/ROADMAP.md) 与 [R5 状态](docs/v2/R5_STATUS.md)。
 
 Research Agent System 是一个**异构 Agent Coding/Work 团队**。
 
@@ -66,7 +67,7 @@ Init -> Observe -> Model Decision -> Tool Execution -> Observe -> ...
 Reasoner，批量/工具型工作走 Worker 或 Utility，显式指定优先，否则用配置的默认。Worker
 结果自动成为其父任务、Lead 和被显式指名的 Agent 的上下文。
 
-Driver：
+计划中的 Driver（R6，尚未实现）：
 
 - `NativeCodingAgentDriver`：Rust 状态机 + 模型客户端 + 五个工具。
 - `ExternalCliAgentDriver`：运行外部 Coding Agent CLI，不再包一层工具循环。

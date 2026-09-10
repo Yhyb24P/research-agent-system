@@ -25,6 +25,11 @@ External full Coding Agents (Codex/Claude-style CLIs) connect through an
   `preview/agent-control-closure`.
 - Development branch: `v2/rust-agent-team`.
 - The Python `researchd` implementation is a frozen reference (legacy/transition).
+- R4 is sealed at `2692869` with exact-commit CI green. Its acceptance record
+  is [`R4_ACCEPTANCE.md`](R4_ACCEPTANCE.md).
+- R5 has a local, unpushed implementation stack under review; it is not sealed.
+  See [`R5_STATUS.md`](R5_STATUS.md) for the current commits and unresolved
+  review blockers.
 
 ## Crate graph
 
