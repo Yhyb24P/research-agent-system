@@ -60,7 +60,9 @@ dependencies = [
  "agent-code-core",
  "agent-code-model",
  "agent-code-team",
+ "async-trait",
  "rusqlite",
+ "tokio",
 ]
 
 [[package]]

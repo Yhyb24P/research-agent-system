@@ -50,6 +50,7 @@ impl AgentDriver for FixedDriver {
             task_id: task.id,
             summary: self.summary.clone().unwrap_or_else(|| "ok".into()),
             artifacts: Vec::new(),
+            message: None,
         })
     }
 }

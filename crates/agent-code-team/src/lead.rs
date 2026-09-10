@@ -97,6 +97,11 @@ impl<B: TaskBoard> Lead<B> {
         }
     }
 
+    /// All task ids created so far (the task tree, in creation order).
+    pub fn task_ids(&self) -> &[u64] {
+        &self.task_ids
+    }
+
     /// Run the plan-follow-up-synthesis loop for `objective`.
     pub async fn run(&mut self, objective: &str) -> Result<TeamResult, LeadError> {
         let mut round = 0u32;
@@ -155,6 +160,7 @@ impl<B: TaskBoard> Lead<B> {
                                         task_id: id,
                                         summary: summary.clone(),
                                         artifacts: Vec::new(),
+                                        message: None,
                                     },
                                 ));
                             }

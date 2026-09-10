@@ -132,11 +132,24 @@ impl<B: TaskBoard> Scheduler<B> {
             for a in &attempts {
                 self.board.record_attempt(a)?;
             }
+            // Record the actual assignee (the agent of the last attempt).
+            if let Some(last) = attempts.last() {
+                self.board.assign(task_id, &last.agent_id)?;
+            }
             let status = match &result {
                 Ok(_) => TaskStatus::Succeeded,
                 Err(_) => TaskStatus::Failed,
             };
             self.board.set_status(task_id, status)?;
+            // Flow the result back: the directed message and artifacts.
+            if let Ok(res) = &result {
+                if let Some(msg) = &res.message {
+                    self.board.record_message(msg)?;
+                }
+                for art in &res.artifacts {
+                    self.board.record_artifact(task_id, art)?;
+                }
+            }
             out.push(ScheduledResult {
                 task_id,
                 result,
@@ -291,6 +304,7 @@ mod tests {
                 task_id: task.id,
                 summary: self.summary.clone(),
                 artifacts: Vec::new(),
+                message: None,
             })
         }
     }

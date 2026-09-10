@@ -80,7 +80,10 @@ pub struct AgentTask {
 pub struct AgentTaskResult {
     pub task_id: u64,
     pub summary: String,
-    pub artifacts: Vec<String>,
+    /// Artifacts produced (path + content hash).
+    pub artifacts: Vec<crate::board::ArtifactMeta>,
+    /// A directed message the agent wants to send to a specific agent (T09).
+    pub message: Option<crate::board::AgentMessage>,
 }
 
 /// Runs a task on some backend. The team layer moves work between Agents; it
