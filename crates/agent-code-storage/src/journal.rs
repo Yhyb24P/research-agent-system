@@ -1,7 +1,7 @@
 use agent_code_core::{AgentState, Journal, JournalError, SessionId, ToolCallId, ToolCallState};
 use rusqlite::{params, Connection, Transaction};
 
-use crate::schema::SCHEMA;
+use crate::schema::{migrate, SCHEMA};
 
 /// A durable journal backed by a SQLite connection, bound to one session.
 pub struct SqliteJournal {
@@ -22,9 +22,11 @@ impl SqliteJournal {
 }
 
 impl SqliteJournal {
-    /// Open a connection, apply the schema, and bind to `session`.
-    pub fn open(conn: Connection, session: SessionId) -> Result<Self, rusqlite::Error> {
+    /// Open a connection, apply the schema, migrate any older database to the
+    /// current version, and bind to `session`.
+    pub fn open(mut conn: Connection, session: SessionId) -> Result<Self, rusqlite::Error> {
         conn.execute_batch(SCHEMA)?;
+        migrate(&mut conn)?;
         Ok(Self { conn, session })
     }
 

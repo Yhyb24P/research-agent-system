@@ -61,6 +61,10 @@ impl ModelClient for OpenAiClient {
             self.model, schemas
         )
     }
+
+    fn request_body(&self, ctx: &ModelContext) -> String {
+        openai_request_body(&self.model, ctx)
+    }
 }
 
 impl OpenAiClient {

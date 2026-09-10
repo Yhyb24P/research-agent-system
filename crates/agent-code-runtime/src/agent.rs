@@ -107,6 +107,48 @@ pub struct Delivery {
     pub artifacts: Vec<String>,
 }
 
+/// Build a bounded context whose FULL serialized request fits the input cap.
+///
+/// The context is first built to the reserved budget, then the observation
+/// budget is iteratively tightened until the exact serialized request —
+/// context plus framing plus tool schemas, after JSON escaping — fits the
+/// input cap (`max_tokens - reserved_output`). JSON escaping can grow the body
+/// well beyond the raw context, so reserving an estimated overhead alone is
+/// not a guarantee (N11).
+fn build_bounded_context(
+    source: &dyn HistorySource,
+    model: &dyn ModelClient,
+    session_id: &SessionId,
+    task: &str,
+    project_rules: &str,
+    repository_map: &str,
+    budget: ContextBudget,
+) -> Result<ModelContext, AgentError> {
+    let counter = BytesTokenCounter::default();
+    let input_cap = budget.max_tokens - budget.reserved_output;
+    let mut budget = budget;
+    // Pre-reserve the client's fixed framing overhead to cut down iterations.
+    budget.protocol_overhead = counter.count(&model.protocol_overhead());
+    loop {
+        let ctx = build_compact_context(
+            source,
+            session_id,
+            task,
+            project_rules,
+            repository_map,
+            &budget,
+            &counter,
+        )?;
+        // Meter the exact serialized request, not the raw context.
+        if counter.count(&model.request_body(&ctx)) <= input_cap || budget.observation_cap == 0 {
+            return Ok(ctx);
+        }
+        // The escaped body exceeds the input cap: tighten the observation
+        // budget and retry.
+        budget.observation_cap /= 2;
+    }
+}
+
 /// Drives one Coding Agent session to a terminal state.
 ///
 /// Generic over the journal `J`; the durable observation store is supplied as
@@ -281,21 +323,15 @@ impl<J: Journal> AgentLoop<J> {
 
     /// Build the next turn's bounded context from the durable history.
     fn build_context(&self) -> Result<ModelContext, AgentError> {
-        let counter = BytesTokenCounter::default();
-        let mut budget = self.cfg.budget;
-        // Reserve the client's fixed protocol overhead so the full outbound
-        // request (context + framing + tool schemas) stays within the budget
-        // (N11), not just the rendered context.
-        budget.protocol_overhead = counter.count(&self.model.protocol_overhead());
-        Ok(build_compact_context(
+        build_bounded_context(
             self.source.as_ref(),
+            self.model.as_ref(),
             &self.session_id,
             &self.cfg.task,
             &self.cfg.project_rules,
             &self.cfg.repository_map,
-            &budget,
-            &counter,
-        )?)
+            self.cfg.budget,
+        )
     }
 
     /// The durable form of a model decision (the serialized decision).
@@ -563,20 +599,23 @@ mod tests {
         let _ = std::fs::remove_dir_all(&repo);
     }
 
-    /// N11: reserving the client's fixed protocol overhead in the budget keeps
-    /// the *full* outbound request (context + framing + tool schemas) within
-    /// the configured input budget, not just the rendered context.
+    /// N11: the bounded context builder meters the *exact* serialized request
+    /// (after JSON escaping) and tightens the observation budget until it fits
+    /// the input cap. Content heavy in quotes, backslashes, newlines, control
+    /// chars, and Unicode inflates under escaping; the builder absorbs it.
     #[test]
-    fn outbound_request_reserves_protocol_overhead_within_input_budget() {
-        use agent_code_context::{build_compact_context, BytesTokenCounter, TokenCounter};
+    fn bounded_context_absorbs_json_escaping_growth() {
+        use agent_code_context::{BytesTokenCounter, TokenCounter};
         use agent_code_model::{openai_request_body, OpenAiClient};
         use std::time::Duration;
 
-        /// An empty history source.
-        struct Empty;
-        impl HistorySource for Empty {
+        /// A source that floods the context with content that JSON escaping
+        /// inflates: quotes, backslashes, newlines, control chars, Unicode.
+        struct Nasty;
+        impl HistorySource for Nasty {
             fn observations(&self, _s: &SessionId) -> Result<Vec<Observation>, ContextError> {
-                Ok(Vec::new())
+                let chunk = "a\"b\\c\nd\u{1f600}\u{4e2d}\u{1}";
+                Ok(vec![Observation::Text(chunk.repeat(64))])
             }
         }
 
@@ -587,33 +626,34 @@ mod tests {
             Duration::from_secs(5),
         );
         let counter = BytesTokenCounter::default();
-        // Reserve the client's fixed protocol overhead (schemas + framing).
-        let mut budget = ContextBudget::new(4000, 200);
-        budget.protocol_overhead = counter.count(&client.protocol_overhead());
         assert!(
-            budget.protocol_overhead > 0,
-            "the client must declare overhead"
+            !client.protocol_overhead().is_empty(),
+            "the client must declare its framing overhead"
         );
 
-        let ctx = build_compact_context(
-            &Empty,
+        // A budget tight enough that the escaped body would exceed the input
+        // cap if the raw context were trusted.
+        let budget = ContextBudget::new(900, 100);
+        let ctx = build_bounded_context(
+            &Nasty,
+            &client,
             &SessionId::new("n11"),
-            "a small task",
+            "task",
             "",
             "",
-            &budget,
-            &counter,
+            budget,
         )
         .unwrap();
 
-        // The full outbound request must fit the configured input budget.
+        // The full serialized request (after escaping) fits the input cap.
         let body = openai_request_body("test-model", &ctx);
-        let input_budget = budget.max_tokens - budget.reserved_output;
+        let input_cap = budget.max_tokens - budget.reserved_output;
+        let body_tokens = counter.count(&body);
         assert!(
-            counter.count(&body) <= input_budget,
-            "outbound request ({}) must fit the input budget ({})",
-            counter.count(&body),
-            input_budget
+            body_tokens <= input_cap,
+            "escaped outbound request ({}) must fit the input cap ({})",
+            body_tokens,
+            input_cap
         );
     }
 }

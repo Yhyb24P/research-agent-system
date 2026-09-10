@@ -1,3 +1,7 @@
+/// The schema version this crate writes. Version 2 adds `agent_turns.error`
+/// and `tool_calls.request` on top of the R3 (version 1) schema.
+pub const SCHEMA_VERSION: i32 = 2;
+
 /// The durable journal schema. Deliberately small; it does not reproduce the
 /// legacy qualification/audit schema.
 pub const SCHEMA: &str = r#"
@@ -62,3 +66,39 @@ CREATE TABLE IF NOT EXISTS observations (
     created_at TEXT NOT NULL
 );
 "#;
+
+/// Idempotently bring `conn` up to [`SCHEMA_VERSION`]. A fresh database is
+/// created at the current version by [`SCHEMA`]; an older database (e.g. R3,
+/// version 1) is migrated by adding the missing columns in one transaction.
+/// Already-current databases are left untouched.
+pub fn migrate(conn: &mut rusqlite::Connection) -> Result<(), rusqlite::Error> {
+    let version: i32 = conn
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .unwrap_or(0);
+    if version >= SCHEMA_VERSION {
+        return Ok(());
+    }
+    let tx = conn.transaction()?;
+    // R3 -> R4: the two columns the durable turn/request record needs.
+    ensure_column(&tx, "agent_turns", "error", "TEXT")?;
+    ensure_column(&tx, "tool_calls", "request", "TEXT")?;
+    tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+    tx.commit()?;
+    Ok(())
+}
+
+/// Add `column` of type `ty` to `table` if it is not already present. Table
+/// and column names are internal constants, so interpolation is safe.
+fn ensure_column(
+    conn: &rusqlite::Transaction,
+    table: &str,
+    column: &str,
+    ty: &str,
+) -> Result<(), rusqlite::Error> {
+    let sql = format!("SELECT COUNT(*) FROM pragma_table_info('{table}') WHERE name = '{column}'");
+    let count: i64 = conn.query_row(&sql, [], |r| r.get(0))?;
+    if count == 0 {
+        conn.execute(&format!("ALTER TABLE {table} ADD COLUMN {column} {ty}"), [])?;
+    }
+    Ok(())
+}

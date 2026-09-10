@@ -17,6 +17,14 @@ pub trait ModelClient: Send {
     fn protocol_overhead(&self) -> String {
         String::new()
     }
+
+    /// The exact serialized outbound request for `ctx` (the bytes that would be
+    /// POSTed), after JSON escaping. Metering this — not just the raw context
+    /// — is what keeps the full request within the input budget (N11).
+    /// Non-HTTP clients (e.g. the stub) have no wire format and report empty.
+    fn request_body(&self, _ctx: &ModelContext) -> String {
+        String::new()
+    }
 }
 
 /// A deterministic stub that always returns the same decision. Used by tests
