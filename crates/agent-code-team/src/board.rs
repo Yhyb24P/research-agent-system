@@ -113,6 +113,11 @@ pub trait TaskBoard {
     fn set_status(&mut self, task: u64, status: TaskStatus) -> Result<(), BoardError>;
     /// Persist one attempt (independently; failures are kept).
     fn record_attempt(&mut self, attempt: &TaskAttempt) -> Result<(), BoardError>;
+    /// Move a running attempt to its terminal status, updating the row that
+    /// was persisted as Running. This is what makes the lifecycle durable: the
+    /// attempt is observable as Running before the driver runs, then settles to
+    /// Succeeded/Failed without being overwritten by a later retry.
+    fn complete_attempt(&mut self, attempt: &TaskAttempt) -> Result<(), BoardError>;
     /// Persist a directed message.
     fn record_message(&mut self, message: &AgentMessage) -> Result<(), BoardError>;
     /// Persist artifact metadata for a task.
@@ -125,4 +130,7 @@ pub trait TaskBoard {
     fn messages_to(&self, agent: &str) -> Result<Vec<AgentMessage>, BoardError>;
     /// Read the artifact metadata for a task (T08).
     fn artifacts(&self, task: u64) -> Result<Vec<ArtifactMeta>, BoardError>;
+    /// List every task id, in creation order. Used to reconstruct the task
+    /// tree (and thus the final result) from the durable board.
+    fn task_ids(&self) -> Result<Vec<u64>, BoardError>;
 }

@@ -417,7 +417,7 @@ CREATE TABLE IF NOT EXISTS observations (
         assert_eq!(arts[0].path, "r.txt");
 
         // The seeded v2 task and run rows were preserved.
-        let old_task: String = board
+        let old_task_obj: String = board
             .conn()
             .query_row(
                 "SELECT objective FROM team_tasks WHERE objective = 'old obj'",
@@ -425,8 +425,8 @@ CREATE TABLE IF NOT EXISTS observations (
                 |r| r.get(0),
             )
             .expect("old task preserved");
-        assert_eq!(old_task, "old obj");
-        let old_run: String = board
+        assert_eq!(old_task_obj, "old obj");
+        let old_run_agent: String = board
             .conn()
             .query_row(
                 "SELECT agent_id FROM team_task_runs WHERE task_id = 1",
@@ -434,7 +434,19 @@ CREATE TABLE IF NOT EXISTS observations (
                 |r| r.get(0),
             )
             .expect("old run preserved");
-        assert_eq!(old_run, "worker-a");
+        assert_eq!(old_run_agent, "worker-a");
+
+        // And the same rows reconstruct through the public TaskBoard API: the
+        // migration filled explicit defaults (kind, attempt) so they are
+        // readable, not merely present as raw rows.
+        let old_task = board.task(1).expect("read old task").expect("exists");
+        assert_eq!(old_task.objective, "old obj");
+        assert_eq!(old_task.kind, TaskKind::Bulk);
+        let old_runs = board.attempts(1).expect("read old attempts");
+        assert_eq!(old_runs.len(), 1);
+        assert_eq!(old_runs[0].agent_id, "worker-a");
+        assert_eq!(old_runs[0].attempt, 1);
+        assert_eq!(old_runs[0].status, TaskStatus::Running);
 
         let _ = std::fs::remove_file(&path);
     }

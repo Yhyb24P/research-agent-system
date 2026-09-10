@@ -103,6 +103,28 @@ impl TaskBoard for SqliteTaskBoard {
         Ok(())
     }
 
+    fn complete_attempt(&mut self, attempt: &TaskAttempt) -> Result<(), BoardError> {
+        let n = self
+            .conn
+            .execute(
+                "UPDATE team_task_runs
+                 SET status = ?3, result = ?4, error = ?5
+                 WHERE task_id = ?1 AND attempt = ?2",
+                params![
+                    attempt.task_id as i64,
+                    attempt.attempt as i64,
+                    attempt.status.as_str(),
+                    attempt.result,
+                    attempt.error,
+                ],
+            )
+            .map_err(|e| BoardError::Storage(e.to_string()))?;
+        if n == 0 {
+            return Err(BoardError::UnknownTask(attempt.task_id));
+        }
+        Ok(())
+    }
+
     fn record_message(&mut self, message: &AgentMessage) -> Result<(), BoardError> {
         self.conn
             .execute(
@@ -187,6 +209,21 @@ impl TaskBoard for SqliteTaskBoard {
             .map_err(|e| BoardError::Storage(e.to_string()))?;
         rows.map(|r| r.map_err(|e| BoardError::Storage(e.to_string())))
             .collect()
+    }
+
+    fn task_ids(&self) -> Result<Vec<u64>, BoardError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id FROM team_tasks ORDER BY id")
+            .map_err(|e| BoardError::Storage(e.to_string()))?;
+        let rows = stmt
+            .query_map([], |r| r.get::<_, i64>(0))
+            .map_err(|e| BoardError::Storage(e.to_string()))?;
+        rows.map(|r| {
+            r.map(|v| v as u64)
+                .map_err(|e| BoardError::Storage(e.to_string()))
+        })
+        .collect()
     }
 }
 

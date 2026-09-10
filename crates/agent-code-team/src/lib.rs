@@ -17,7 +17,9 @@ mod testutil;
 pub use board::{
     AgentMessage, ArtifactMeta, BoardError, TaskAttempt, TaskBoard, TaskRecord, TaskStatus,
 };
-pub use lead::{Lead, LeadBrain, LeadContext, LeadDecision, LeadError, TeamResult};
+pub use lead::{
+    reconstruct_team_result, Lead, LeadBrain, LeadContext, LeadDecision, LeadError, TeamResult,
+};
 pub use registry::{
     AgentConfig, AgentDriver, AgentRegistry, AgentTask, AgentTaskResult, AgentTier, RegistryError,
     TaskKind,

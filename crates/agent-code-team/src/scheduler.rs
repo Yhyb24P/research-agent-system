@@ -1,15 +1,18 @@
 //! Concurrent task scheduling with per-agent concurrency, retry, and
 //! deterministic reassignment.
 //!
-//! Each agent has its own concurrency quota (`max_concurrency`), so two
-//! independent tasks on different agents truly overlap rather than merely
-//! being joined. A failed task retries the same agent up to a limit, then
-//! excludes that agent and reassigns to the next deterministic candidate.
-//! Every attempt is persisted independently, so a failure is never overwritten
-//! by a later retry.
+//! Each agent has its own concurrency quota (`max_concurrency`), shared across
+//! every scheduled task, so two independent tasks on different agents truly
+//! overlap while two tasks on the same agent are capped. A failed task retries
+//! the same agent up to a limit, then excludes that agent and reassigns to the
+//! next deterministic candidate.
+//!
+//! The lifecycle is durable: each attempt is persisted as Running *before* the
+//! driver runs, then settled to Succeeded/Failed, so a crash always leaves a
+//! recoverable state rather than a task stuck at Pending.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use tokio::sync::Semaphore;
 
@@ -56,64 +59,84 @@ impl From<BoardError> for ScheduleError {
 
 /// Schedules tasks across a team, honoring each agent's concurrency quota,
 /// retrying failures, and reassigning deterministically.
-pub struct Scheduler<B: TaskBoard> {
+///
+/// The board and the per-agent semaphores live for the scheduler's whole
+/// lifetime, so every `schedule()` call and every task shares them: the
+/// concurrency quota is actually enforced, and the board is written to
+/// concurrently as tasks progress.
+pub struct Scheduler<B: TaskBoard + Send + 'static> {
     registry: AgentRegistry,
     drivers: BTreeMap<String, Arc<dyn AgentDriver>>,
-    board: B,
+    board: Arc<Mutex<B>>,
     max_retries: u32,
+    semaphores: BTreeMap<String, Arc<Semaphore>>,
 }
 
-impl<B: TaskBoard> Scheduler<B> {
+impl<B: TaskBoard + Send + 'static> Scheduler<B> {
     /// Build a scheduler. `drivers` maps agent id to its driver; `max_retries`
-    /// is the per-agent retry limit before reassignment.
+    /// is the per-agent retry limit before reassignment. The per-agent
+    /// semaphores are sized by each agent's `max_concurrency` and shared by
+    /// every task this scheduler runs.
     pub fn new(
         registry: AgentRegistry,
         drivers: BTreeMap<String, Arc<dyn AgentDriver>>,
         board: B,
         max_retries: u32,
     ) -> Self {
+        let semaphores = build_semaphores(&registry);
         Self {
             registry,
             drivers,
-            board,
+            board: Arc::new(Mutex::new(board)),
             max_retries,
+            semaphores,
         }
     }
 
-    /// The durable board this scheduler persists to.
-    pub fn board(&self) -> &B {
+    /// The durable board this scheduler persists to, shared and synchronized
+    /// so tasks can write their lifecycle while running.
+    pub fn board(&self) -> &Mutex<B> {
         &self.board
     }
 
     /// Create and run `specs` concurrently. Each task is bounded by its agent's
-    /// concurrency quota; on failure it retries the same agent up to
-    /// `max_retries`, then reassigns to the next candidate. Every attempt is
-    /// persisted to the board independently.
+    /// shared concurrency quota; on failure it retries the same agent up to
+    /// `max_retries`, then reassigns to the next candidate. Each attempt is
+    /// persisted to the board as Running before the driver runs, then settled.
     pub async fn schedule(
         &mut self,
         specs: &[TaskSpec],
     ) -> Result<Vec<ScheduledResult>, ScheduleError> {
         // 1. Create the tasks on the board (durable, T02).
         let mut task_ids = Vec::new();
-        for spec in specs {
-            let id = self.board.create_task(
-                &spec.objective,
-                spec.parent,
-                spec.kind,
-                spec.target.clone(),
-            )?;
-            task_ids.push(id);
+        {
+            let mut board = self.board.lock().unwrap();
+            for spec in specs {
+                let id = board.create_task(
+                    &spec.objective,
+                    spec.parent,
+                    spec.kind,
+                    spec.target.clone(),
+                )?;
+                task_ids.push(id);
+            }
         }
 
-        // 2. Run them concurrently, each bounded by its agent's quota.
+        // 2. Run them concurrently. Each task persists its own lifecycle
+        //    (Assigned -> Running -> terminal) on the shared board, so the
+        //    state is durable at every point, not only at the end.
         let mut handles = Vec::new();
         for (i, spec) in specs.iter().enumerate() {
             // A follow-up task's context includes its parent's result, so a
             // worker's result flows into the parent's subsequent context.
             let mut context = spec.context.clone();
             if let Some(parent) = spec.parent {
-                if let Ok(Some(summary)) = parent_summary(&self.board, parent) {
-                    context.push(format!("parent[{parent}]: {summary}"));
+                let summary = {
+                    let board = self.board.lock().unwrap();
+                    parent_summary(&*board, parent)
+                };
+                if let Ok(Some(s)) = summary {
+                    context.push(format!("parent[{parent}]: {s}"));
                 }
             }
             let task = AgentTask {
@@ -124,38 +147,28 @@ impl<B: TaskBoard> Scheduler<B> {
             };
             let candidates = self.candidate_order(spec.kind, spec.target.as_deref());
             let drivers = self.drivers.clone();
-            let semaphores = self.semaphores();
+            let semaphores = self.semaphores.clone();
+            let board = self.board.clone();
             let max_retries = self.max_retries;
             handles.push(tokio::spawn(async move {
-                run_one(&drivers, &semaphores, max_retries, task, candidates).await
+                run_one(&drivers, &semaphores, &board, max_retries, task, candidates).await
             }));
         }
 
-        // 3. Collect results and persist each attempt. The runs were concurrent;
-        //    persistence is serial, which is fine because the board is `&mut`.
+        // 3. Collect results and flow the result back: the directed message and
+        //    artifacts. The per-attempt lifecycle was already persisted by each
+        //    task; only the message/artifact flow happens here.
         let mut out = Vec::new();
         for (i, handle) in handles.into_iter().enumerate() {
-            let (attempts, result) = handle.await.map_err(|_| ScheduleError::JoinFailed)?;
+            let (attempts, result) = handle.await.map_err(|_| ScheduleError::JoinFailed)??;
             let task_id = task_ids[i];
-            for a in &attempts {
-                self.board.record_attempt(a)?;
-            }
-            // Record the actual assignee (the agent of the last attempt).
-            if let Some(last) = attempts.last() {
-                self.board.assign(task_id, &last.agent_id)?;
-            }
-            let status = match &result {
-                Ok(_) => TaskStatus::Succeeded,
-                Err(_) => TaskStatus::Failed,
-            };
-            self.board.set_status(task_id, status)?;
-            // Flow the result back: the directed message and artifacts.
             if let Ok(res) = &result {
+                let mut board = self.board.lock().unwrap();
                 if let Some(msg) = &res.message {
-                    self.board.record_message(msg)?;
+                    board.record_message(msg)?;
                 }
                 for art in &res.artifacts {
-                    self.board.record_artifact(task_id, art)?;
+                    board.record_artifact(task_id, art)?;
                 }
             }
             out.push(ScheduledResult {
@@ -192,20 +205,18 @@ impl<B: TaskBoard> Scheduler<B> {
         order.retain(|id| seen.insert(id.clone()));
         order
     }
+}
 
-    /// One concurrency semaphore per agent, sized by its `max_concurrency`.
-    fn semaphores(&self) -> BTreeMap<String, Arc<Semaphore>> {
-        let mut m = BTreeMap::new();
-        for id in self.registry.agent_ids() {
-            let mc = self
-                .registry
-                .get(id)
-                .map(|c| c.max_concurrency)
-                .unwrap_or(1);
-            m.insert(id.to_string(), Arc::new(Semaphore::new(mc)));
-        }
-        m
+/// One shared concurrency semaphore per agent, sized by its
+/// `max_concurrency`. Built once for the scheduler's lifetime so the quota is
+/// honored across every task and every `schedule()` call.
+fn build_semaphores(registry: &AgentRegistry) -> BTreeMap<String, Arc<Semaphore>> {
+    let mut m = BTreeMap::new();
+    for id in registry.agent_ids() {
+        let mc = registry.get(id).map(|c| c.max_concurrency).unwrap_or(1);
+        m.insert(id.to_string(), Arc::new(Semaphore::new(mc)));
     }
+    m
 }
 
 /// The summary of a parent task's last successful attempt, if it has one.
@@ -220,15 +231,17 @@ fn parent_summary<B: TaskBoard>(board: &B, parent: u64) -> Result<Option<String>
 }
 
 /// Run one task: walk the candidate agents, retrying each up to `max_retries`
-/// under its concurrency quota, then reassigning deterministically. Returns the
-/// attempts (in a global sequence) and the final result.
-async fn run_one(
+/// under its shared concurrency quota, then reassigning deterministically. Each
+/// attempt is persisted as Running before the driver runs and settled after, so
+/// the board is durable throughout. Returns the attempts and the final result.
+async fn run_one<B: TaskBoard + Send + 'static>(
     drivers: &BTreeMap<String, Arc<dyn AgentDriver>>,
     semaphores: &BTreeMap<String, Arc<Semaphore>>,
+    board: &Arc<Mutex<B>>,
     max_retries: u32,
     task: AgentTask,
     candidates: Vec<String>,
-) -> (Vec<TaskAttempt>, Result<AgentTaskResult, String>) {
+) -> Result<(Vec<TaskAttempt>, Result<AgentTaskResult, String>), BoardError> {
     let mut attempts = Vec::new();
     let mut last_result: Option<AgentTaskResult> = None;
     let mut attempt_seq = 0u32;
@@ -241,35 +254,78 @@ async fn run_one(
             Some(s) => s,
             None => continue,
         };
+        // Reflect (re)assignment to this agent durably before any attempt.
+        {
+            let mut b = board.lock().unwrap();
+            b.assign(task.id, agent)?;
+        }
         let mut succeeded = false;
         for _ in 0..max_retries {
             attempt_seq += 1;
+            // Persist the Running attempt BEFORE the driver side-effect, so a
+            // crash leaves a recoverable Running state rather than Pending.
+            {
+                let mut b = board.lock().unwrap();
+                b.record_attempt(&TaskAttempt {
+                    task_id: task.id,
+                    attempt: attempt_seq,
+                    agent_id: agent.clone(),
+                    status: TaskStatus::Running,
+                    result: None,
+                    error: None,
+                })?;
+                b.set_status(task.id, TaskStatus::Running)?;
+            }
+            // Inject the directed messages addressed to this agent so they
+            // actually reach its context (T09).
+            let mut ctx_task = task.clone();
+            {
+                let b = board.lock().unwrap();
+                for m in b.messages_to(agent)? {
+                    ctx_task
+                        .context
+                        .push(format!("[{}] {}", m.from_agent, m.body));
+                }
+            }
+            // Run the driver under the shared concurrency quota.
             let permit = sem.acquire().await;
-            let outcome = driver.run_task(task.clone()).await;
+            let outcome = driver.run_task(ctx_task).await;
             drop(permit);
+            // Persist the terminal attempt and settle the task status.
+            let terminal = match &outcome {
+                Ok(r) => TaskAttempt {
+                    task_id: task.id,
+                    attempt: attempt_seq,
+                    agent_id: agent.clone(),
+                    status: TaskStatus::Succeeded,
+                    result: Some(r.summary.clone()),
+                    error: None,
+                },
+                Err(e) => TaskAttempt {
+                    task_id: task.id,
+                    attempt: attempt_seq,
+                    agent_id: agent.clone(),
+                    status: TaskStatus::Failed,
+                    result: None,
+                    error: Some(e.clone()),
+                },
+            };
+            {
+                let mut b = board.lock().unwrap();
+                b.complete_attempt(&terminal)?;
+                if terminal.status == TaskStatus::Succeeded {
+                    b.set_status(task.id, TaskStatus::Succeeded)?;
+                }
+            }
             match outcome {
                 Ok(result) => {
-                    attempts.push(TaskAttempt {
-                        task_id: task.id,
-                        attempt: attempt_seq,
-                        agent_id: agent.clone(),
-                        status: TaskStatus::Succeeded,
-                        result: Some(result.summary.clone()),
-                        error: None,
-                    });
+                    attempts.push(terminal);
                     last_result = Some(result);
                     succeeded = true;
                     break;
                 }
-                Err(err) => {
-                    attempts.push(TaskAttempt {
-                        task_id: task.id,
-                        attempt: attempt_seq,
-                        agent_id: agent.clone(),
-                        status: TaskStatus::Failed,
-                        result: None,
-                        error: Some(err.clone()),
-                    });
+                Err(_) => {
+                    attempts.push(terminal);
                 }
             }
         }
@@ -280,13 +336,18 @@ async fn run_one(
         // candidate is tried (deterministic reassignment).
     }
     match last_result {
-        Some(r) => (attempts, Ok(r)),
+        Some(r) => Ok((attempts, Ok(r))),
         None => {
+            // Every candidate failed: settle the task as failed durably.
+            {
+                let mut b = board.lock().unwrap();
+                b.set_status(task.id, TaskStatus::Failed)?;
+            }
             let last_err = attempts
                 .last()
                 .and_then(|a| a.error.clone())
                 .unwrap_or_else(|| "no candidate agent".to_string());
-            (attempts, Err(last_err))
+            Ok((attempts, Err(last_err)))
         }
     }
 }
@@ -300,6 +361,7 @@ mod tests {
     use async_trait::async_trait;
 
     use super::*;
+    use crate::registry::{AgentConfig, AgentTier};
     use crate::testutil::{err_driver, ok_driver, trio_registry, MemBoard};
 
     /// Records the peak number of in-flight tasks and only proceeds once two
@@ -316,6 +378,32 @@ mod tests {
             let cur = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
             self.peak.fetch_max(cur, Ordering::SeqCst);
             while self.peak.load(Ordering::SeqCst) < 2 {
+                tokio::task::yield_now().await;
+            }
+            self.in_flight.fetch_sub(1, Ordering::SeqCst);
+            Ok(AgentTaskResult {
+                task_id: task.id,
+                summary: self.summary.clone(),
+                artifacts: Vec::new(),
+                message: None,
+            })
+        }
+    }
+
+    /// Yields (without waiting for overlap) so a second task on the same agent
+    /// gets scheduled and blocks on the shared semaphore.
+    struct YieldDriver {
+        in_flight: Arc<AtomicUsize>,
+        peak: Arc<AtomicUsize>,
+        summary: String,
+    }
+
+    #[async_trait]
+    impl AgentDriver for YieldDriver {
+        async fn run_task(&self, task: AgentTask) -> Result<AgentTaskResult, String> {
+            let cur = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+            self.peak.fetch_max(cur, Ordering::SeqCst);
+            for _ in 0..8 {
                 tokio::task::yield_now().await;
             }
             self.in_flight.fetch_sub(1, Ordering::SeqCst);
@@ -373,6 +461,68 @@ mod tests {
         assert!(results[1].result.is_ok());
         // Both tasks were in-flight at the same time.
         assert_eq!(peak.load(Ordering::SeqCst), 2);
+    }
+
+    // T06 (single-agent bound): with max_concurrency=1, two tasks on the same
+    // agent never overlap. The shared semaphore enforces the quota.
+    #[tokio::test]
+    async fn same_agent_respects_max_concurrency() {
+        let registry = AgentRegistry::new(vec![
+            AgentConfig {
+                id: "reasoner-a".into(),
+                name: "reasoner-a".into(),
+                tier: AgentTier::Reasoner,
+                tags: Vec::new(),
+                max_concurrency: 1,
+            },
+            AgentConfig {
+                id: "worker-a".into(),
+                name: "worker-a".into(),
+                tier: AgentTier::Worker,
+                tags: Vec::new(),
+                max_concurrency: 1,
+            },
+            AgentConfig {
+                id: "utility-a".into(),
+                name: "utility-a".into(),
+                tier: AgentTier::Utility,
+                tags: Vec::new(),
+                max_concurrency: 1,
+            },
+        ])
+        .expect("a full tier set is valid");
+        let in_flight = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let drivers = BTreeMap::from([(
+            "worker-a".to_string(),
+            Arc::new(YieldDriver {
+                in_flight: in_flight.clone(),
+                peak: peak.clone(),
+                summary: "a".into(),
+            }) as Arc<dyn AgentDriver>,
+        )]);
+        let mut sched = Scheduler::new(registry, drivers, MemBoard::default(), 1);
+        let specs = vec![
+            TaskSpec {
+                objective: "t1".into(),
+                kind: TaskKind::Bulk,
+                target: Some("worker-a".into()),
+                parent: None,
+                context: Vec::new(),
+            },
+            TaskSpec {
+                objective: "t2".into(),
+                kind: TaskKind::Bulk,
+                target: Some("worker-a".into()),
+                parent: None,
+                context: Vec::new(),
+            },
+        ];
+        let results = sched.schedule(&specs).await.expect("schedule");
+        assert!(results[0].result.is_ok());
+        assert!(results[1].result.is_ok());
+        // Both target worker-a (max_concurrency=1): they never overlap.
+        assert_eq!(peak.load(Ordering::SeqCst), 1);
     }
 
     // T11/T12: a task that fails on worker-a retries, then reassigns to

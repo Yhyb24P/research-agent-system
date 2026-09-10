@@ -100,6 +100,14 @@ pub fn migrate(conn: &mut rusqlite::Connection) -> Result<(), rusqlite::Error> {
     ensure_column(&tx, "team_task_runs", "attempt", "INTEGER")?;
     ensure_column(&tx, "team_task_runs", "result", "TEXT")?;
     ensure_column(&tx, "team_task_runs", "error", "TEXT")?;
+    // Pre-v3 team rows lack `kind` and `attempt`. Fill explicit defaults so the
+    // public TaskBoard API can read them: a recoverable legacy mapping rather
+    // than rows that fail to reconstruct.
+    tx.execute("UPDATE team_tasks SET kind = 'bulk' WHERE kind IS NULL", [])?;
+    tx.execute(
+        "UPDATE team_task_runs SET attempt = id WHERE attempt IS NULL",
+        [],
+    )?;
     // `artifacts` gains a nullable `task_id` and a nullable `session_id`, so a
     // team task's artifacts and a single-agent session's coexist. SQLite cannot
     // relax a NOT NULL constraint in place, so the table is rebuilt.

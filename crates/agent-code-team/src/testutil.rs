@@ -130,6 +130,20 @@ impl TaskBoard for MemBoard {
             .push(attempt.clone());
         Ok(())
     }
+    fn complete_attempt(&mut self, attempt: &TaskAttempt) -> Result<(), BoardError> {
+        let v = self
+            .attempts
+            .get_mut(&attempt.task_id)
+            .ok_or(BoardError::UnknownTask(attempt.task_id))?;
+        let a = v
+            .iter_mut()
+            .find(|a| a.attempt == attempt.attempt)
+            .ok_or(BoardError::UnknownTask(attempt.task_id))?;
+        a.status = attempt.status;
+        a.result = attempt.result.clone();
+        a.error = attempt.error.clone();
+        Ok(())
+    }
     fn record_message(&mut self, message: &AgentMessage) -> Result<(), BoardError> {
         self.messages.push(message.clone());
         Ok(())
@@ -157,5 +171,8 @@ impl TaskBoard for MemBoard {
     }
     fn artifacts(&self, task: u64) -> Result<Vec<ArtifactMeta>, BoardError> {
         Ok(self.artifacts.get(&task).cloned().unwrap_or_default())
+    }
+    fn task_ids(&self) -> Result<Vec<u64>, BoardError> {
+        Ok(self.tasks.keys().copied().collect())
     }
 }

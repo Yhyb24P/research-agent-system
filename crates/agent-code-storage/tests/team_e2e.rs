@@ -9,15 +9,15 @@
 //! assignments, messages, and artifacts are asserted to be reconstructable.
 
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
 
 use agent_code_storage::SqliteTaskBoard;
 use agent_code_team::{
-    AgentConfig, AgentDriver, AgentMessage, AgentRegistry, AgentTask, AgentTaskResult, AgentTier,
-    ArtifactMeta, Lead, LeadBrain, LeadContext, LeadDecision, Scheduler, TaskBoard, TaskKind,
-    TaskSpec, TaskStatus, TeamResult,
+    reconstruct_team_result, AgentConfig, AgentDriver, AgentMessage, AgentRegistry, AgentTask,
+    AgentTaskResult, AgentTier, ArtifactMeta, Lead, LeadBrain, LeadContext, LeadDecision,
+    Scheduler, TaskAttempt, TaskBoard, TaskKind, TaskSpec, TaskStatus, TeamResult,
 };
 use async_trait::async_trait;
 use rusqlite::Connection;
@@ -228,7 +228,7 @@ async fn heterogeneous_team_end_to_end() {
     let summarize_calls = Arc::new(Mutex::new(0u32));
 
     // Phase 1: run the team on a file-backed board.
-    let (result, task_ids) = {
+    let (result, task_ids, root_id) = {
         let conn = Connection::open(&path).expect("open db");
         let board = SqliteTaskBoard::open(conn).expect("open board");
         let drivers = build_drivers(in_flight.clone(), peak.clone(), summarize_calls.clone());
@@ -239,7 +239,8 @@ async fn heterogeneous_team_end_to_end() {
             .await
             .expect("lead completes");
         let task_ids = lead.task_ids().to_vec();
-        (result, task_ids)
+        let root_id = lead.root_task_id().expect("root task");
+        (result, task_ids, root_id)
     }; // the board is dropped here, closing the database
 
     // The in-memory result is grounded in the actual worker results.
@@ -297,6 +298,9 @@ async fn heterogeneous_team_end_to_end() {
         .and_then(|a| a.result.clone())
         .expect("follow-up result");
     assert!(follow_up_result.contains("data summary"));
+    // T09: the worker's directed message actually reached reasoner-a's context
+    // (not just the messages table), so the follow-up result consumes it.
+    assert!(follow_up_result.contains("data ready for refinement"));
 
     // Assignment: the reassigned task's actual assignee is worker-b.
     let reassigned_record = board.task(task_ids[1]).expect("task").expect("exists");
@@ -311,6 +315,170 @@ async fn heterogeneous_team_end_to_end() {
     assert!(worker_artifacts.iter().any(|a| a.path == "summary.md"));
     let utility_artifacts = board.artifacts(task_ids[2]).expect("artifacts");
     assert!(utility_artifacts.iter().any(|a| a.path == "util.txt"));
+
+    // T02/T16: the objective and the final TeamResult are reconstructable from
+    // the database alone, not just the in-memory return value.
+    let reconstructed = reconstruct_team_result(&board, root_id).expect("reconstruct");
+    assert!(reconstructed.answer.contains("data summary"));
+    assert!(reconstructed.answer.contains("utility output"));
+    assert!(reconstructed.answer.contains("refined insight"));
+    assert_eq!(reconstructed.task_refs, task_ids);
+
+    let _ = std::fs::remove_file(&path);
+}
+
+/// A driver that pauses mid-execution (signaling via `started`) so the test
+/// can open a second connection and observe the durable Running state, then
+/// resumes when `go` is set.
+struct PauseDriver {
+    target_objective: String,
+    started: Arc<AtomicBool>,
+    go: Arc<AtomicBool>,
+}
+
+#[async_trait]
+impl AgentDriver for PauseDriver {
+    async fn run_task(&self, task: AgentTask) -> Result<AgentTaskResult, String> {
+        if task.objective == self.target_objective {
+            self.started.store(true, Ordering::SeqCst);
+            while !self.go.load(Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
+        }
+        Ok(AgentTaskResult {
+            task_id: task.id,
+            summary: "done".into(),
+            artifacts: Vec::new(),
+            message: None,
+        })
+    }
+}
+
+// The task/attempt lifecycle is durable: while a driver is mid-execution, a
+// second connection sees the assignee and a Running attempt.
+#[tokio::test]
+async fn running_attempt_is_durable_mid_execution() {
+    let path =
+        std::env::temp_dir().join(format!("agent_code_team_running_{}.db", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+
+    let started = Arc::new(AtomicBool::new(false));
+    let go = Arc::new(AtomicBool::new(false));
+    let driver = Arc::new(PauseDriver {
+        target_objective: "pause task".into(),
+        started: started.clone(),
+        go: go.clone(),
+    }) as Arc<dyn AgentDriver>;
+
+    {
+        let conn = Connection::open(&path).expect("open db");
+        let board = SqliteTaskBoard::open(conn).expect("open board");
+        let drivers = BTreeMap::from([("worker-a".to_string(), driver)]);
+        let mut sched = Scheduler::new(build_registry(), drivers, board, 1);
+        let specs = vec![TaskSpec {
+            objective: "pause task".into(),
+            kind: TaskKind::Bulk,
+            target: Some("worker-a".into()),
+            parent: None,
+            context: Vec::new(),
+        }];
+        let handle = tokio::spawn(async move { sched.schedule(&specs).await });
+
+        // Wait until the driver is mid-execution (the Running attempt is
+        // already persisted).
+        while !started.load(Ordering::SeqCst) {
+            tokio::task::yield_now().await;
+        }
+        // A second connection observes the durable Running state.
+        let conn2 = Connection::open(&path).expect("second connection");
+        let board2 = SqliteTaskBoard::open(conn2).expect("second board");
+        let task_id = board2
+            .task_ids()
+            .expect("task ids")
+            .pop()
+            .expect("one task");
+        let record = board2.task(task_id).expect("task").expect("exists");
+        assert_eq!(record.assignee.as_deref(), Some("worker-a"));
+        assert_eq!(record.status, TaskStatus::Running);
+        assert!(board2
+            .attempts(task_id)
+            .expect("attempts")
+            .iter()
+            .any(|a| a.status == TaskStatus::Running));
+        // Resume and let it finish.
+        go.store(true, Ordering::SeqCst);
+        let results = handle.await.expect("no panic").expect("schedule");
+        assert!(results[0].result.is_ok());
+    }
+    let _ = std::fs::remove_file(&path);
+}
+
+// Simulating a crash: a task left Running can be recovered; the interrupted
+// attempt is preserved and a recovery attempt is added.
+#[test]
+fn interrupted_task_can_be_recovered() {
+    let path =
+        std::env::temp_dir().join(format!("agent_code_team_crash_{}.db", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+
+    // Crash: the task was assigned and started but never reached a terminal.
+    {
+        let conn = Connection::open(&path).expect("open db");
+        let mut board = SqliteTaskBoard::open(conn).expect("open board");
+        let id = board
+            .create_task("crashed job", None, TaskKind::Bulk, Some("worker-a".into()))
+            .expect("create");
+        board.assign(id, "worker-a").expect("assign");
+        board
+            .record_attempt(&TaskAttempt {
+                task_id: id,
+                attempt: 1,
+                agent_id: "worker-a".into(),
+                status: TaskStatus::Running,
+                result: None,
+                error: None,
+            })
+            .expect("record running");
+        board.set_status(id, TaskStatus::Running).expect("running");
+    }
+
+    // Restart: reopen and recover the interrupted task.
+    let conn = Connection::open(&path).expect("reopen db");
+    let mut board = SqliteTaskBoard::open(conn).expect("reopen board");
+    let id = board
+        .task_ids()
+        .expect("task ids")
+        .into_iter()
+        .find(|id| {
+            board
+                .task(*id)
+                .expect("task")
+                .map(|t| t.status == TaskStatus::Running)
+                .unwrap_or(false)
+        })
+        .expect("interrupted task");
+    // Recovery: re-run as a new attempt; the interrupted Running attempt is kept.
+    board
+        .record_attempt(&TaskAttempt {
+            task_id: id,
+            attempt: 2,
+            agent_id: "worker-b".into(),
+            status: TaskStatus::Succeeded,
+            result: Some("recovered".into()),
+            error: None,
+        })
+        .expect("record recovery");
+    board
+        .set_status(id, TaskStatus::Succeeded)
+        .expect("succeeded");
+    let attempts = board.attempts(id).expect("attempts");
+    assert_eq!(attempts.len(), 2);
+    assert_eq!(attempts[0].status, TaskStatus::Running);
+    assert_eq!(attempts[1].status, TaskStatus::Succeeded);
+    assert_eq!(
+        board.task(id).expect("task").expect("exists").status,
+        TaskStatus::Succeeded
+    );
 
     let _ = std::fs::remove_file(&path);
 }
