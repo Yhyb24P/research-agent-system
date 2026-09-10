@@ -7,12 +7,17 @@
 //! the Lead plan-follow-up-synthesis loop (commit 4).
 
 mod board;
+mod lead;
 mod registry;
 mod scheduler;
+
+#[cfg(test)]
+mod testutil;
 
 pub use board::{
     AgentMessage, ArtifactMeta, BoardError, TaskAttempt, TaskBoard, TaskRecord, TaskStatus,
 };
+pub use lead::{Lead, LeadBrain, LeadContext, LeadDecision, LeadError, TeamResult};
 pub use registry::{
     AgentConfig, AgentDriver, AgentRegistry, AgentTask, AgentTaskResult, AgentTier, RegistryError,
     TaskKind,
