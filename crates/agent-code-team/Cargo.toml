@@ -8,3 +8,4 @@ publish.workspace = true
 
 [dependencies]
 async-trait.workspace = true
+tokio.workspace = true

@@ -8,6 +8,7 @@
 
 mod board;
 mod registry;
+mod scheduler;
 
 pub use board::{
     AgentMessage, ArtifactMeta, BoardError, TaskAttempt, TaskBoard, TaskRecord, TaskStatus,
@@ -16,3 +17,4 @@ pub use registry::{
     AgentConfig, AgentDriver, AgentRegistry, AgentTask, AgentTaskResult, AgentTier, RegistryError,
     TaskKind,
 };
+pub use scheduler::{ScheduleError, ScheduledResult, Scheduler, TaskSpec};

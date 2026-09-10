@@ -22,7 +22,7 @@ publish = false
 [workspace.dependencies]
 async-trait = "0.1"
 rusqlite = { version = "0.32", features = ["bundled"] }
-tokio = { version = "1", features = ["macros", "rt"] }
+tokio = { version = "1", features = ["macros", "rt", "sync"] }
 sha2 = "0.10"
 ignore = "0.4"
 glob = "0.3"
