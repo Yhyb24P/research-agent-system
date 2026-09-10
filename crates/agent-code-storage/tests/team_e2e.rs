@@ -73,12 +73,17 @@ impl E2eDriver {
                 }],
                 message: None,
             }),
-            ("reasoner-a", _) => Ok(AgentTaskResult {
-                task_id: task.id,
-                summary: "refined insight".into(),
-                artifacts: Vec::new(),
-                message: None,
-            }),
+            ("reasoner-a", _) => {
+                // Echo the context so the test can prove the parent's result
+                // flowed into this follow-up task's context.
+                let ctx = task.context.join("|");
+                Ok(AgentTaskResult {
+                    task_id: task.id,
+                    summary: format!("refined insight ({ctx})"),
+                    artifacts: Vec::new(),
+                    message: None,
+                })
+            }
             _ => Ok(AgentTaskResult {
                 task_id: task.id,
                 summary: "ok".into(),
@@ -282,6 +287,16 @@ async fn heterogeneous_team_end_to_end() {
     assert_eq!(reassigned.len(), 3);
     assert_eq!(reassigned[0].agent_id, "worker-a");
     assert_eq!(reassigned[2].agent_id, "worker-b");
+
+    // The follow-up task's context carried its parent's result (T07/T10): the
+    // reasoner's recorded result echoes the parent's "data summary".
+    let follow_up_attempts = board.attempts(task_ids[3]).expect("attempts");
+    let follow_up_result = follow_up_attempts
+        .iter()
+        .find(|a| a.status == TaskStatus::Succeeded)
+        .and_then(|a| a.result.clone())
+        .expect("follow-up result");
+    assert!(follow_up_result.contains("data summary"));
 
     // Assignment: the reassigned task's actual assignee is worker-b.
     let reassigned_record = board.task(task_ids[1]).expect("task").expect("exists");

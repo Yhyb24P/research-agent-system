@@ -108,11 +108,19 @@ impl<B: TaskBoard> Scheduler<B> {
         // 2. Run them concurrently, each bounded by its agent's quota.
         let mut handles = Vec::new();
         for (i, spec) in specs.iter().enumerate() {
+            // A follow-up task's context includes its parent's result, so a
+            // worker's result flows into the parent's subsequent context.
+            let mut context = spec.context.clone();
+            if let Some(parent) = spec.parent {
+                if let Ok(Some(summary)) = parent_summary(&self.board, parent) {
+                    context.push(format!("parent[{parent}]: {summary}"));
+                }
+            }
             let task = AgentTask {
                 id: task_ids[i],
                 objective: spec.objective.clone(),
                 kind: spec.kind,
-                context: spec.context.clone(),
+                context,
             };
             let candidates = self.candidate_order(spec.kind, spec.target.as_deref());
             let drivers = self.drivers.clone();
@@ -198,6 +206,17 @@ impl<B: TaskBoard> Scheduler<B> {
         }
         m
     }
+}
+
+/// The summary of a parent task's last successful attempt, if it has one.
+fn parent_summary<B: TaskBoard>(board: &B, parent: u64) -> Result<Option<String>, BoardError> {
+    let attempts = board.attempts(parent)?;
+    let summary = attempts
+        .iter()
+        .rev()
+        .find(|a| a.status == TaskStatus::Succeeded)
+        .and_then(|a| a.result.clone());
+    Ok(summary)
 }
 
 /// Run one task: walk the candidate agents, retrying each up to `max_retries`
