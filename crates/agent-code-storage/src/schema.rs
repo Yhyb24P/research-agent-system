@@ -72,9 +72,9 @@ CREATE TABLE IF NOT EXISTS observations (
 /// version 1) is migrated by adding the missing columns in one transaction.
 /// Already-current databases are left untouched.
 pub fn migrate(conn: &mut rusqlite::Connection) -> Result<(), rusqlite::Error> {
-    let version: i32 = conn
-        .pragma_query_value(None, "user_version", |row| row.get(0))
-        .unwrap_or(0);
+    // Propagate a real PRAGMA read error rather than treating it as version 0
+    // (which would silently re-run the migration).
+    let version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
     if version >= SCHEMA_VERSION {
         return Ok(());
     }

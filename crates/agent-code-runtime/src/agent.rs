@@ -109,12 +109,16 @@ pub struct Delivery {
 
 /// Build a bounded context whose FULL serialized request fits the input cap.
 ///
-/// The context is first built to the reserved budget, then the observation
-/// budget is iteratively tightened until the exact serialized request —
-/// context plus framing plus tool schemas, after JSON escaping — fits the
-/// input cap (`max_tokens - reserved_output`). JSON escaping can grow the body
-/// well beyond the raw context, so reserving an estimated overhead alone is
-/// not a guarantee (N11).
+/// The context is built to the reserved budget, then the exact serialized
+/// request — context plus framing plus tool schemas, after JSON escaping — is
+/// metered against the input cap (`max_tokens - reserved_output`). JSON
+/// escaping can grow the body well beyond the raw context, so when it exceeds
+/// the cap the *whole* available budget is tightened (via the reserved
+/// overhead) and every section — task, rules, map, observations — is
+/// re-trimmed by priority, not just the observations. If even the mandatory
+/// task framing plus the overhead cannot fit, it fails with
+/// [`ContextError::BudgetTooSmall`] rather than returning an oversized body
+/// (N11).
 fn build_bounded_context(
     source: &dyn HistorySource,
     model: &dyn ModelClient,
@@ -125,7 +129,9 @@ fn build_bounded_context(
     budget: ContextBudget,
 ) -> Result<ModelContext, AgentError> {
     let counter = BytesTokenCounter::default();
-    let input_cap = budget.max_tokens - budget.reserved_output;
+    // The model's input limit. Saturating: a misconfigured budget must not
+    // panic, it just yields a tighter (possibly empty) cap.
+    let input_cap = budget.max_tokens.saturating_sub(budget.reserved_output);
     let mut budget = budget;
     // Pre-reserve the client's fixed framing overhead to cut down iterations.
     budget.protocol_overhead = counter.count(&model.protocol_overhead());
@@ -140,12 +146,17 @@ fn build_bounded_context(
             &counter,
         )?;
         // Meter the exact serialized request, not the raw context.
-        if counter.count(&model.request_body(&ctx)) <= input_cap || budget.observation_cap == 0 {
+        let body_tokens = counter.count(&model.request_body(&ctx));
+        if body_tokens <= input_cap {
             return Ok(ctx);
         }
-        // The escaped body exceeds the input cap: tighten the observation
-        // budget and retry.
-        budget.observation_cap /= 2;
+        // The escaped request exceeds the input cap. Reserve the excess so the
+        // next build re-trims every section (task/rules/map/observations) by
+        // priority. The excess is strictly decreasing, so this converges; it
+        // terminates when even the task framing no longer fits (BudgetTooSmall).
+        budget.protocol_overhead = budget
+            .protocol_overhead
+            .saturating_add(body_tokens - input_cap);
     }
 }
 
@@ -654,6 +665,96 @@ mod tests {
             "escaped outbound request ({}) must fit the input cap ({})",
             body_tokens,
             input_cap
+        );
+    }
+
+    /// N11: when the escaping-heavy content is in task/rules/map (no
+    /// observations), the whole-budget tightening still keeps the final body
+    /// within the input cap.
+    #[test]
+    fn bounded_context_trims_task_rules_map_escaping() {
+        use agent_code_context::{BytesTokenCounter, TokenCounter};
+        use agent_code_model::{openai_request_body, OpenAiClient};
+        use std::time::Duration;
+
+        /// A source with no observations: the escaping-heavy content comes
+        /// from the task/rules/map sections, not the durable history.
+        struct NoObs;
+        impl HistorySource for NoObs {
+            fn observations(&self, _s: &SessionId) -> Result<Vec<Observation>, ContextError> {
+                Ok(Vec::new())
+            }
+        }
+
+        let client = OpenAiClient::new(
+            "http://localhost/v1",
+            "test-model",
+            None,
+            Duration::from_secs(5),
+        );
+        let counter = BytesTokenCounter::default();
+
+        // Escaping-heavy task/rules/map content (quotes, backslashes,
+        // newlines, control chars, Unicode), with no observations.
+        let nasty = "a\"b\\c\nd\u{1f600}\u{4e2d}\u{1}";
+        let content = nasty.repeat(40);
+        let budget = ContextBudget::new(900, 100);
+        let ctx = build_bounded_context(
+            &NoObs,
+            &client,
+            &SessionId::new("n11"),
+            &content,
+            &content,
+            &content,
+            budget,
+        )
+        .unwrap();
+
+        let body = openai_request_body("test-model", &ctx);
+        let input_cap = budget.max_tokens.saturating_sub(budget.reserved_output);
+        assert!(
+            counter.count(&body) <= input_cap,
+            "escaped task/rules/map request must fit the input cap"
+        );
+    }
+
+    /// N11: when even the mandatory task framing plus the protocol overhead
+    /// cannot fit the input cap, the builder fails rather than returning an
+    /// oversized request.
+    #[test]
+    fn bounded_context_fails_when_even_task_cannot_fit() {
+        use agent_code_model::OpenAiClient;
+        use std::time::Duration;
+
+        struct NoObs;
+        impl HistorySource for NoObs {
+            fn observations(&self, _s: &SessionId) -> Result<Vec<Observation>, ContextError> {
+                Ok(Vec::new())
+            }
+        }
+
+        let client = OpenAiClient::new(
+            "http://localhost/v1",
+            "test-model",
+            None,
+            Duration::from_secs(5),
+        );
+        // A budget so small that even the task framing plus the client's
+        // framing overhead cannot fit the input cap.
+        let budget = ContextBudget::new(1, 0);
+        let err = build_bounded_context(
+            &NoObs,
+            &client,
+            &SessionId::new("n11"),
+            "task",
+            "",
+            "",
+            budget,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, AgentError::Context(ContextError::BudgetTooSmall)),
+            "an impossible budget must fail, not return an oversized body: {err:?}"
         );
     }
 }
