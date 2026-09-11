@@ -352,3 +352,21 @@ See `docs/coding_agent_runtime_matrix.md`, `docs/qwen_code_runtime_probe.md`,
 `docs/kimi_code_runtime_probe.md`, and `.acc-evidence/phase24b-*-probe.md`.
 Gate J/K/L/M/Q and cross-runtime E2E remain `NOT_RUN`; C21_TEAM_FLOW_READY
 remains `IN_PROGRESS`; no readiness is claimed.
+
+## 27. Phase 2.5A — Kimi Code bounded ACP live probe
+
+In an isolated temporary working directory, `kimi acp` received only ACP
+`initialize` and `initialized` over stdio JSON-RPC with a 12-second timeout.
+It exited 0. Real stdout confirmed protocol version 1, Kimi Code CLI 0.39.1,
+session load/list/resume/close/delete/fork, prompt image/embedded-context, and
+MCP HTTP/SSE capabilities. The response offered a terminal login method only;
+no credential was read.
+
+No task/prompt, filesystem write, shell, network tool, git, installation,
+external MCP, cancellation, session mutation, artifact, acceptance, or admin
+action was requested. Task lifecycle, tool request/response, cancel, restart
+reconciliation, and retry are `BLOCKED_AUTH_REQUIRED`, not inferred. The
+recommendation remains `structured-message driver` pending authenticated
+bounded verification. Evidence: `.acc-evidence/phase25a-kimi-acp-probe.md`.
+Gate J/K/L/M/Q and cross-runtime E2E remain `NOT_RUN`; C21_TEAM_FLOW_READY
+remains `IN_PROGRESS`; no readiness is claimed.
