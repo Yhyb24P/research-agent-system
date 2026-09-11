@@ -1,10 +1,12 @@
 //! Small SQLite journal for durable Agent state.
 
+mod acc_store;
 mod board;
 mod journal;
 mod observations;
 mod schema;
 
+pub use acc_store::SqliteAccStore;
 pub use board::SqliteTaskBoard;
 pub use journal::SqliteJournal;
 pub use schema::{migrate, SCHEMA, SCHEMA_VERSION};

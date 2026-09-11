@@ -1,0 +1,294 @@
+   Compiling agent-code-storage v0.1.0 (/home/yhshy/git_files/828/research-agent-system/crates/agent-code-storage)
+   Compiling agent-code-cli v0.1.0 (/home/yhshy/git_files/828/research-agent-system/crates/agent-code-cli)
+   Compiling agent-code-runtime v0.1.0 (/home/yhshy/git_files/828/research-agent-system/crates/agent-code-runtime)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.82s
+     Running unittests src/lib.rs (target/debug/deps/agent_code_cli-7c49b1e51a58ea24)
+
+running 1 test
+test tests::inspection_reads_authoritative_task_graph_events_manifest_and_artifacts ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.31s
+
+     Running unittests src/lib.rs (target/debug/deps/agent_code_context-4c4b514ef8fc9ac0)
+
+running 32 tests
+test budget::tests::byte_counter_is_conservative_and_cjk_safe ... ok
+test budget::tests::free_tokens_subtracts_reserved_and_margin ... ok
+test budget::tests::truncate_is_char_boundary_safe ... ok
+test budget::tests::truncate_keeps_head_and_tail ... ok
+test build::tests::a_very_long_observation_is_stored_bounded ... ok
+test budget::tests::truncate_short_string_is_unchanged ... ok
+test build::tests::a_very_long_observation_that_cannot_fit_is_dropped ... ok
+test build::tests::budget_too_small_for_task_errors ... ok
+test build::tests::assembled_context_stays_within_budget ... ok
+test build::tests::map_cannot_eat_the_whole_budget ... ok
+test build::tests::compact_summary_has_lowest_priority ... ok
+test build::tests::rules_and_map_reach_the_model_context ... ok
+test build::tests::newest_observations_preferred_under_tight_budget ... ok
+test build::tests::task_is_always_present ... ok
+test build::tests::task_truncates_to_fit_instead_of_erroring ... ok
+test history::tests::compact_context_keeps_recent_and_compacts_older ... ok
+test history::tests::compact_empty_is_empty ... ok
+test history::tests::compact_context_fits_budget ... ok
+test history::tests::compact_retains_required_fields_and_counts ... ok
+test repo_map::tests::map_missing_root_is_an_error ... ok
+test repo_map::tests::exact_cap_is_not_flagged_truncated ... ok
+test rules::tests::rules_absent_is_empty ... ok
+test repo_map::tests::map_is_bounded_and_deterministic ... ok
+test repo_map::tests::map_read_root_must_be_a_directory ... ok
+test rules::tests::rules_respect_the_char_cap ... ok
+test rules::tests::present_but_unreadable_rule_is_an_error ... ok
+test repo_map::tests::result_set_is_deterministic_regardless_of_creation_order ... ok
+test rules::tests::rules_combine_in_priority_order_with_headers ... ok
+test repo_map::tests::map_skips_noise_directories ... ok
+test repo_map::tests::map_does_not_follow_symlinks ... ok
+test rules::tests::symlinked_rule_cannot_escape_the_repository ... ok
+test repo_map::tests::traversal_stops_at_the_entry_cap ... ok
+
+test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running unittests src/lib.rs (target/debug/deps/agent_code_core-ce86eab0c4c7b3c9)
+
+running 11 tests
+test tests::happy_path_reaches_completed ... ok
+test tests::illegal_transition_is_rejected ... ok
+test tests::recover_keeps_interrupted_tool_not_failed ... ok
+test tests::inactive_tool_call_is_rejected ... ok
+test tests::begin_tool_failure_does_not_diverge_state ... ok
+test tests::recover_resumes_mid_tool_to_observing_and_continues ... ok
+test tests::running_tools_fault_propagates_instead_of_panicking ... ok
+test tests::session_recover_loads_persisted_state ... ok
+test tests::session_recover_requires_existing_session ... ok
+test tests::recover_marks_running_tools_interrupted ... ok
+test tests::terminal_state_rejects_all_transitions ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/agent_code_model-528e65fd43e939b9)
+
+running 12 tests
+test tests::stub_returns_configured_decision ... ok
+test types::tests::all_variants_roundtrip ... ok
+test types::tests::hostile_fields_roundtrip_losslessly ... ok
+test types::tests::decode_rejects_non_json ... ok
+test types::tests::command_roundtrip ... ok
+test types::tests::killed_command_encodes_missing_exit ... ok
+test openai::tests::malformed_json_is_an_error ... ok
+test openai::tests::http_error_is_a_transport_error ... ok
+test openai::tests::errors_do_not_leak_the_api_key ... ok
+test openai::tests::parses_a_tool_call ... ok
+test openai::tests::parses_a_final_answer ... ok
+test openai::tests::unknown_tool_is_an_error ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running unittests src/lib.rs (target/debug/deps/agent_code_runtime-cbf34710db71e98e)
+
+running 7 tests
+test agent::tests::bounded_context_fails_when_even_task_cannot_fit ... ok
+test agent::tests::bounded_context_trims_task_rules_map_escaping ... ok
+test agent::tests::bounded_context_absorbs_json_escaping_growth ... ok
+test dispatch::tests::view_observation_carries_content_hash_and_lines ... ok
+test dispatch::tests::failed_command_records_output_and_error ... ok
+test agent::tests::loop_dispatches_tools_and_delivers ... ok
+test agent::tests::verification_failure_loops_back_until_the_check_passes ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/e2e.rs (target/debug/deps/e2e-dbf61039736daff3)
+
+running 1 test
+test self_correction_survives_a_lost_model_request ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.00s
+
+     Running unittests src/lib.rs (target/debug/deps/agent_code_storage-efa92962965de0b5)
+
+running 7 tests
+test observations::tests::observations_are_session_scoped ... ok
+test observations::tests::observations_survive_reopen ... ok
+test tests::reopen_recovers_current_state ... ok
+test tests::two_sessions_are_isolated ... ok
+test tests::reopen_marks_running_tool_interrupted ... ok
+test tests::r3_database_migrates_preserving_data ... ok
+test tests::v2_database_migrates_to_v3 ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.71s
+
+     Running tests/acc_e2e.rs (target/debug/deps/acc_e2e-c2c769825b530a82)
+
+running 1 test
+test deterministic_acc_loop_survives_restart_and_enforces_boundaries ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.48s
+
+     Running tests/acc_migration.rs (target/debug/deps/acc_migration-cd4bc10131502cac)
+
+running 1 test
+test pre_acc_journal_migrates_preserves_existing_rows_and_recovers_acc_state ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.33s
+
+     Running tests/n12.rs (target/debug/deps/n12-61b3d541af177f38)
+
+running 1 test
+test compact_context_preserves_durable_history ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.56s
+
+     Running tests/team_e2e.rs (target/debug/deps/team_e2e-75f677ce4422eb2c)
+
+running 3 tests
+test interrupted_task_can_be_recovered ... ok
+test running_attempt_is_durable_mid_execution ... ok
+test heterogeneous_team_end_to_end ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.09s
+
+     Running unittests src/lib.rs (target/debug/deps/agent_code_team-30fb14ba2ad2eb06)
+
+running 23 tests
+test acc::tests::manifest_is_deterministic_and_private_content_is_excluded ... ok
+test acc::tests::broker_rejects_impersonation_and_dedupes_replay ... ok
+test acc::tests::graph_rejects_cycle_and_returns_ready_tasks ... ok
+test acc::tests::artifact_hash_or_version_mismatch_fails_closed_and_is_auditable ... ok
+test acc::tests::assignment_uses_capabilities_not_grants_and_broker_enforces_acceptance_boundary ... ok
+test acc::tests::strict_contract_rejects_unknown_control_field ... ok
+test lead::tests::first_round_requires_two_subtasks ... ok
+test acc::tests::runtime_feature_negotiation_blocks_unsupported_operations_without_invocation ... ok
+test lead::tests::final_result_is_reconstructable_from_board ... ok
+test lead::tests::ungrounded_completion_is_rejected ... ok
+test registry::tests::bulk_tool_route_to_worker_and_utility ... ok
+test lead::tests::lead_delegates_follows_up_and_synthesizes ... ok
+test registry::tests::reasoning_routes_to_reasoner ... ok
+test registry::tests::explicit_target_overrides_tier_routing ... ok
+test registry::tests::registry_rejects_duplicate_ids ... ok
+test registry::tests::registry_rejects_zero_concurrency ... ok
+test registry::tests::registry_validates_a_full_tier_set ... ok
+test registry::tests::routing_is_stable_by_id ... ok
+test scheduler::tests::failed_task_retries_then_reassigns ... ok
+test scheduler::tests::independent_tasks_run_concurrently ... ok
+test scheduler::tests::same_agent_respects_max_concurrency ... ok
+test scheduler::tests::user_override_targets_a_specific_agent ... ok
+test acc::tests::generated_wire_schema_matches_checked_in_drift_sentinel ... ok
+
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/agent_code_tools-5726681bccecd79e)
+
+running 1 test
+test tests::contracts_carry_the_required_fields ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/agent_code_tui-10eebd9bc72fef79)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/agent_code_workspace-3501682d12653c27)
+
+running 24 tests
+test tests::resolves_and_hashes_contained_file ... ok
+test tests::rejects_absolute_paths ... ok
+test tests::rejects_dotdot_escape ... ok
+test exec::tests::reports_nonzero_exit ... ok
+test tests::rejects_symlink_escape ... ok
+test exec::tests::runs_and_captures_stdout ... ok
+test tests::atomic_write_creates_file ... ok
+test write::tests::write_enforces_max_bytes ... ok
+test write::tests::edit_candidate_guard_failure_leaves_file_intact ... ok
+test tools::tests::view_respects_requested_range ... ok
+test tools::tests::view_numbers_lines_and_caps_at_300 ... ok
+test write::tests::edit_applies_unique_match_and_reports_range ... ok
+test write::tests::edit_normalizes_only_on_zero_exact_matches ... ok
+test write::tests::write_detects_stale_hash ... ok
+test exec::tests::truncates_long_output_to_head_and_tail ... ok
+test tools::tests::search_finds_matching_lines_bounded ... ok
+test write::tests::edit_duplicate_old_str_is_rejected ... ok
+test tools::tests::search_glob_filters_files ... ok
+test write::tests::edit_post_write_guard_restores_original_bytes ... ok
+test write::tests::write_create_only_rejects_existing ... ok
+test write::tests::write_enforces_default_cap_when_unspecified ... ok
+test git::tests::original_worktree_is_untouched ... ok
+test git::tests::checkpoint_diff_rollback ... ok
+test exec::tests::timeout_kills_grandchildren ... ok
+
+test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.00s
+
+     Running tests/integration.rs (target/debug/deps/integration-ec8aa168cbdcc2b8)
+
+running 9 tests
+test n04_edit_exact_unique ... ok
+test n06_write_guards ... ok
+test n03_view_bounded ... ok
+test n08_structured_command_argv ... ok
+test n05_syntax_rollback ... ok
+test n07_search_bounded ... ok
+test n10_output_truncation ... ok
+test n02_worktree_isolation ... ok
+test n09_process_group_timeout ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.00s
+
+   Doc-tests agent_code_cli
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests agent_code_context
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests agent_code_core
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests agent_code_model
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests agent_code_runtime
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests agent_code_storage
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests agent_code_team
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests agent_code_tools
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests agent_code_tui
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests agent_code_workspace
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

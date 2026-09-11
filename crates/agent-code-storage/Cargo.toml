@@ -12,6 +12,7 @@ agent-code-core = { path = "../agent-code-core" }
 agent-code-model = { path = "../agent-code-model" }
 agent-code-team = { path = "../agent-code-team" }
 rusqlite.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
 async-trait.workspace = true

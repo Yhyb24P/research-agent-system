@@ -1,0 +1,4 @@
+    Checking agent-code-storage v0.1.0 (/home/yhshy/git_files/828/research-agent-system/crates/agent-code-storage)
+    Checking agent-code-runtime v0.1.0 (/home/yhshy/git_files/828/research-agent-system/crates/agent-code-runtime)
+    Checking agent-code-cli v0.1.0 (/home/yhshy/git_files/828/research-agent-system/crates/agent-code-cli)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.37s

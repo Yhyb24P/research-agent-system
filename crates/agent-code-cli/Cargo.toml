@@ -7,3 +7,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+agent-code-storage = { path = "../agent-code-storage" }
+agent-code-team = { path = "../agent-code-team" }
+serde.workspace = true
+rusqlite.workspace = true

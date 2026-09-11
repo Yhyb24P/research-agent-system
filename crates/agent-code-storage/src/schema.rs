@@ -2,7 +2,7 @@
 /// and `tool_calls.request` on top of the R3 (version 1) schema. Version 3
 /// extends the team tables for the durable task board: task parent/kind/
 /// target/assignee, run attempt/result/error, and task-keyed artifacts.
-pub const SCHEMA_VERSION: i32 = 3;
+pub const SCHEMA_VERSION: i32 = 6;
 
 /// The durable journal schema. Deliberately small; it does not reproduce the
 /// legacy qualification/audit schema.
@@ -75,6 +75,35 @@ CREATE TABLE IF NOT EXISTS observations (
     payload TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS acc_tasks (
+    task_id TEXT PRIMARY KEY,
+    contract_json TEXT NOT NULL,
+    state TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS acc_dependencies (
+    predecessor TEXT NOT NULL REFERENCES acc_tasks(task_id),
+    successor TEXT NOT NULL REFERENCES acc_tasks(task_id),
+    kind TEXT NOT NULL,
+    PRIMARY KEY (predecessor, successor, kind)
+);
+CREATE TABLE IF NOT EXISTS acc_context_manifests (
+    manifest_id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES acc_tasks(task_id),
+    manifest_json TEXT NOT NULL,
+    manifest_sha256 TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS acc_artifacts (
+    artifact_id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES acc_tasks(task_id),
+    sha256 TEXT NOT NULL,
+    version INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS acc_events (
+    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id TEXT NOT NULL UNIQUE,
+    task_id TEXT NOT NULL REFERENCES acc_tasks(task_id),
+    event_json TEXT NOT NULL
+);
 "#;
 
 /// Idempotently bring `conn` up to [`SCHEMA_VERSION`]. A fresh database is
@@ -112,6 +141,38 @@ pub fn migrate(conn: &mut rusqlite::Connection) -> Result<(), rusqlite::Error> {
     // team task's artifacts and a single-agent session's coexist. SQLite cannot
     // relax a NOT NULL constraint in place, so the table is rebuilt.
     migrate_artifacts_to_v3(&tx)?;
+    // R5 -> ACC/0.1: one SQLite journal gains typed ACC projections. The
+    // sequence remains this table's SQLite rowid; no parallel ordering clock.
+    tx.execute_batch(
+        "CREATE TABLE IF NOT EXISTS acc_tasks (
+            task_id TEXT PRIMARY KEY, contract_json TEXT NOT NULL, state TEXT NOT NULL
+         );
+         CREATE TABLE IF NOT EXISTS acc_context_manifests (
+            manifest_id TEXT PRIMARY KEY,
+            task_id TEXT NOT NULL REFERENCES acc_tasks(task_id),
+            manifest_json TEXT NOT NULL, manifest_sha256 TEXT NOT NULL
+         );
+         CREATE TABLE IF NOT EXISTS acc_dependencies (
+            predecessor TEXT NOT NULL REFERENCES acc_tasks(task_id),
+            successor TEXT NOT NULL REFERENCES acc_tasks(task_id), kind TEXT NOT NULL,
+            PRIMARY KEY (predecessor, successor, kind)
+         );
+         CREATE TABLE IF NOT EXISTS acc_artifacts (
+            artifact_id TEXT PRIMARY KEY,
+            task_id TEXT NOT NULL REFERENCES acc_tasks(task_id), sha256 TEXT NOT NULL,
+            version INTEGER NOT NULL
+         );
+         CREATE TABLE IF NOT EXISTS acc_events (
+            sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_id TEXT NOT NULL UNIQUE,
+            task_id TEXT NOT NULL REFERENCES acc_tasks(task_id), event_json TEXT NOT NULL
+         );",
+    )?;
+    ensure_column(&tx, "acc_artifacts", "version", "INTEGER")?;
+    tx.execute(
+        "UPDATE acc_artifacts SET version = 1 WHERE version IS NULL",
+        [],
+    )?;
     tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     tx.commit()?;
     Ok(())
