@@ -1,0 +1,15 @@
+2026-09-11T14:12:25+08:00
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.03s
+     Running tests/codex_live.rs (target/debug/deps/codex_live-adc69db774adfcad)
+
+running 1 test
+sanitized mcp status=Some(String("connected")) tools_error=Some(Null) has_context_tool=true
+sanitized final mcp status=Some(String("connected")) tools_error_present=false
+sanitized item types=["userMessage", "reasoning", "mcpToolCall", "agentMessage"]
+sanitized mcp call status=Some(String("completed")) error=Some(Null) error_message=None server=Some(String("ras")) tool=Some(String("ras_request_context"))
+sanitized bridge breadcrumbs=["bridge-started", "rpc-initialize", "rpc-notifications/initialized", "rpc-tools/list", "bridge-started", "rpc-initialize", "rpc-notifications/initialized", "rpc-tools/list", "rpc-resources/templates/list", "rpc-resources/list", "rpc-tools/call", "tools-call-received", "collaboration-persisted", "bridge-started", "rpc-initialize", "rpc-notifications/initialized", "rpc-tools/list", "rpc-resources/templates/list", "rpc-resources/list"]
+test real_codex_thread_turn_uses_bounded_mcp_context_request ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 17.11s
+
+exit_code=0

@@ -1,0 +1,10 @@
+2026-09-11T14:12:45+08:00
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.03s
+     Running tests/phase21_durability.rs (target/debug/deps/phase21_durability-b078a6090f7cf3a7)
+
+running 1 test
+test external_binding_and_idempotent_collaboration_survive_reopen ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.35s
+
+exit_code=0

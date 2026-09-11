@@ -1,0 +1,4 @@
+2026-09-11T14:12:45+08:00
+    Checking agent-code-runtime v0.1.0 (<WORKSPACE>/crates/agent-code-runtime)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.10s
+exit_code=0

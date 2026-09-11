@@ -2,7 +2,7 @@
 /// and `tool_calls.request` on top of the R3 (version 1) schema. Version 3
 /// extends the team tables for the durable task board: task parent/kind/
 /// target/assignee, run attempt/result/error, and task-keyed artifacts.
-pub const SCHEMA_VERSION: i32 = 6;
+pub const SCHEMA_VERSION: i32 = 7;
 
 /// The durable journal schema. Deliberately small; it does not reproduce the
 /// legacy qualification/audit schema.
@@ -104,6 +104,27 @@ CREATE TABLE IF NOT EXISTS acc_events (
     task_id TEXT NOT NULL REFERENCES acc_tasks(task_id),
     event_json TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS external_runtime_bindings (
+    team_task_id INTEGER NOT NULL REFERENCES team_tasks(id),
+    attempt INTEGER NOT NULL,
+    agent_id TEXT NOT NULL,
+    runtime_kind TEXT NOT NULL,
+    native_thread_id TEXT,
+    native_turn_id TEXT,
+    lifecycle_state TEXT NOT NULL,
+    PRIMARY KEY (team_task_id, attempt)
+);
+CREATE TABLE IF NOT EXISTS runtime_collaboration_records (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    team_task_id INTEGER NOT NULL REFERENCES team_tasks(id),
+    attempt INTEGER NOT NULL,
+    runtime_kind TEXT NOT NULL,
+    native_call_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    payload_summary TEXT NOT NULL,
+    response_summary TEXT,
+    UNIQUE (runtime_kind, native_call_id)
+);
 "#;
 
 /// Idempotently bring `conn` up to [`SCHEMA_VERSION`]. A fresh database is
@@ -136,6 +157,23 @@ pub fn migrate(conn: &mut rusqlite::Connection) -> Result<(), rusqlite::Error> {
     tx.execute(
         "UPDATE team_task_runs SET attempt = id WHERE attempt IS NULL",
         [],
+    )?;
+    // R6 -> R7: external Coding Agent references remain subordinate to the
+    // durable team task/run, while bounded collaboration calls survive reopen.
+    tx.execute_batch(
+        "CREATE TABLE IF NOT EXISTS external_runtime_bindings (
+            team_task_id INTEGER NOT NULL REFERENCES team_tasks(id), attempt INTEGER NOT NULL,
+            agent_id TEXT NOT NULL, runtime_kind TEXT NOT NULL, native_thread_id TEXT,
+            native_turn_id TEXT, lifecycle_state TEXT NOT NULL,
+            PRIMARY KEY (team_task_id, attempt)
+         );
+         CREATE TABLE IF NOT EXISTS runtime_collaboration_records (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            team_task_id INTEGER NOT NULL REFERENCES team_tasks(id), attempt INTEGER NOT NULL,
+            runtime_kind TEXT NOT NULL, native_call_id TEXT NOT NULL, kind TEXT NOT NULL,
+            payload_summary TEXT NOT NULL, response_summary TEXT,
+            UNIQUE (runtime_kind, native_call_id)
+         );",
     )?;
     // `artifacts` gains a nullable `task_id` and a nullable `session_id`, so a
     // team task's artifacts and a single-agent session's coexist. SQLite cannot

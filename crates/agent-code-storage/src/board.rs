@@ -13,6 +13,28 @@ pub struct SqliteTaskBoard {
     conn: Connection,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExternalRuntimeBinding {
+    pub team_task_id: u64,
+    pub attempt: u32,
+    pub agent_id: String,
+    pub runtime_kind: String,
+    pub native_thread_id: Option<String>,
+    pub native_turn_id: Option<String>,
+    pub lifecycle_state: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeCollaborationRecord {
+    pub team_task_id: u64,
+    pub attempt: u32,
+    pub runtime_kind: String,
+    pub native_call_id: String,
+    pub kind: String,
+    pub payload_summary: String,
+    pub response_summary: Option<String>,
+}
+
 impl SqliteTaskBoard {
     /// Open a board on a connection, applying the schema and migrating.
     pub fn open(mut conn: Connection) -> Result<Self, rusqlite::Error> {
@@ -30,6 +52,55 @@ impl SqliteTaskBoard {
     pub fn schema_version(&self) -> Result<i32, rusqlite::Error> {
         self.conn
             .pragma_query_value(None, "user_version", |r| r.get(0))
+    }
+
+    pub fn upsert_external_binding(
+        &self,
+        binding: &ExternalRuntimeBinding,
+    ) -> Result<(), rusqlite::Error> {
+        self.conn.execute("INSERT INTO external_runtime_bindings (team_task_id, attempt, agent_id, runtime_kind, native_thread_id, native_turn_id, lifecycle_state) VALUES (?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(team_task_id,attempt) DO UPDATE SET native_thread_id=excluded.native_thread_id,native_turn_id=excluded.native_turn_id,lifecycle_state=excluded.lifecycle_state", params![binding.team_task_id as i64,binding.attempt as i64,binding.agent_id,binding.runtime_kind,binding.native_thread_id,binding.native_turn_id,binding.lifecycle_state])?;
+        Ok(())
+    }
+
+    pub fn external_binding(
+        &self,
+        task: u64,
+        attempt: u32,
+    ) -> Result<Option<ExternalRuntimeBinding>, rusqlite::Error> {
+        let row = self.conn.query_row("SELECT team_task_id,attempt,agent_id,runtime_kind,native_thread_id,native_turn_id,lifecycle_state FROM external_runtime_bindings WHERE team_task_id=?1 AND attempt=?2", params![task as i64,attempt as i64], |r| Ok(ExternalRuntimeBinding { team_task_id:r.get::<_,i64>(0)? as u64,attempt:r.get::<_,i64>(1)? as u32,agent_id:r.get(2)?,runtime_kind:r.get(3)?,native_thread_id:r.get(4)?,native_turn_id:r.get(5)?,lifecycle_state:r.get(6)? }));
+        match row {
+            Ok(v) => Ok(Some(v)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Idempotently persists a bounded external tool request and its response.
+    pub fn record_runtime_collaboration(
+        &self,
+        record: &RuntimeCollaborationRecord,
+    ) -> Result<bool, rusqlite::Error> {
+        Ok(self.conn.execute("INSERT INTO runtime_collaboration_records (team_task_id,attempt,runtime_kind,native_call_id,kind,payload_summary,response_summary) VALUES (?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(runtime_kind,native_call_id) DO NOTHING", params![record.team_task_id as i64,record.attempt as i64,record.runtime_kind,record.native_call_id,record.kind,record.payload_summary,record.response_summary])? == 1)
+    }
+
+    pub fn runtime_collaboration(
+        &self,
+        task: u64,
+        attempt: u32,
+    ) -> Result<Vec<RuntimeCollaborationRecord>, rusqlite::Error> {
+        let mut s=self.conn.prepare("SELECT team_task_id,attempt,runtime_kind,native_call_id,kind,payload_summary,response_summary FROM runtime_collaboration_records WHERE team_task_id=?1 AND attempt=?2 ORDER BY id")?;
+        let rows = s.query_map(params![task as i64, attempt as i64], |r| {
+            Ok(RuntimeCollaborationRecord {
+                team_task_id: r.get::<_, i64>(0)? as u64,
+                attempt: r.get::<_, i64>(1)? as u32,
+                runtime_kind: r.get(2)?,
+                native_call_id: r.get(3)?,
+                kind: r.get(4)?,
+                payload_summary: r.get(5)?,
+                response_summary: r.get(6)?,
+            })
+        })?;
+        rows.collect()
     }
 
     /// The underlying connection, for direct queries in tests.

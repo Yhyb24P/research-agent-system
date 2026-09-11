@@ -8,7 +8,9 @@
 //! plane.
 
 mod agent;
+mod codex_app_server;
 mod dispatch;
 
 pub use agent::{AgentConfig, AgentError, AgentLoop, Delivery};
+pub use codex_app_server::{CodexAppServer, CodexBridgeError, CodexBridgeEvent};
 pub use dispatch::{dispatch, ToolOutcome};

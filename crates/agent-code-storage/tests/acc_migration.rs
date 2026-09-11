@@ -2,7 +2,10 @@
 
 use std::collections::BTreeSet;
 
-use agent_code_storage::{SqliteAccStore, SqliteTaskBoard, SCHEMA_VERSION};
+use agent_code_storage::{
+    ExternalRuntimeBinding, RuntimeCollaborationRecord, SqliteAccStore, SqliteTaskBoard,
+    SCHEMA_VERSION,
+};
 use agent_code_team::{
     AcceptanceCriterion, AgentCapability, TaskBoard, TaskContract, TaskGraph, TaskGraphProposal,
     TaskKind,
@@ -86,5 +89,27 @@ fn pre_acc_journal_migrates_preserves_existing_rows_and_recovers_acc_state() {
         "legacy task"
     );
     assert_eq!(board.task(1).unwrap().unwrap().kind, TaskKind::Bulk);
+    board
+        .upsert_external_binding(&ExternalRuntimeBinding {
+            team_task_id: 1,
+            attempt: 1,
+            agent_id: "codex".into(),
+            runtime_kind: "codex-app-server".into(),
+            native_thread_id: Some("external-thread".into()),
+            native_turn_id: None,
+            lifecycle_state: "reconcile_pending".into(),
+        })
+        .expect("v7 binding usable after v4 migration");
+    board
+        .record_runtime_collaboration(&RuntimeCollaborationRecord {
+            team_task_id: 1,
+            attempt: 1,
+            runtime_kind: "codex-app-server".into(),
+            native_call_id: "call".into(),
+            kind: "request_context".into(),
+            payload_summary: "bounded".into(),
+            response_summary: Some("context returned".into()),
+        })
+        .expect("v7 collaboration usable after v4 migration");
     let _ = std::fs::remove_file(&path);
 }

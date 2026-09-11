@@ -12,10 +12,13 @@ agent-code-model = { path = "../agent-code-model" }
 agent-code-tools = { path = "../agent-code-tools" }
 agent-code-workspace = { path = "../agent-code-workspace" }
 agent-code-context = { path = "../agent-code-context" }
+agent-code-storage = { path = "../agent-code-storage" }
+rusqlite.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]
 agent-code-storage = { path = "../agent-code-storage" }
+agent-code-team = { path = "../agent-code-team" }
 async-trait.workspace = true
 rusqlite.workspace = true
 tokio.workspace = true
