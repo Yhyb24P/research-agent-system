@@ -302,3 +302,53 @@ and exited 101. The `.into()` was removed; only the fresh post-fix run above
 is PASS evidence. Gate J, K, L, M, Q and cross-runtime E2E remain `NOT_RUN`.
 The narrow live bridge does not make Gate K PASSED. No active-profile or full
 reference readiness claim is made; Qwen work has not begun.
+
+## 25. Phase 2.4A — Qwen runtime capability and protocol probe
+
+Phase 2.3 final baseline is commit
+`069c2c9e8c148203fd880ce2878d9bd77243c640`
+(`feat(runtime): persist Codex collaboration bindings`). It was created after
+format, clippy, workspace test, diff, and sensitive-content checks passed. Its
+worktree was clean; the baseline report SHA-256 was
+`c5168a2cddf174752672632fd358b445c786a536781f9472642895e0bf4d03f1`.
+
+The local launcher probe found `aweswitch` version 0.3.8 and a locally resolved
+`qw` profile mapping `qwen38` to `Qwen3.8-27B Remote Workstation`. The profile
+kind is `qwen`, but the installed aweswitch help and package metadata support
+only Claude, Codex, and OpenCode. No standalone `qw` executable is on PATH.
+The redacted profile did not expose an endpoint; its authentication source is
+local profile configuration, with no credential inspected or recorded.
+
+No `aweswitch qw` launch was performed: launch is an unverified remote-execution
+path and would violate the low-risk probe boundary. Therefore session identity,
+streaming, tool calls, same-session tool-result return, cancellation,
+reconnect/recovery, and retry/error semantics are all `UNKNOWN`, not inferred.
+The only selected adapter candidate is `BLOCKED / unsupported`; no adapter or
+skeleton was added.
+
+The complete sanitized matrix, exact commands, and authoritative-state mapping
+are in `docs/qwen_runtime_probe.md` (SHA-256
+`be1cb3e7b6ca3af797bb403102300a75481d719006504d476613432d3b2b14d0`).
+Sanitized command evidence is `.acc-evidence/phase24a-qwen-probe.md`
+(SHA-256 `a5303374461f1eac4b6601cbc84395e95521c9e246e33985f964c7869ddf3a63`).
+
+Gate J/K/L/M/Q and cross-runtime E2E remain `NOT_RUN`.
+`C21_TEAM_FLOW_READY` remains `IN_PROGRESS`. All adapter and global readiness
+claims remain false; this probe does not assert `PHASE2_ACTIVE_PROFILE_READY`
+or `FULL_REFERENCE_READY`.
+
+## 26. Phase 2.4B — Qwen Code and Kimi Code discovery
+
+`QWEN_AWESWITCH_ENTRYPOINT = BLOCKED_UNVERIFIED` is limited to the aweswitch
+`qw` entrypoint; it does not remove Qwen Code from product scope. Independent
+local discovery found official `qwen` 0.23.3 (`@qwen-code/qwen-code`) and local
+native `kimi` 0.39.1. Qwen Code help exposes stream-json, sessions, MCP, ACP,
+bidirectional input-file, and experimental HTTP bridge. Kimi Code help exposes
+stream-json, sessions, doctor, and ACP stdio. No runtime was launched and no
+remote request was made, so live wire semantics remain unverified.
+
+Both candidates are `structured-message driver` pending a bounded live probe.
+See `docs/coding_agent_runtime_matrix.md`, `docs/qwen_code_runtime_probe.md`,
+`docs/kimi_code_runtime_probe.md`, and `.acc-evidence/phase24b-*-probe.md`.
+Gate J/K/L/M/Q and cross-runtime E2E remain `NOT_RUN`; C21_TEAM_FLOW_READY
+remains `IN_PROGRESS`; no readiness is claimed.
