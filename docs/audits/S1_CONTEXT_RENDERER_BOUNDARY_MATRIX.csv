@@ -1,0 +1,16 @@
+case_id,source_type,budget,entries,candidates,results,artifacts,failures,messages,serialized_bytes_before_L2,rendered_bytes,per_text,L1_reduced,L2_truncated,json_valid,product_reachability,evidence
+CTRL-over-budget,synthetic-probe,32554,1,20000,0,0,0,0,660178,32554,4096,false,true,false,UNREACHABLE_AS_CONSTRUCTED,probe validation: detects L2 activation and malformed output
+A1-baseline,synthetic-probe,32554,1,1,0,0,0,0,185,185,4096,false,false,true,BASELINE,render_context baseline
+A1-objective-4096,synthetic-probe,32554,1,1,0,0,0,0,4217,4217,4096,false,false,true,UNREACHABLE,objective is L1-bounded
+A1-objective-100k,synthetic-probe,32554,1,1,0,0,0,0,4217,4217,4096,false,false,true,UNREACHABLE,100000-byte objective renders as 4217 bytes
+A2-candidates-first,synthetic-probe,32554,1,1705,0,0,0,0,32573,32554,4096,false,true,false,REACHABLE,first L2 activation: candidate ids are not L1-bounded; agent ids have no length validation
+A3-results-short-first,synthetic-probe,32554,723,1,722,0,0,0,32568,32554,64,true,true,false,REACHABLE_ONLY_VIA_HIDDEN_MAX_TASKS,722 results needed; am run caps at DEFAULT_MAX_TASKS=32
+A3b-results-4096-first,synthetic-probe,32554,32,1,31,0,0,0,32571,32554,1017,true,true,false,REACHABLE_ONLY_VIA_HIDDEN_MAX_TASKS,31 results with 4096-byte summaries
+A4-artifacts-first,synthetic-probe,32554,286,1,0,285,0,0,32564,32554,113,true,true,false,REACHABLE,285 artifacts; artifact_paths count has no cap (driver_factory.rs:417)
+A5-failures-first,synthetic-probe,32554,757,1,0,0,756,0,32586,32554,43,true,true,false,REACHABLE_ONLY_VIA_HIDDEN_MAX_TASKS,756 failed children needed
+A6-messages-first,synthetic-probe,32554,296,1,0,0,0,295,32634,32554,109,true,true,false,UNREACHABLE_UNDER_CURRENT_PRODUCT,no production message writer exists
+A6b-messages-long-ids-first,synthetic-probe,32554,17,1,0,0,0,16,34456,32554,1902,true,true,false,UNREACHABLE_UNDER_CURRENT_PRODUCT,16 messages with 1024-char from/to; still no writer
+A7-mixed-candidates+artifacts,synthetic-probe,32554,181,900,0,180,0,0,37687,32554,179,true,true,false,REACHABLE,900 candidates + 180 artifacts
+A7b-mixed-candidates+results+failures,synthetic-probe,32554,65,900,32,0,32,0,51028,32554,500,true,true,false,REACHABLE,900 candidates + 32 results + 32 failures
+REAL-1-long-agent-id,synthetic-probe,32554,1,2,0,0,0,0,33220,32554,4096,false,true,false,REACHABLE,exact configuration of the real reproduction (one 33000-char agent id)
+REAL-RUN-1-long-agent-id,real-run,32554,1,2,0,0,0,0,33220,32554,4096,false,true,false,REACHABLE_AND_REPRODUCED,"real am run: delivered context 32554 bytes; no closing brace; Unterminated string at line 1 column 161; full 33000-char id absent; run failed with lead timeout"
